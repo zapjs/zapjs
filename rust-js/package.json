@@ -1,9 +1,0 @@
-{
-  "name": "rust.js",
-  "version": "1.0.0",
-  "description": "Reserved namespace",
-  "main": "index.js",
-  "keywords": ["rust"],
-  "author": "saint0x",
-  "license": "MIT"
-}

@@ -367,12 +367,16 @@ impl Zap {
         hyper_req: HyperRequest<Incoming>,
         _remote_addr: SocketAddr,
     ) -> Result<ZapResponse, ZapError> {
+        use http_body_util::BodyExt;
+
         // Step 1: Convert Hyper request to raw bytes
-        let (parts, _body) = hyper_req.into_parts();
-        
-        // For now, use empty body to get compilation working
-        // TODO: Implement proper body collection
-        let body_bytes = Vec::new();
+        let (parts, body) = hyper_req.into_parts();
+
+        // Collect the body bytes
+        let body_bytes = body.collect().await
+            .map_err(|e| ZapError::Http(format!("Failed to read request body: {}", e)))?
+            .to_bytes()
+            .to_vec();
 
         // Convert method
         let method = convert_method(&parts.method)?;
@@ -507,6 +511,11 @@ impl Zap {
                 static_cfg.prefix, static_cfg.directory
             );
         }
+
+        // RPC endpoint for TypeScript routes to call Rust #[export] functions
+        // This is registered by the application binary, not here
+        // The binary adds its own RPC handler that dispatches to Rust functions directly
+        info!("📡 RPC endpoint: /__zap_rpc (to be registered by application)");
 
         // Add health check
         if !config.health_check_path.is_empty() {
