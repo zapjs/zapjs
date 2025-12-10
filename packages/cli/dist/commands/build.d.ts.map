@@ -1,1 +1,0 @@
-{"version":3,"file":"build.d.ts","sourceRoot":"","sources":["../../src/commands/build.ts"],"names":[],"mappings":"AAMA,MAAM,WAAW,YAAY;IAC3B,OAAO,CAAC,EAAE,OAAO,CAAC;IAClB,MAAM,CAAC,EAAE,MAAM,CAAC;CACjB;AAED;;GAEG;AACH,wBAAsB,YAAY,CAAC,OAAO,EAAE,YAAY,GAAG,OAAO,CAAC,IAAI,CAAC,CA4DvE"}

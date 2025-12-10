@@ -1,30 +1,31 @@
 # Build artifacts
-/target
-/dist
-/build
+target/
+dist/
+build/
 *.o
 *.a
 *.so
 *.dylib
 
 # Package managers
-/node_modules
+node_modules/
 package-lock.json
 yarn.lock
 bun.lockb
+pnpm-lock.yaml
 
 # IDE
-.vscode
-.idea
+.vscode/
+.idea/
 *.swp
 *.swo
 *~
-.DS_Store
 
 # Environment
 .env
 .env.local
 .env.*.local
+.env.development.local
 
 # OS
 .DS_Store
@@ -37,12 +38,16 @@ yarn-debug.log*
 yarn-error.log*
 
 # Cache
-.cache
+.cache/
 .eslintcache
+.turbo/
 
 # Temporary
-/tmp
+tmp/
 *.tmp
 
-# Configuration overrides
-.env.development.local
+# TypeScript build info
+*.tsbuildinfo
+
+# Test coverage
+coverage/
