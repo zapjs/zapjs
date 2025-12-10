@@ -1,5 +1,5 @@
 use syn::{
-    GenericArgument, Path, PathArguments, PathSegment, ReturnType, Type, TypePath, TypeTuple,
+    GenericArgument, PathArguments, PathSegment, ReturnType, Type, TypePath, TypeTuple,
 };
 
 use crate::metadata::TypeMetadata;

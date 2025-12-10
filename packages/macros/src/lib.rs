@@ -1,10 +1,9 @@
 mod metadata;
 mod types;
 
-use metadata::{FunctionMetadata, ParamMetadata, TypeMetadata};
+use metadata::{FunctionMetadata, ParamMetadata};
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use std::collections::HashMap;
 use syn::{parse_macro_input, FnArg, ItemFn, PatType};
 use types::{parse_return_type, parse_type};
 

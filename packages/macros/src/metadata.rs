@@ -133,6 +133,7 @@ impl TypeMetadata {
     }
 
     /// Get the inner type if this is an Option
+    #[allow(dead_code)]
     pub fn inner_option(&self) -> Option<&TypeMetadata> {
         match self {
             TypeMetadata::Option(inner) => Some(inner),

@@ -6,7 +6,7 @@
 use crate::error::{ZapError, ZapResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 /// Messages sent over the IPC channel

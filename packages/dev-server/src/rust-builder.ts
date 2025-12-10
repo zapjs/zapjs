@@ -322,19 +322,44 @@ export class RustBuilder extends EventEmitter {
       return this.config.binaryPath;
     }
 
-    const targetDir = this.config.release ? 'release' : 'debug';
+    const { existsSync } = require('fs');
     const binName = this.config.bin || 'zap';
 
+    // Determine architecture-specific target directory
+    const arch = process.arch === 'arm64' ? 'aarch64-apple-darwin' : `${process.arch}-${process.platform}`;
+
+    // Check multiple candidate paths in order of preference
+    const candidates: string[] = [];
+
+    // If target is explicitly configured, try it first
     if (this.config.target) {
-      return path.join(
-        this.config.projectDir,
-        'target',
-        this.config.target,
-        targetDir,
-        binName
+      candidates.push(
+        path.join(this.config.projectDir, 'target', this.config.target, 'release', binName),
+        path.join(this.config.projectDir, 'target', this.config.target, 'debug', binName)
       );
     }
 
+    // Try architecture-specific paths
+    candidates.push(
+      path.join(this.config.projectDir, 'target', arch, 'release', binName),
+      path.join(this.config.projectDir, 'target', arch, 'debug', binName)
+    );
+
+    // Try standard release/debug paths
+    candidates.push(
+      path.join(this.config.projectDir, 'target', 'release', binName),
+      path.join(this.config.projectDir, 'target', 'debug', binName)
+    );
+
+    // Return first existing binary
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    // Fallback to expected path based on config (will fail if doesn't exist)
+    const targetDir = this.config.release ? 'release' : 'debug';
     return path.join(this.config.projectDir, 'target', targetDir, binName);
   }
 }
