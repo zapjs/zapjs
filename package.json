@@ -6,8 +6,7 @@
   "workspaces": [
     "packages/runtime",
     "packages/cli",
-    "packages/dev-server",
-    "packages/create-zap-app"
+    "packages/dev-server"
   ],
   "scripts": {
     "build": "npm run build:rust && npm run build:ts",

@@ -1,6 +1,7 @@
-import { createServer, Server, Socket } from "net";
+import { createServer, Server, Socket, createConnection } from "net";
 import { createInterface, Interface } from "readline";
 import { unlinkSync, existsSync } from "fs";
+import { EventEmitter } from "events";
 
 export interface IpcRequest {
   method: string;
@@ -73,7 +74,7 @@ export class IpcServer {
         });
 
         this.server.listen(this.socketPath, () => {
-          console.log(`[IPC] ✅ IPC server listening on ${this.socketPath}`);
+          console.log(`[IPC] IPC server listening on ${this.socketPath}`);
           resolve();
         });
       } catch (error) {
@@ -86,7 +87,7 @@ export class IpcServer {
    * Handle a new IPC connection from the Rust server
    */
   private handleConnection(socket: Socket): void {
-    console.log(`[IPC] 📡 Client connected`);
+    console.log(`[IPC] Client connected`);
 
     const readline = createInterface({
       input: socket,
@@ -101,7 +102,7 @@ export class IpcServer {
         // Send response as newline-delimited JSON
         socket.write(JSON.stringify(response) + "\n");
       } catch (error) {
-        console.error(`[IPC] ❌ Error processing message:`, error);
+        console.error(`[IPC] Error processing message:`, error);
         const errorResponse = {
           type: "error",
           code: "HANDLER_ERROR",
@@ -112,11 +113,11 @@ export class IpcServer {
     });
 
     readline.on("close", () => {
-      console.log(`[IPC] 📭 Client disconnected`);
+      console.log(`[IPC] Client disconnected`);
     });
 
     readline.on("error", (error) => {
-      console.error(`[IPC] ❌ Connection error:`, error);
+      console.error(`[IPC] Connection error:`, error);
     });
   }
 
@@ -137,7 +138,7 @@ export class IpcServer {
       }
 
       try {
-        console.log(`[IPC] 📤 Invoking handler: ${handler_id} for ${request.method} ${request.path}`);
+        console.log(`[IPC] Invoking handler: ${handler_id} for ${request.method} ${request.path}`);
         const result = await handler(request);
 
         return {
@@ -149,7 +150,7 @@ export class IpcServer {
         };
       } catch (error) {
         console.error(
-          `[IPC] ❌ Error executing handler ${handler_id}:`,
+          `[IPC] Error executing handler ${handler_id}:`,
           error
         );
         return {
@@ -191,5 +192,95 @@ export class IpcServer {
         });
       });
     }
+  }
+}
+
+/**
+ * IpcClient
+ *
+ * Connects to a Unix socket to communicate with the Rust server.
+ * Used for RPC calls from TypeScript to Rust.
+ */
+export class IpcClient extends EventEmitter {
+  private socket: Socket | null = null;
+  private socketPath: string;
+  private connected: boolean = false;
+  private readline: Interface | null = null;
+
+  constructor(socketPath: string) {
+    super();
+    this.socketPath = socketPath;
+    this.connect();
+  }
+
+  /**
+   * Connect to the Unix socket
+   */
+  private connect(): void {
+    this.socket = createConnection(this.socketPath);
+
+    this.socket.on("connect", () => {
+      this.connected = true;
+      this.emit("connect");
+
+      // Set up readline for newline-delimited JSON
+      this.readline = createInterface({
+        input: this.socket!,
+        crlfDelay: Infinity,
+      });
+
+      this.readline.on("line", (line: string) => {
+        try {
+          const message = JSON.parse(line);
+          this.emit("message", message);
+        } catch (error) {
+          this.emit("error", new Error(`Failed to parse message: ${line}`));
+        }
+      });
+    });
+
+    this.socket.on("error", (err) => {
+      this.connected = false;
+      this.emit("error", err);
+    });
+
+    this.socket.on("close", () => {
+      this.connected = false;
+      this.emit("close");
+    });
+  }
+
+  /**
+   * Send a message to the server
+   */
+  send(message: object): void {
+    if (!this.socket || !this.connected) {
+      throw new Error("IPC client not connected");
+    }
+    this.socket.write(JSON.stringify(message) + "\n");
+  }
+
+  /**
+   * Close the connection
+   */
+  async close(): Promise<void> {
+    if (this.readline) {
+      this.readline.close();
+      this.readline = null;
+    }
+
+    if (this.socket) {
+      return new Promise((resolve) => {
+        this.socket!.once("close", resolve);
+        this.socket!.end();
+      });
+    }
+  }
+
+  /**
+   * Check if connected
+   */
+  isConnected(): boolean {
+    return this.connected;
   }
 }

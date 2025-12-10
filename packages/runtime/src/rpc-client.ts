@@ -2,7 +2,7 @@
  * RPC Client for calling Rust server functions from TypeScript
  */
 
-import { IpcClient } from './ipc-client';
+import { IpcClient, IpcMessage } from './ipc-client.js';
 
 let ipcClient: IpcClient | null = null;
 let requestCounter = 0;
@@ -11,6 +11,42 @@ const pendingRequests = new Map<string, {
   reject: (reason: any) => void;
   timeout: NodeJS.Timeout;
 }>();
+
+/**
+ * Custom error class for RPC errors
+ */
+export class RpcError extends Error {
+  constructor(
+    public readonly errorType: string,
+    message: string
+  ) {
+    super(message);
+    this.name = 'RpcError';
+
+    // Restore prototype chain for proper instanceof checks
+    Object.setPrototypeOf(this, RpcError.prototype);
+  }
+}
+
+/**
+ * RPC message types
+ */
+interface RpcMessage {
+  type: 'rpc_response' | 'rpc_error' | 'rpc_call' | 'health_check';
+  request_id?: string;
+  result?: any;
+  error?: string;
+  error_type?: string;
+  function_name?: string;
+  params?: Record<string, any>;
+}
+
+interface RpcCallMessage {
+  type: 'rpc_call';
+  function_name: string;
+  params: Record<string, any>;
+  request_id: string;
+}
 
 /**
  * Initialize the RPC client with a socket path
@@ -24,18 +60,21 @@ export function initRpcClient(socketPath: string): void {
 
   // Setup response handler
   ipcClient.on('message', (message: RpcMessage) => {
-    if (message.type === 'rpc_response') {
+    if (message.type === 'rpc_response' && message.request_id) {
       const pending = pendingRequests.get(message.request_id);
       if (pending) {
         clearTimeout(pending.timeout);
         pending.resolve(message.result);
         pendingRequests.delete(message.request_id);
       }
-    } else if (message.type === 'rpc_error') {
+    } else if (message.type === 'rpc_error' && message.request_id) {
       const pending = pendingRequests.get(message.request_id);
       if (pending) {
         clearTimeout(pending.timeout);
-        const error = new RpcError(message.error_type, message.error);
+        const error = new RpcError(
+          message.error_type || 'UnknownError',
+          message.error || 'Unknown error'
+        );
         pending.reject(error);
         pendingRequests.delete(message.request_id);
       }
@@ -92,42 +131,6 @@ export async function rpcCall<T = any>(
 }
 
 /**
- * Custom error class for RPC errors
- */
-export class RpcError extends Error {
-  constructor(
-    public readonly errorType: string,
-    message: string
-  ) {
-    super(message);
-    this.name = 'RpcError';
-
-    // Restore prototype chain for proper instanceof checks
-    Object.setPrototypeOf(this, RpcError.prototype);
-  }
-}
-
-/**
- * RPC message types
- */
-interface RpcMessage {
-  type: 'rpc_response' | 'rpc_error' | 'rpc_call' | 'health_check';
-  request_id?: string;
-  result?: any;
-  error?: string;
-  error_type?: string;
-  function_name?: string;
-  params?: Record<string, any>;
-}
-
-interface RpcCallMessage {
-  type: 'rpc_call';
-  function_name: string;
-  params: Record<string, any>;
-  request_id: string;
-}
-
-/**
  * Wait for a response from a specific request
  */
 export async function waitForResponse(
@@ -175,6 +178,3 @@ export function isRpcClientInitialized(): boolean {
 export function getRpcClient(): IpcClient | null {
   return ipcClient;
 }
-
-// Type exports for user code
-export type { RpcError };

@@ -2,4 +2,3 @@ packages:
   - 'packages/runtime'
   - 'packages/cli'
   - 'packages/dev-server'
-  - 'packages/create-zap-app'

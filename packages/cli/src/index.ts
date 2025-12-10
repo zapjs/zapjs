@@ -28,9 +28,12 @@ program
 program
   .command('dev')
   .description('Start development server with hot reload')
-  .option('-p, --port <port>', 'Override server port')
+  .option('-p, --port <port>', 'API server port', '3000')
+  .option('--vite-port <port>', 'Vite dev server port', '5173')
   .option('--no-open', 'Do not open browser')
   .option('-l, --log-level <level>', 'Log level (debug|info|warn|error)', 'info')
+  .option('--release', 'Build in release mode')
+  .option('--skip-build', 'Skip initial Rust build')
   .action((options) => devCommand(options));
 
 program

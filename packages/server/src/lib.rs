@@ -15,7 +15,7 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use server::{Zap, Json};
+//! use zap_server::{Zap, Json};
 //! use serde_json::json;
 //!
 //! #[tokio::main]
@@ -40,7 +40,7 @@
 //! ## Advanced Usage
 //!
 //! ```no_run
-//! use server::{Zap, Json, StaticOptions};
+//! use zap_server::{Zap, Json, StaticOptions};
 //! use serde_json::json;
 //! use std::collections::HashMap;
 //! use std::time::Duration;

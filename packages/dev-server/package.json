@@ -1,0 +1,38 @@
+{
+  "name": "@zapjs/dev-server",
+  "version": "0.1.0",
+  "description": "ZapRS unified development server with hot reload",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "bin": {
+    "zap-dev": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "zap",
+    "dev-server",
+    "hot-reload",
+    "fullstack"
+  ],
+  "author": "saint0x",
+  "license": "MIT",
+  "dependencies": {
+    "chokidar": "^3.5.3",
+    "chalk": "^5.3.0",
+    "ora": "^7.0.1",
+    "ws": "^8.14.2",
+    "strip-ansi": "^7.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@zapjs/runtime": "workspace:*"
+  }
+}
