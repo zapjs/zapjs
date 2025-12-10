@@ -1,0 +1,27 @@
+{
+  "name": "@zapjs/router",
+  "version": "0.1.0",
+  "description": "File-based routing for ZapJS (TanStack style)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "zap",
+    "router",
+    "file-based-routing",
+    "tanstack"
+  ],
+  "author": "saint0x",
+  "license": "MIT",
+  "dependencies": {
+    "chokidar": "^3.5.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

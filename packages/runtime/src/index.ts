@@ -1,7 +1,13 @@
 import { join } from "path";
 import { tmpdir } from "os";
+import { existsSync, readFileSync } from "fs";
 import { ProcessManager, ZapConfig, RouteConfig, MiddlewareConfig } from "./process-manager";
 import { IpcServer, IpcRequest, HandlerFunction } from "./ipc-client";
+
+export interface FileRouteConfig {
+  routesDir?: string;
+  generatedDir?: string;
+}
 
 export interface ZapOptions {
   port?: number;
@@ -43,6 +49,9 @@ export class Zap {
   private enableCors: boolean = false;
   private enableLogging: boolean = false;
   private enableCompression: boolean = false;
+
+  private fileRoutingEnabled: boolean = false;
+  private fileRoutingConfig: FileRouteConfig = {};
 
   constructor(options?: ZapOptions) {
     // Parse options
@@ -115,6 +124,18 @@ export class Zap {
    */
   metrics(path: string): this {
     this.metricsPath = path;
+    return this;
+  }
+
+  /**
+   * Enable file-based routing (TanStack style)
+   *
+   * Automatically registers routes from the routes/ directory
+   * using the generated route manifest from @zapjs/router
+   */
+  useFileRouting(config?: FileRouteConfig): this {
+    this.fileRoutingEnabled = true;
+    this.fileRoutingConfig = config || {};
     return this;
   }
 
@@ -221,6 +242,11 @@ export class Zap {
     }
 
     try {
+      // Load file-based routes if enabled
+      if (this.fileRoutingEnabled) {
+        await this.loadFileRoutes();
+      }
+
       // Start IPC server first
       console.log("[Zap] 🚀 Starting IPC server...");
       await this.ipcServer.start();
@@ -306,6 +332,52 @@ export class Zap {
    */
   isRunning(): boolean {
     return this.processManager.isRunning();
+  }
+
+  /**
+   * Load routes from generated route manifest
+   */
+  private async loadFileRoutes(): Promise<void> {
+    const generatedDir = this.fileRoutingConfig.generatedDir || join(process.cwd(), 'src', 'generated');
+    const manifestPath = join(generatedDir, 'routeManifest.json');
+
+    if (!existsSync(manifestPath)) {
+      console.log("[Zap] ⚠️  No route manifest found. Run route scanner first.");
+      return;
+    }
+
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      console.log(`[Zap] 📂 Loading ${manifest.apiRoutes?.length || 0} API routes from manifest...`);
+
+      // Register API routes
+      for (const route of manifest.apiRoutes || []) {
+        // Convert :param to Rust radix router format
+        const rustPath = route.urlPath;
+
+        // Import the route handler module
+        const routeFile = join(process.cwd(), 'routes', route.filePath);
+
+        if (existsSync(routeFile.replace(/\.ts$/, '.js')) || existsSync(routeFile)) {
+          try {
+            const routeModule = await import(routeFile);
+
+            // Register each HTTP method handler
+            const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'];
+            for (const method of methods) {
+              if (routeModule[method]) {
+                this.registerRoute(method, rustPath, routeModule[method]);
+                console.log(`[Zap]   ✓ ${method} ${rustPath}`);
+              }
+            }
+          } catch (err) {
+            console.log(`[Zap] ⚠️  Failed to import ${routeFile}: ${err}`);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[Zap] ❌ Failed to load route manifest:", err);
+    }
   }
 }
 

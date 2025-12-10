@@ -7,6 +7,7 @@ import { RustBuilder, BuildResult } from './rust-builder.js';
 import { ViteProxy } from './vite-proxy.js';
 import { CodegenRunner } from './codegen-runner.js';
 import { HotReloadServer } from './hot-reload.js';
+import { RouteScannerRunner } from './route-scanner.js';
 
 export interface DevServerConfig {
   projectDir: string;
@@ -52,6 +53,7 @@ export class DevServer extends EventEmitter {
   private viteProxy: ViteProxy;
   private codegenRunner: CodegenRunner;
   private hotReloadServer: HotReloadServer;
+  private routeScanner: RouteScannerRunner;
 
   // UI
   private spinner: Ora;
@@ -103,6 +105,10 @@ export class DevServer extends EventEmitter {
 
     this.hotReloadServer = new HotReloadServer({
       port: this.config.hotReloadPort,
+    });
+
+    this.routeScanner = new RouteScannerRunner({
+      projectDir: this.config.projectDir,
     });
 
     this.setupEventHandlers();
@@ -161,6 +167,16 @@ export class DevServer extends EventEmitter {
         this.log('info', 'TypeScript bindings regenerated');
       }
     });
+
+    // Route scanner events
+    this.routeScanner.on('routes-changed', (tree) => {
+      this.log('info', `Routes updated (${tree.routes.length} pages, ${tree.apiRoutes.length} API)`);
+      this.hotReloadServer.reload('routes', []);
+    });
+
+    this.routeScanner.on('error', (err) => {
+      this.log('warn', `Route scanner error: ${err.message}`);
+    });
   }
 
   /**
@@ -179,14 +195,18 @@ export class DevServer extends EventEmitter {
       // Phase 2: Generate TypeScript bindings
       await this.runCodegen();
 
+      // Phase 2.5: Scan routes
+      await this.scanRoutes();
+
       // Phase 3: Start servers in parallel
       await Promise.all([
         this.startHotReloadServer(),
         this.startViteServer(),
       ]);
 
-      // Phase 4: Start file watcher
+      // Phase 4: Start file watcher and route watcher
       this.startWatcher();
+      await this.startRouteWatcher();
 
       // Ready!
       this.state.phase = 'ready';
@@ -215,6 +235,7 @@ export class DevServer extends EventEmitter {
       this.watcher.stop(),
       this.viteProxy.stop(),
       this.hotReloadServer.stop(),
+      this.routeScanner.stopWatching(),
     ]);
 
     this.rustBuilder.cancel();
@@ -261,6 +282,38 @@ export class DevServer extends EventEmitter {
     } else {
       this.spinner.warn('Codegen skipped (binary not found)');
     }
+  }
+
+  /**
+   * Scan routes directory and generate route tree
+   */
+  private async scanRoutes(): Promise<void> {
+    if (!this.routeScanner.hasRoutesDir()) {
+      this.log('debug', 'No routes directory found');
+      return;
+    }
+
+    this.spinner.start('Scanning routes...');
+
+    const tree = await this.routeScanner.scan();
+
+    if (tree) {
+      this.spinner.succeed(`Found ${tree.routes.length} pages, ${tree.apiRoutes.length} API routes`);
+    } else {
+      this.spinner.warn('Route scanning skipped');
+    }
+  }
+
+  /**
+   * Start the route file watcher
+   */
+  private async startRouteWatcher(): Promise<void> {
+    if (!this.routeScanner.hasRoutesDir()) {
+      return;
+    }
+
+    await this.routeScanner.startWatching();
+    this.log('debug', 'Route watcher started');
   }
 
   /**

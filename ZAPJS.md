@@ -2,7 +2,7 @@
 
 > A fullstack web framework combining React (frontend) and Rust (backend) where the Rust backend is compiled into a binary automatically embedded in the TS/React app, similar to Next.js' hybrid backend-runtime model.
 
-## Current Status: Phase 4 Complete
+## Current Status: Phase 6 Complete
 
 **Last Updated:** December 2024
 
@@ -29,6 +29,7 @@
 - [x] `zap build` - Production build orchestration
 - [x] `zap serve` - Production server runner
 - [x] `zap codegen` - Binding generation
+- [x] `zap routes` - Route scanning and tree generation
 - [x] Port detection and utilities
 
 ### Phase 4: Unified Dev Server ✅ COMPLETE
@@ -47,28 +48,30 @@
 - [x] Docker support (multi-stage build)
 - [x] Graceful shutdown handling
 
+### Phase 6: App Router (File-Based Routing) ✅ COMPLETE
+- [x] `@zapjs/router` package with TanStack-style conventions
+- [x] RouteScanner class for file-based route detection
+- [x] Route tree code generation (`routeTree.ts`, `routeManifest.json`)
+- [x] File watcher for dev mode route updates
+- [x] Runtime integration (`useFileRouting()`)
+- [x] Server functions style (`server.users.get()`)
+- [x] API routes in separate `routes/api/` folder
+
+### Phase 7: create-zap-app ✅ COMPLETE
+- [x] `npx create-zap-app` scaffolding
+- [x] Interactive template selection
+- [x] Package manager selection (npm/pnpm/bun)
+- [x] Git/npm initialization
+- [x] Full project template with routes
+
 ---
 
 ## Remaining Work
 
-### Phase 6: App Router (File-Based Routing) ⏳ NOT STARTED
-- [ ] File-based route detection (`app/` directory)
-- [ ] Server functions style (`server.user.get()`)
-- [ ] Layout system (nested layouts)
-- [ ] Loading/error boundaries
-- [ ] Route groups and parallel routes
-
-### Phase 7: Enhanced RPC ⏳ NOT STARTED
+### Phase 8: Enhanced RPC ⏳ NOT STARTED
 - [ ] MessagePack serialization (currently JSON)
 - [ ] Streaming support
 - [ ] WebSocket mode option
-- [ ] WASM host interface option
-
-### Phase 8: create-zap-app ⏳ NOT STARTED
-- [ ] `npx create-zap-app` scaffolding
-- [ ] Interactive template selection
-- [ ] Git/npm initialization
-- [ ] Example projects
 
 ### Phase 9: Edge/WASM Runtime ⏳ NOT STARTED
 - [ ] Compile Rust to WASM
@@ -81,14 +84,15 @@
 
 | Package | Status | Description |
 |---------|--------|-------------|
-| `@zapjs/runtime` | ✅ Complete | TS wrapper, IPC client, process manager |
-| `@zapjs/cli` | ✅ Complete | CLI commands (new, dev, build, serve, codegen) |
-| `@zapjs/dev-server` | ✅ Complete | Dev orchestration, file watching, hot reload |
+| `@zapjs/runtime` | ✅ Complete | TS wrapper, IPC client, process manager, file routing |
+| `@zapjs/cli` | ✅ Complete | CLI commands (new, dev, build, serve, codegen, routes) |
+| `@zapjs/dev-server` | ✅ Complete | Dev orchestration, file watching, hot reload, route watching |
+| `@zapjs/router` | ✅ Complete | File-based routing (TanStack style), route tree generation |
+| `create-zap-app` | ✅ Complete | Interactive project scaffolding |
 | `zap-core` | ✅ Complete | Radix router, HTTP parser, middleware |
 | `zap-server` | ✅ Complete | HTTP server, IPC proxy, static files |
 | `zap-macros` | ✅ Complete | `#[zap::export]` proc macro |
-| `zap-codegen` | ⚠️ Partial | TS binding generator (needs enhancement) |
-| `create-zap-app` | ❌ Empty | Not implemented |
+| `zap-codegen` | ✅ Complete | TS binding generator with namespaced server client |
 
 ---
 
@@ -101,6 +105,7 @@
 │  zap dev                                                     │
 │  ├── RustBuilder (cargo build --release)                    │
 │  ├── CodegenRunner (zap-codegen)                            │
+│  ├── RouteScannerRunner (@zapjs/router)                     │
 │  ├── ViteProxy (frontend HMR)                               │
 │  ├── HotReloadServer (WebSocket :3001)                      │
 │  └── FileWatcher (chokidar)                                 │
@@ -142,9 +147,86 @@ zap serve --workers 4      # Worker threads
 zap new my-app             # Create new project
 zap new my-app -t fullstack
 
+# Routes
+zap routes                 # Scan and display routes
+zap routes --json          # Output as JSON
+zap routes -o ./src/gen    # Custom output directory
+
 # Codegen
 zap codegen                # Generate TS bindings
 zap codegen -o ./src/api   # Custom output
+
+# Create new app (standalone)
+npx create-zap-app my-app
+bunx create-zap-app my-app
+```
+
+---
+
+## File-Based Routing (TanStack Style)
+
+### Route Conventions
+
+| Pattern | Example | URL |
+|---------|---------|-----|
+| `index.tsx` | `routes/index.tsx` | `/` |
+| `$param.tsx` | `routes/$postId.tsx` | `/:postId` |
+| `name.$param.tsx` | `routes/posts.$postId.tsx` | `/posts/:postId` |
+| `_layout.tsx` | `routes/_layout.tsx` | Pathless layout wrapper |
+| `__root.tsx` | `routes/__root.tsx` | Root layout |
+| `(group)/` | `routes/(admin)/` | Route group (no URL segment) |
+| `-excluded/` | `routes/-utils/` | Excluded from routing |
+| `api/*.ts` | `routes/api/users.ts` | API route |
+
+### Directory Structure
+
+```
+project/
+├── routes/
+│   ├── __root.tsx           # Root layout
+│   ├── index.tsx            # /
+│   ├── about.tsx            # /about
+│   ├── posts/
+│   │   ├── index.tsx        # /posts
+│   │   └── $postId.tsx      # /posts/:postId
+│   └── api/                 # API routes folder
+│       ├── hello.ts         # /api/hello
+│       └── users.$id.ts     # /api/users/:id
+├── server/                  # Rust handlers
+│   └── src/
+│       └── main.rs
+└── src/generated/           # Auto-generated
+    ├── routeTree.ts
+    ├── routeManifest.json
+    └── server.ts
+```
+
+### API Route Example
+
+```typescript
+// routes/api/users.$id.ts
+export const GET = async ({ params }: { params: { id: string } }) => {
+  return {
+    id: params.id,
+    name: `User ${params.id}`,
+  };
+};
+
+export const DELETE = async ({ params }: { params: { id: string } }) => {
+  // Delete user
+  return { deleted: params.id };
+};
+```
+
+### Server Functions
+
+```typescript
+// Generated: src/generated/server.ts
+import { server } from './server';
+
+// Namespaced access
+const user = await server.users.get({ id: 123 });
+const posts = await server.posts.list({ page: 1 });
 ```
 
 ---
@@ -158,7 +240,7 @@ zap codegen -o ./src/api   # Custom output
 | React as the frontend runtime | ✅ Done (Vite) |
 | Automatic TS bindings | ✅ Done |
 | Portable backend binary | ✅ Done |
-| Next.js-like app router | ❌ Not started |
+| TanStack-style app router | ✅ Done |
 | Zero config dev environment | ✅ Done |
 | Hot reload for Rust and TS | ✅ Done |
 
@@ -177,15 +259,19 @@ zap codegen -o ./src/api   # Custom output
 - [x] Auto-generated TS bindings (via zap-codegen)
 - [x] Rust macros (`#[zap::export]`)
 - [x] Strongly typed RPC model
+- [x] Namespaced server client (`server.users.get()`)
 
-### App Router ❌
-- [ ] File-based routes
-- [ ] Server functions
-- [ ] API routes
+### App Router ✅
+- [x] File-based routes (TanStack style)
+- [x] Server functions
+- [x] API routes
+- [x] Route tree generation
+- [x] File watching in dev mode
 
 ### Dev Server ✅
 - [x] Hot reload frontend
 - [x] Hot reload Rust
+- [x] Hot reload routes
 - [x] Automatic restart on Rust build
 - [x] Binary embed rebuild
 
@@ -193,8 +279,8 @@ zap codegen -o ./src/api   # Custom output
 - [x] Compile Rust backend
 - [x] Extract exported functions
 - [x] Generate TS bindings
+- [x] Generate route tree
 - [x] Bundle binary into build output
-- [ ] Build React app (Vite handles this)
 - [x] Create single deployable artifact
 
 ---
@@ -262,12 +348,10 @@ dist/
 
 ## Next Steps (Priority Order)
 
-1. **App Router Implementation** - File-based routing like Next.js
-2. **Enhanced Codegen** - Better type inference, streaming support
-3. **create-zap-app** - Interactive project scaffolding
-4. **Windows Support** - Named pipes instead of Unix sockets
-5. **WASM Runtime** - Edge deployment support
-6. **Documentation** - Full API docs and tutorials
+1. **Enhanced RPC** - MessagePack serialization, streaming support
+2. **Windows Support** - Named pipes instead of Unix sockets
+3. **WASM Runtime** - Edge deployment support
+4. **Documentation** - Full API docs and tutorials
 
 ---
 

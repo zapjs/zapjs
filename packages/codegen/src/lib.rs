@@ -6,10 +6,18 @@ use walkdir::WalkDir;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportedFunction {
     pub name: String,
+    pub namespace: Option<String>,
     pub is_async: bool,
     pub params: Vec<ExportedParam>,
     pub return_type: ExportedType,
     pub doc_comments: Vec<String>,
+}
+
+/// Group of functions under a namespace
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionNamespace {
+    pub name: String,
+    pub functions: Vec<ExportedFunction>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,7 +202,7 @@ pub fn generate_typescript_definitions(functions: &[ExportedFunction]) -> String
     output
 }
 
-/// Generate TypeScript runtime bindings
+/// Generate TypeScript runtime bindings (flat style)
 pub fn generate_typescript_runtime(functions: &[ExportedFunction]) -> String {
     let mut output = String::from("// Auto-generated TypeScript runtime bindings\n");
     output.push_str("// DO NOT EDIT MANUALLY\n\n");
@@ -241,6 +249,106 @@ pub fn generate_typescript_runtime(functions: &[ExportedFunction]) -> String {
         let fn_name = ExportedType::to_camel_case(&func.name);
         output.push_str(&format!("export const {} = backend.{};\n", fn_name, fn_name));
     }
+
+    output
+}
+
+/// Group functions by namespace
+pub fn group_by_namespace(functions: &[ExportedFunction]) -> Vec<FunctionNamespace> {
+    use std::collections::HashMap;
+
+    let mut groups: HashMap<String, Vec<ExportedFunction>> = HashMap::new();
+
+    for func in functions {
+        let ns = func.namespace.clone().unwrap_or_else(|| "default".to_string());
+        groups.entry(ns).or_default().push(func.clone());
+    }
+
+    groups
+        .into_iter()
+        .map(|(name, functions)| FunctionNamespace { name, functions })
+        .collect()
+}
+
+/// Generate namespaced server client (server.users.get() style)
+pub fn generate_namespaced_server(functions: &[ExportedFunction]) -> String {
+    let mut output = String::from("// Auto-generated server client\n");
+    output.push_str("// DO NOT EDIT MANUALLY\n\n");
+    output.push_str("import { rpcCall } from './rpc-client';\n\n");
+
+    let namespaces = group_by_namespace(functions);
+
+    // Generate server object with namespaces
+    output.push_str("export const server = {\n");
+
+    for ns in &namespaces {
+        let ns_name = ExportedType::to_camel_case(&ns.name);
+        output.push_str(&format!("  {}: {{\n", ns_name));
+
+        for func in &ns.functions {
+            let fn_name = ExportedType::to_camel_case(&func.name);
+
+            // Full RPC name includes namespace
+            let rpc_name = match &func.namespace {
+                Some(ns) => format!("{}.{}", ns, func.name),
+                None => func.name.clone(),
+            };
+
+            // Generate typed params
+            let typed_params = if func.params.is_empty() {
+                String::new()
+            } else {
+                let params = func
+                    .params
+                    .iter()
+                    .map(|p| {
+                        format!(
+                            "{}: {}",
+                            ExportedType::to_camel_case(&p.name),
+                            p.ty.to_typescript()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("params: {{ {} }}", params)
+            };
+
+            let return_type = func.return_type.to_typescript();
+
+            // Build RPC call params
+            let rpc_params = if func.params.is_empty() {
+                "{}".to_string()
+            } else {
+                let mappings = func
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let camel = ExportedType::to_camel_case(&p.name);
+                        format!("{}: params.{}", p.name, camel)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{ {} }}", mappings)
+            };
+
+            output.push_str(&format!(
+                "    async {}({}): Promise<{}> {{\n",
+                fn_name, typed_params, return_type
+            ));
+            output.push_str(&format!(
+                "      return rpcCall<{}>('{}', {});\n",
+                return_type, rpc_name, rpc_params
+            ));
+            output.push_str("    },\n");
+        }
+
+        output.push_str("  },\n");
+    }
+
+    output.push_str("} as const;\n\n");
+
+    // Generate types
+    output.push_str("export type Server = typeof server;\n");
 
     output
 }
@@ -293,6 +401,7 @@ mod tests {
     fn test_generate_definitions() {
         let func = ExportedFunction {
             name: "get_user".to_string(),
+            namespace: Some("users".to_string()),
             is_async: true,
             params: vec![ExportedParam {
                 name: "id".to_string(),
@@ -308,5 +417,30 @@ mod tests {
         let defs = generate_typescript_definitions(&[func]);
         assert!(defs.contains("getUser"));
         assert!(defs.contains("Promise<User>"));
+    }
+
+    #[test]
+    fn test_generate_namespaced_server() {
+        let func = ExportedFunction {
+            name: "get".to_string(),
+            namespace: Some("users".to_string()),
+            is_async: true,
+            params: vec![ExportedParam {
+                name: "id".to_string(),
+                ty: ExportedType::U64,
+            }],
+            return_type: ExportedType::Custom {
+                name: "User".to_string(),
+                generics: vec![],
+            },
+            doc_comments: vec![],
+        };
+
+        let server = generate_namespaced_server(&[func]);
+        // Check namespace structure is generated
+        assert!(server.contains("users: {"));
+        assert!(server.contains("async get("));
+        // Check RPC call uses namespaced name
+        assert!(server.contains("'users.get'"));
     }
 }

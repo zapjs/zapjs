@@ -34,5 +34,8 @@
   },
   "peerDependencies": {
     "@zapjs/runtime": "workspace:*"
+  },
+  "optionalDependencies": {
+    "@zapjs/router": "workspace:*"
   }
 }

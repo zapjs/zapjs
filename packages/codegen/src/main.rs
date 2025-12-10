@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
-use zap_codegen::{generate_typescript_definitions, generate_typescript_runtime};
+use zap_codegen::{generate_typescript_definitions, generate_typescript_runtime, generate_namespaced_server};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -28,6 +28,10 @@ struct Args {
     /// Generate runtime bindings (.ts)
     #[arg(long, default_value_t = true)]
     runtime: bool,
+
+    /// Generate namespaced server client (server.users.get() style)
+    #[arg(long, default_value_t = true)]
+    server: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -63,6 +67,14 @@ fn main() -> anyhow::Result<()> {
         let runtime_path = args.output_dir.join("backend.ts");
         fs::write(&runtime_path, runtime)?;
         println!("Generated: {}", runtime_path.display());
+    }
+
+    // Generate namespaced server client
+    if args.server {
+        let server = generate_namespaced_server(&functions);
+        let server_path = args.output_dir.join("server.ts");
+        fs::write(&server_path, server)?;
+        println!("Generated: {}", server_path.display());
     }
 
     println!("Successfully generated TypeScript bindings for {} functions", functions.len());

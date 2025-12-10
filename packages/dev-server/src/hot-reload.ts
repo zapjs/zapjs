@@ -7,7 +7,7 @@ export interface HotReloadConfig {
   host?: string;
 }
 
-export type ReloadType = 'full' | 'partial' | 'rust' | 'typescript' | 'config';
+export type ReloadType = 'full' | 'partial' | 'rust' | 'typescript' | 'config' | 'routes';
 
 export interface ReloadMessage {
   type: 'reload' | 'update' | 'error' | 'connected';

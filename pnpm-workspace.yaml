@@ -2,3 +2,5 @@ packages:
   - 'packages/runtime'
   - 'packages/cli'
   - 'packages/dev-server'
+  - 'packages/router'
+  - 'packages/create-zap-app'

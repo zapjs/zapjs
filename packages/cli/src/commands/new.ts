@@ -130,8 +130,10 @@ function createMinimalProject(
   // Create directory structure
   const dirs = [
     'server/src',
-    'client/src',
-    'client/src/api',
+    'routes',
+    'routes/api',
+    'src',
+    'src/generated',
   ];
 
   for (const dir of dirs) {
@@ -161,37 +163,66 @@ async fn main() {
 }
 `;
 
-  // Create client/src/App.tsx
-  const appTsx = `import React from 'react';
-import './App.css';
+  // Create routes/__root.tsx
+  const rootTsx = `import React from 'react';
 
-function App() {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="App">
-      <h1>Welcome to ZapRS</h1>
+    <html lang="en">
+      <head>
+        <meta charSet="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>ZapJS App</title>
+      </head>
+      <body>
+        {children}
+      </body>
+    </html>
+  );
+}
+`;
+
+  // Create routes/index.tsx
+  const indexRoute = `export default function HomePage() {
+  return (
+    <div style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem' }}>
+      <h1>Welcome to ZapJS</h1>
       <p>Fullstack Rust + React Framework</p>
+      <p>
+        Edit <code>routes/index.tsx</code> to get started.
+      </p>
     </div>
   );
 }
-
-export default App;
 `;
 
-  // Create client/src/index.tsx
-  const indexTsx = `import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App';
-import './index.css';
+  // Create routes/api/hello.ts
+  const helloApi = `import { server } from '../../src/generated/server';
 
-const root = ReactDOM.createRoot(
-  document.getElementById('root') as HTMLElement
-);
+export const GET = async () => {
+  return {
+    message: 'Hello from ZapJS!',
+    timestamp: new Date().toISOString(),
+  };
+};
 
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+export const POST = async ({ request }: { request: Request }) => {
+  const body = await request.json();
+  return {
+    received: body,
+    message: 'Data received successfully',
+  };
+};
+`;
+
+  // Create routes/api/users.$id.ts
+  const usersApi = `export const GET = async ({ params }: { params: { id: string } }) => {
+  return {
+    id: params.id,
+    name: \`User \${params.id}\`,
+    email: \`user\${params.id}@example.com\`,
+  };
+};
 `;
 
   // Create package.json
@@ -203,14 +234,18 @@ root.render(
       'dev': 'zap dev',
       'build': 'zap build',
       'serve': 'zap serve',
+      'routes': 'zap routes',
     },
     dependencies: {
       'react': '^18.0.0',
       'react-dom': '^18.0.0',
+      '@zapjs/runtime': '^0.1.0',
+      '@zapjs/router': '^0.1.0',
     },
     devDependencies: {
       '@types/react': '^18.0.0',
       '@types/react-dom': '^18.0.0',
+      '@zapjs/cli': '^0.1.0',
       'typescript': '^5.0.0',
       'vite': '^5.0.0',
     },
@@ -268,8 +303,10 @@ export default defineConfig({
 
   // Write files
   writeFileSync(join(projectDir, 'server/src/main.rs'), mainRs);
-  writeFileSync(join(projectDir, 'client/src/App.tsx'), appTsx);
-  writeFileSync(join(projectDir, 'client/src/index.tsx'), indexTsx);
+  writeFileSync(join(projectDir, 'routes/__root.tsx'), rootTsx);
+  writeFileSync(join(projectDir, 'routes/index.tsx'), indexRoute);
+  writeFileSync(join(projectDir, 'routes/api/hello.ts'), helloApi);
+  writeFileSync(join(projectDir, 'routes/api/users.$id.ts'), usersApi);
   writeFileSync(join(projectDir, 'package.json'), JSON.stringify(packageJson, null, 2));
   writeFileSync(join(projectDir, 'Cargo.toml'), cargoToml);
   writeFileSync(join(projectDir, 'zap.config.ts'), zapConfig);

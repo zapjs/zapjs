@@ -7,6 +7,7 @@ import { devCommand } from './commands/dev.js';
 import { buildCommand } from './commands/build.js';
 import { serveCommand } from './commands/serve.js';
 import { codegenCommand } from './commands/codegen.js';
+import { routesCommand } from './commands/routes.js';
 
 const program = new Command();
 
@@ -61,6 +62,14 @@ program
   .option('-i, --input <file>', 'Input metadata JSON file')
   .option('-o, --output <dir>', 'Output directory', './src/api')
   .action((options) => codegenCommand(options));
+
+program
+  .command('routes')
+  .description('Scan routes directory and generate route tree')
+  .option('-d, --routes-dir <dir>', 'Routes directory path')
+  .option('-o, --output <dir>', 'Output directory for generated files')
+  .option('--json', 'Output routes as JSON')
+  .action((options) => routesCommand(options));
 
 // Handle unknown commands
 program.on('command:*', () => {
