@@ -12,6 +12,7 @@ use tokio::net::UnixStream;
 /// Messages sent over the IPC channel
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)] // IpcRequest is used directly, boxing adds overhead
 pub enum IpcMessage {
     /// TypeScript asks Rust to invoke a handler
     InvokeHandler {

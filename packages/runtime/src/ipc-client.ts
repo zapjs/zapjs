@@ -2,26 +2,24 @@ import { createServer, Server, Socket, createConnection } from "net";
 import { createInterface, Interface } from "readline";
 import { unlinkSync, existsSync } from "fs";
 import { EventEmitter } from "events";
+import type {
+  ZapRequest,
+  ZapHandlerResponse,
+  IpcMessage,
+  InvokeHandlerMessage,
+  isInvokeHandlerMessage,
+  isHealthCheckMessage,
+} from "./types.js";
 
-export interface IpcRequest {
-  method: string;
-  path: string;
-  path_only: string;
-  query: Record<string, string>;
-  params: Record<string, string>;
-  headers: Record<string, string>;
-  body: string;
-  cookies: Record<string, string>;
-}
+// Re-export types for backward compatibility
+export type { ZapRequest as IpcRequest } from "./types.js";
 
-export interface IpcMessage {
-  type: string;
-  [key: string]: any;
-}
-
+/**
+ * Handler function type for IPC server
+ */
 export type HandlerFunction = (
-  req: IpcRequest
-) => Promise<{ status: number; headers: Record<string, string>; body: string }>;
+  req: ZapRequest
+) => Promise<ZapHandlerResponse>;
 
 /**
  * IpcServer
@@ -58,7 +56,7 @@ export class IpcServer {
         if (existsSync(this.socketPath)) {
           try {
             unlinkSync(this.socketPath);
-          } catch (e) {
+          } catch {
             // Ignore if we can't delete it
           }
         }
@@ -95,21 +93,8 @@ export class IpcServer {
     });
 
     // Handle incoming messages (newline-delimited JSON)
-    readline.on("line", async (line: string) => {
-      try {
-        const message: IpcMessage = JSON.parse(line);
-        const response = await this.processMessage(message);
-        // Send response as newline-delimited JSON
-        socket.write(JSON.stringify(response) + "\n");
-      } catch (error) {
-        console.error(`[IPC] Error processing message:`, error);
-        const errorResponse = {
-          type: "error",
-          code: "HANDLER_ERROR",
-          message: String(error),
-        };
-        socket.write(JSON.stringify(errorResponse) + "\n");
-      }
+    readline.on("line", (line: string) => {
+      void this.handleLine(line, socket);
     });
 
     readline.on("close", () => {
@@ -122,14 +107,35 @@ export class IpcServer {
   }
 
   /**
+   * Handle a single line of input (async wrapper)
+   */
+  private async handleLine(line: string, socket: Socket): Promise<void> {
+    try {
+      const message = JSON.parse(line) as IpcMessage;
+      const response = await this.processMessage(message);
+      // Send response as newline-delimited JSON
+      socket.write(JSON.stringify(response) + "\n");
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[IPC] Error processing message:`, errorMessage);
+      const errorResponse: IpcMessage = {
+        type: "error",
+        code: "HANDLER_ERROR",
+        message: errorMessage,
+      };
+      socket.write(JSON.stringify(errorResponse) + "\n");
+    }
+  }
+
+  /**
    * Process an incoming IPC message
    */
   private async processMessage(message: IpcMessage): Promise<IpcMessage> {
     console.log(`[IPC] Received message type: ${message.type}`);
-    console.log(`[IPC] Full message:`, JSON.stringify(message, null, 2));
 
     if (message.type === "invoke_handler") {
-      const { handler_id, request } = message;
+      const invokeMsg = message as InvokeHandlerMessage;
+      const { handler_id, request } = invokeMsg;
       console.log(`[IPC] Looking for handler: ${handler_id}`);
       console.log(`[IPC] Available handlers: ${Array.from(this.handlers.keys()).join(', ')}`);
 
@@ -149,21 +155,20 @@ export class IpcServer {
         const result = await handler(request);
         console.log(`[IPC] Handler result:`, JSON.stringify(result, null, 2));
 
-        const response = {
+        return {
           type: "handler_response",
           handler_id,
           status: result.status || 200,
           headers: result.headers || { "content-type": "application/json" },
           body: result.body || "{}",
         };
-        console.log(`[IPC] Sending response:`, JSON.stringify(response, null, 2));
-        return response;
-      } catch (error) {
-        console.error(`[IPC] Error executing handler ${handler_id}:`, error);
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`[IPC] Error executing handler ${handler_id}:`, errorMessage);
         return {
           type: "error",
           code: "HANDLER_EXECUTION_ERROR",
-          message: String(error),
+          message: errorMessage,
         };
       }
     }
@@ -193,7 +198,7 @@ export class IpcServer {
           if (existsSync(this.socketPath)) {
             try {
               unlinkSync(this.socketPath);
-            } catch (e) {
+            } catch {
               // Ignore
             }
           }
@@ -240,9 +245,9 @@ export class IpcClient extends EventEmitter {
 
       this.readline.on("line", (line: string) => {
         try {
-          const message = JSON.parse(line);
+          const message: unknown = JSON.parse(line);
           this.emit("message", message);
-        } catch (error) {
+        } catch {
           this.emit("error", new Error(`Failed to parse message: ${line}`));
         }
       });

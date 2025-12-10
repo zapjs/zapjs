@@ -2,38 +2,22 @@ import { spawn, ChildProcess, execSync } from "child_process";
 import { writeFileSync, unlinkSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import type {
+  ZapConfig,
+  RouteConfig,
+  MiddlewareConfig,
+  StaticFileConfig,
+  StaticFileOptions,
+} from "./types.js";
 
-export interface ZapConfig {
-  port: number;
-  hostname: string;
-  ipc_socket_path: string;
-  max_request_body_size?: number;
-  request_timeout_secs?: number;
-  routes: RouteConfig[];
-  static_files: StaticFileConfig[];
-  middleware: MiddlewareConfig;
-  health_check_path?: string;
-  metrics_path?: string;
-}
-
-export interface RouteConfig {
-  method: string;
-  path: string;
-  handler_id: string;
-  is_typescript: boolean;
-}
-
-export interface StaticFileConfig {
-  prefix: string;
-  directory: string;
-  options?: Record<string, any>;
-}
-
-export interface MiddlewareConfig {
-  enable_cors?: boolean;
-  enable_logging?: boolean;
-  enable_compression?: boolean;
-}
+// Re-export types for backward compatibility
+export type {
+  ZapConfig,
+  RouteConfig,
+  MiddlewareConfig,
+  StaticFileConfig,
+  StaticFileOptions,
+} from "./types.js";
 
 /**
  * ProcessManager
@@ -113,8 +97,8 @@ export class ProcessManager {
       this.configPath = join(tmpdir(), `zap-config-${Date.now()}.json`);
       writeFileSync(this.configPath, JSON.stringify(config, null, 2));
 
-      console.log(`[Zap] 🚀 Starting server on ${config.hostname}:${config.port}`);
-      console.log(`[Zap] 🔌 IPC socket: ${this.socketPath}`);
+      console.log(`[Zap] Starting server on ${config.hostname}:${config.port}`);
+      console.log(`[Zap] IPC socket: ${this.socketPath}`);
 
       // Spawn the Rust binary
       this.process = spawn(this.binaryPath, [
@@ -137,7 +121,7 @@ export class ProcessManager {
       }
 
       // Forward stdout
-      this.process.stdout.on("data", (data) => {
+      this.process.stdout.on("data", (data: Buffer) => {
         const output = data.toString().trim();
         if (output) {
           console.log(`[Zap] ${output}`);
@@ -145,10 +129,10 @@ export class ProcessManager {
       });
 
       // Forward stderr
-      this.process.stderr.on("data", (data) => {
+      this.process.stderr.on("data", (data: Buffer) => {
         const output = data.toString().trim();
         if (output) {
-          console.error(`[Zap] ❌ ${output}`);
+          console.error(`[Zap] ${output}`);
         }
       });
 
@@ -156,17 +140,17 @@ export class ProcessManager {
       this.process.on("exit", (code, signal) => {
         if (code !== 0 || signal) {
           console.error(
-            `[Zap] ⚠️  Process exited: code=${code}, signal=${signal}`
+            `[Zap] Process exited: code=${code ?? 'null'}, signal=${signal ?? 'null'}`
           );
         }
       });
 
       // Handle process errors
       this.process.on("error", (err) => {
-        console.error(`[Zap] ❌ Process error:`, err);
+        console.error(`[Zap] Process error:`, err);
       });
 
-      console.log(`[Zap] ✅ Server started on http://${config.hostname}:${config.port}`);
+      console.log(`[Zap] Server started on http://${config.hostname}:${config.port}`);
     } catch (error) {
       // Clean up on error
       await this.stop();
@@ -198,7 +182,7 @@ export class ProcessManager {
         if (response.ok) {
           return;
         }
-      } catch (e) {
+      } catch {
         // Server not ready yet, continue polling
       }
 
@@ -220,7 +204,7 @@ export class ProcessManager {
       if (this.configPath && existsSync(this.configPath)) {
         try {
           unlinkSync(this.configPath);
-        } catch (e) {
+        } catch {
           // Ignore cleanup errors
         }
       }
@@ -237,7 +221,7 @@ export class ProcessManager {
     if (this.configPath && existsSync(this.configPath)) {
       try {
         unlinkSync(this.configPath);
-      } catch (e) {
+      } catch {
         // Ignore cleanup errors
       }
     }
@@ -247,7 +231,7 @@ export class ProcessManager {
    * Restart the server
    */
   async restart(config: ZapConfig, logLevel: string = "info"): Promise<void> {
-    console.log("[Zap] 🔄 Restarting server...");
+    console.log("[Zap] Restarting server...");
     await this.stop();
     // Small delay to ensure clean shutdown
     await new Promise((resolve) => setTimeout(resolve, 100));

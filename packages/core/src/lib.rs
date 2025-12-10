@@ -74,7 +74,7 @@ impl<T> Router<T> {
             return Err(RouterError::InvalidPath(path.to_string()));
         }
 
-        let tree = self.trees.entry(method).or_insert_with(RadixTree::new);
+        let tree = self.trees.entry(method).or_default();
         tree.insert(path, handler)
     }
 

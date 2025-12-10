@@ -360,7 +360,7 @@ pub fn find_exported_functions(project_dir: &Path) -> anyhow::Result<Vec<Exporte
     for entry in WalkDir::new(project_dir)
         .into_iter()
         .filter_map(Result::ok)
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "rs"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "rs"))
     {
         let _content = std::fs::read_to_string(entry.path())?;
 

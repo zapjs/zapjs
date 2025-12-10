@@ -180,13 +180,14 @@ pub enum MiddlewareResult {
     Response(Response),
 }
 
+/// Result type for middleware operations
+pub type MiddlewareFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<(Context<'a>, MiddlewareResult), MiddlewareError>> + Send + 'a>>;
+
 /// Async middleware trait
 pub trait Middleware: Send + Sync {
     /// Process request and return modified context and result
-    fn call<'a>(
-        &'a self,
-        ctx: Context<'a>,
-    ) -> Pin<Box<dyn Future<Output = Result<(Context<'a>, MiddlewareResult), MiddlewareError>> + Send + 'a>>;
+    fn call<'a>(&'a self, ctx: Context<'a>) -> MiddlewareFuture<'a>;
 }
 
 /// Middleware chain for composing multiple middleware
@@ -291,10 +292,7 @@ impl Default for LoggerMiddleware {
 }
 
 impl Middleware for LoggerMiddleware {
-    fn call<'a>(
-        &'a self,
-        ctx: Context<'a>,
-    ) -> Pin<Box<dyn Future<Output = Result<(Context<'a>, MiddlewareResult), MiddlewareError>> + Send + 'a>> {
+    fn call<'a>(&'a self, ctx: Context<'a>) -> MiddlewareFuture<'a> {
         Box::pin(async move {
             let start = std::time::Instant::now();
             
@@ -343,10 +341,7 @@ impl CorsMiddleware {
 }
 
 impl Middleware for CorsMiddleware {
-    fn call<'a>(
-        &'a self,
-        ctx: Context<'a>,
-    ) -> Pin<Box<dyn Future<Output = Result<(Context<'a>, MiddlewareResult), MiddlewareError>> + Send + 'a>> {
+    fn call<'a>(&'a self, ctx: Context<'a>) -> MiddlewareFuture<'a> {
         Box::pin(async move {
             // Handle preflight requests
             if ctx.method() == Method::OPTIONS {

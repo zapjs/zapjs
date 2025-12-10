@@ -305,7 +305,7 @@ impl Response {
         match &self.body {
             ResponseBody::Empty => Some(0),
             ResponseBody::Bytes(bytes) => Some(bytes.len()),
-            ResponseBody::Text(text) => Some(text.as_bytes().len()),
+            ResponseBody::Text(text) => Some(text.len()),
         }
     }
     

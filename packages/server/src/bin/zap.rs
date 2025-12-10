@@ -92,7 +92,7 @@ async fn main() -> ZapResult<()> {
         result = app.listen() => {
             if let Err(e) = result {
                 error!("Server error: {}", e);
-                return Err(e.into());
+                return Err(e);
             }
         }
         _ = setup_signal_handlers() => {

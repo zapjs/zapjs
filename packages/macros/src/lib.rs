@@ -27,7 +27,7 @@ pub fn export(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Validate the function signature
     if let Err(e) = validate_function(&input) {
-        return TokenStream::from(e);
+        return e;
     }
 
     // Extract function metadata

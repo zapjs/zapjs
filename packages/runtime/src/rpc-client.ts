@@ -2,15 +2,13 @@
  * RPC Client for calling Rust server functions from TypeScript
  */
 
-import { IpcClient, IpcMessage } from './ipc-client.js';
+import { IpcClient } from './ipc-client.js';
+import type { RpcMessage, RpcCallMessage, PendingRequest } from './types.js';
+import { isRpcResponseMessage, isRpcErrorMessage } from './types.js';
 
 let ipcClient: IpcClient | null = null;
 let requestCounter = 0;
-const pendingRequests = new Map<string, {
-  resolve: (value: any) => void;
-  reject: (reason: any) => void;
-  timeout: NodeJS.Timeout;
-}>();
+const pendingRequests = new Map<string, PendingRequest>();
 
 /**
  * Custom error class for RPC errors
@@ -29,26 +27,6 @@ export class RpcError extends Error {
 }
 
 /**
- * RPC message types
- */
-interface RpcMessage {
-  type: 'rpc_response' | 'rpc_error' | 'rpc_call' | 'health_check';
-  request_id?: string;
-  result?: any;
-  error?: string;
-  error_type?: string;
-  function_name?: string;
-  params?: Record<string, any>;
-}
-
-interface RpcCallMessage {
-  type: 'rpc_call';
-  function_name: string;
-  params: Record<string, any>;
-  request_id: string;
-}
-
-/**
  * Initialize the RPC client with a socket path
  */
 export function initRpcClient(socketPath: string): void {
@@ -59,31 +37,38 @@ export function initRpcClient(socketPath: string): void {
   ipcClient = new IpcClient(socketPath);
 
   // Setup response handler
-  ipcClient.on('message', (message: RpcMessage) => {
-    if (message.type === 'rpc_response' && message.request_id) {
-      const pending = pendingRequests.get(message.request_id);
+  ipcClient.on('message', (message: unknown) => {
+    // Validate message structure
+    if (!message || typeof message !== 'object') {
+      return;
+    }
+
+    const msg = message as RpcMessage;
+
+    if (isRpcResponseMessage(msg) && msg.request_id) {
+      const pending = pendingRequests.get(msg.request_id);
       if (pending) {
         clearTimeout(pending.timeout);
-        pending.resolve(message.result);
-        pendingRequests.delete(message.request_id);
+        pending.resolve(msg.result);
+        pendingRequests.delete(msg.request_id);
       }
-    } else if (message.type === 'rpc_error' && message.request_id) {
-      const pending = pendingRequests.get(message.request_id);
+    } else if (isRpcErrorMessage(msg) && msg.request_id) {
+      const pending = pendingRequests.get(msg.request_id);
       if (pending) {
         clearTimeout(pending.timeout);
         const error = new RpcError(
-          message.error_type || 'UnknownError',
-          message.error || 'Unknown error'
+          msg.error_type || 'UnknownError',
+          msg.error || 'Unknown error'
         );
         pending.reject(error);
-        pendingRequests.delete(message.request_id);
+        pendingRequests.delete(msg.request_id);
       }
     }
   });
 
   ipcClient.on('error', (error: Error) => {
     // Reject all pending requests on connection error
-    for (const [_, pending] of pendingRequests) {
+    for (const [, pending] of pendingRequests) {
       clearTimeout(pending.timeout);
       pending.reject(error);
     }
@@ -94,9 +79,9 @@ export function initRpcClient(socketPath: string): void {
 /**
  * Call a Rust server function via RPC
  */
-export async function rpcCall<T = any>(
+export async function rpcCall<T = unknown>(
   functionName: string,
-  params: Record<string, any> = {},
+  params: Record<string, unknown> = {},
   timeoutMs: number = 30000
 ): Promise<T> {
   if (!ipcClient) {
@@ -112,20 +97,24 @@ export async function rpcCall<T = any>(
     request_id: requestId,
   };
 
-  return new Promise((resolve, reject) => {
+  return new Promise<T>((resolve, reject) => {
     const timeout = setTimeout(() => {
       pendingRequests.delete(requestId);
       reject(new RpcError('TimeoutError', `RPC call to ${functionName} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
-    pendingRequests.set(requestId, { resolve, reject, timeout });
+    pendingRequests.set(requestId, {
+      resolve: resolve as (value: unknown) => void,
+      reject,
+      timeout,
+    });
 
     try {
       ipcClient!.send(message);
     } catch (error) {
       clearTimeout(timeout);
       pendingRequests.delete(requestId);
-      reject(error);
+      reject(error instanceof Error ? error : new Error(String(error)));
     }
   });
 }
@@ -133,17 +122,21 @@ export async function rpcCall<T = any>(
 /**
  * Wait for a response from a specific request
  */
-export async function waitForResponse(
+export async function waitForResponse<T = unknown>(
   requestId: string,
   timeoutMs: number = 30000
-): Promise<any> {
-  return new Promise((resolve, reject) => {
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
     const timeout = setTimeout(() => {
       pendingRequests.delete(requestId);
       reject(new RpcError('TimeoutError', `Request ${requestId} timed out`));
     }, timeoutMs);
 
-    const handler = { resolve, reject, timeout };
+    const handler: PendingRequest = {
+      resolve: resolve as (value: unknown) => void,
+      reject,
+      timeout,
+    };
     pendingRequests.set(requestId, handler);
   });
 }
@@ -154,7 +147,7 @@ export async function waitForResponse(
 export async function closeRpcClient(): Promise<void> {
   if (ipcClient) {
     // Reject all pending requests
-    for (const [_, pending] of pendingRequests) {
+    for (const [, pending] of pendingRequests) {
       clearTimeout(pending.timeout);
       pending.reject(new Error('RPC client closed'));
     }

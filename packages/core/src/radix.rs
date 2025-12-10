@@ -62,8 +62,8 @@ impl<T> RadixTree<T> {
     /// Find handler for path with parameter extraction
     pub fn find<'a>(&'a self, path: &'a str) -> Option<(&'a T, Params<'a>)> {
         let mut params = Params::new();
-        let clean_path = if path.starts_with('/') { &path[1..] } else { path };
-        self.find_recursive_with_position(path, clean_path, &self.root, &mut params)
+        let clean_path = path.strip_prefix('/').unwrap_or(path);
+        Self::find_recursive_with_position(path, clean_path, &self.root, &mut params)
     }
 
     /// Get number of routes
@@ -146,7 +146,6 @@ impl<T> RadixTree<T> {
     }
 
     fn find_recursive_with_position<'a>(
-        &self,
         original_path: &'a str,
         current_path: &'a str,
         node: &'a Node<T>,
@@ -166,7 +165,7 @@ impl<T> RadixTree<T> {
         // Try static children first (fastest)
         for child in &node.children {
             if child.segment == segment {
-                let result = self.find_recursive_with_position(original_path, remaining, child, params);
+                let result = Self::find_recursive_with_position(original_path, remaining, child, params);
                 if result.is_some() {
                     return result;
                 }
@@ -177,7 +176,7 @@ impl<T> RadixTree<T> {
         if let Some((name, ref child)) = &node.param_child {
             let mut new_params = params.clone();
             new_params.insert(name, segment);
-            let result = self.find_recursive_with_position(original_path, remaining, child, &mut new_params);
+            let result = Self::find_recursive_with_position(original_path, remaining, child, &mut new_params);
             if result.is_some() {
                 return result;
             }
@@ -236,8 +235,8 @@ enum Segment {
 
 /// Parse path into segments
 fn parse_path(path: &str) -> Vec<Segment> {
-    let path = if path.starts_with('/') { &path[1..] } else { path };
-    
+    let path = path.strip_prefix('/').unwrap_or(path);
+
     if path.is_empty() {
         return vec![];
     }

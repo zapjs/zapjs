@@ -1,25 +1,60 @@
 import { join } from "path";
 import { tmpdir } from "os";
 import { existsSync, readFileSync } from "fs";
-import { ProcessManager, ZapConfig, RouteConfig, MiddlewareConfig } from "./process-manager.js";
-import { IpcServer, IpcRequest, HandlerFunction } from "./ipc-client.js";
+import { ProcessManager } from "./process-manager.js";
+import { IpcServer } from "./ipc-client.js";
+import type {
+  Handler,
+  ZapRequest,
+  ZapHandlerResponse,
+  ZapConfig,
+  RouteConfig,
+  MiddlewareConfig,
+  FileRouteConfig,
+  ZapOptions,
+} from "./types.js";
+
+// Re-export types
+export type {
+  Handler,
+  ZapRequest,
+  ZapHandlerResponse,
+  ZapConfig,
+  RouteConfig,
+  MiddlewareConfig,
+  StaticFileConfig,
+  StaticFileOptions,
+  FileRouteConfig,
+  ZapOptions,
+  IpcMessage,
+  InvokeHandlerMessage,
+  HandlerResponseMessage,
+  ErrorMessage,
+  HealthCheckMessage,
+  HealthCheckResponseMessage,
+  HttpMethod,
+  InternalHandlerFunction,
+  RpcMessage,
+  RpcCallMessage,
+  RpcResponseMessage,
+  RpcErrorMessage,
+  PendingRequest,
+} from "./types.js";
+
+// Re-export type guards
+export {
+  isInvokeHandlerMessage,
+  isHandlerResponseMessage,
+  isErrorMessage,
+  isHealthCheckMessage,
+  isHealthCheckResponseMessage,
+  isRpcResponseMessage,
+  isRpcErrorMessage,
+} from "./types.js";
 
 // Re-export internal modules for dev-server usage
-export { ProcessManager, ZapConfig, RouteConfig, MiddlewareConfig } from "./process-manager.js";
-export { IpcServer, IpcRequest, HandlerFunction } from "./ipc-client.js";
-
-export interface FileRouteConfig {
-  routesDir?: string;
-  generatedDir?: string;
-}
-
-export interface ZapOptions {
-  port?: number;
-  hostname?: string;
-  logLevel?: "trace" | "debug" | "info" | "warn" | "error";
-}
-
-export type Handler = (request: any) => any | Promise<any>;
+export { ProcessManager } from "./process-manager.js";
+export { IpcServer, IpcClient } from "./ipc-client.js";
 
 /**
  * Zap - Ultra-fast HTTP server for Node.js and Bun
@@ -150,56 +185,80 @@ export class Zap {
   /**
    * Register a GET route
    */
-  get(path: string, handler: Handler): this {
-    return this.registerRoute("GET", path, handler);
+  get<TParams extends Record<string, string> = Record<string, string>>(
+    path: string,
+    handler: Handler<TParams>
+  ): this {
+    return this.registerRoute("GET", path, handler as Handler);
   }
 
   /**
    * Register a POST route
    */
-  post(path: string, handler: Handler): this {
-    return this.registerRoute("POST", path, handler);
+  post<TParams extends Record<string, string> = Record<string, string>>(
+    path: string,
+    handler: Handler<TParams>
+  ): this {
+    return this.registerRoute("POST", path, handler as Handler);
   }
 
   /**
    * Register a PUT route
    */
-  put(path: string, handler: Handler): this {
-    return this.registerRoute("PUT", path, handler);
+  put<TParams extends Record<string, string> = Record<string, string>>(
+    path: string,
+    handler: Handler<TParams>
+  ): this {
+    return this.registerRoute("PUT", path, handler as Handler);
   }
 
   /**
    * Register a DELETE route
    */
-  delete(path: string, handler: Handler): this {
-    return this.registerRoute("DELETE", path, handler);
+  delete<TParams extends Record<string, string> = Record<string, string>>(
+    path: string,
+    handler: Handler<TParams>
+  ): this {
+    return this.registerRoute("DELETE", path, handler as Handler);
   }
 
   /**
    * Register a PATCH route
    */
-  patch(path: string, handler: Handler): this {
-    return this.registerRoute("PATCH", path, handler);
+  patch<TParams extends Record<string, string> = Record<string, string>>(
+    path: string,
+    handler: Handler<TParams>
+  ): this {
+    return this.registerRoute("PATCH", path, handler as Handler);
   }
 
   /**
    * Register a HEAD route
    */
-  head(path: string, handler: Handler): this {
-    return this.registerRoute("HEAD", path, handler);
+  head<TParams extends Record<string, string> = Record<string, string>>(
+    path: string,
+    handler: Handler<TParams>
+  ): this {
+    return this.registerRoute("HEAD", path, handler as Handler);
   }
 
   /**
    * Convenience method for GET routes that return JSON
    */
-  getJson(path: string, handler: Handler): this {
+  getJson<TParams extends Record<string, string> = Record<string, string>>(
+    path: string,
+    handler: Handler<TParams>
+  ): this {
     return this.get(path, handler);
   }
 
   /**
    * Convenience method for POST routes that return JSON
    */
-  postJson(path: string, handler: Handler): this {
+  postJson<TParams extends Record<string, string> = Record<string, string>>(
+    path: string,
+    handler: Handler<TParams>
+  ): this {
     return this.post(path, handler);
   }
 
@@ -252,13 +311,13 @@ export class Zap {
       }
 
       // Start IPC server first
-      console.log("[Zap] 🚀 Starting IPC server...");
+      console.log("[Zap] Starting IPC server...");
       await this.ipcServer.start();
 
       // Register all handlers with IPC server
-      console.log(`[Zap] 📝 Registering ${this.handlers.size} handlers...`);
+      console.log(`[Zap] Registering ${this.handlers.size} handlers...`);
       for (const [handlerId, handler] of this.handlers) {
-        this.ipcServer.registerHandler(handlerId, async (req: IpcRequest) => {
+        this.ipcServer.registerHandler(handlerId, async (req: ZapRequest): Promise<ZapHandlerResponse> => {
           const result = await handler(req);
 
           // Handle different response types
@@ -300,16 +359,17 @@ export class Zap {
           enable_compression: this.enableCompression,
         },
         health_check_path: this.healthCheckPath,
-        metrics_path: this.metricsPath || undefined,
+        metrics_path: this.metricsPath ?? undefined,
       };
 
       // Start Rust server process
-      console.log("[Zap] 🦀 Starting Rust server process...");
+      console.log("[Zap] Starting Rust server process...");
       await this.processManager.start(config, this.logLevel);
 
-      console.log(`[Zap] ✅ Server listening on http://${this.hostname}:${this.port}`);
-    } catch (error) {
-      console.error("[Zap] ❌ Failed to start server:", error);
+      console.log(`[Zap] Server listening on http://${this.hostname}:${this.port}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[Zap] Failed to start server:", message);
       await this.close();
       throw error;
     }
@@ -319,14 +379,15 @@ export class Zap {
    * Close the server gracefully
    */
   async close(): Promise<void> {
-    console.log("[Zap] 🛑 Closing server...");
+    console.log("[Zap] Closing server...");
 
     try {
       await this.processManager.stop();
       await this.ipcServer.stop();
-      console.log("[Zap] ✅ Server closed");
-    } catch (error) {
-      console.error("[Zap] ❌ Error closing server:", error);
+      console.log("[Zap] Server closed");
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[Zap] Error closing server:", message);
       throw error;
     }
   }
@@ -346,16 +407,19 @@ export class Zap {
     const manifestPath = join(generatedDir, 'routeManifest.json');
 
     if (!existsSync(manifestPath)) {
-      console.log("[Zap] ⚠️  No route manifest found. Run route scanner first.");
+      console.log("[Zap] No route manifest found. Run route scanner first.");
       return;
     }
 
     try {
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-      console.log(`[Zap] 📂 Loading ${manifest.apiRoutes?.length || 0} API routes from manifest...`);
+      const manifestContent = readFileSync(manifestPath, 'utf-8');
+      const manifest = JSON.parse(manifestContent) as {
+        apiRoutes?: Array<{ filePath: string; urlPath: string }>;
+      };
+      console.log(`[Zap] Loading ${manifest.apiRoutes?.length ?? 0} API routes from manifest...`);
 
       // Register API routes
-      for (const route of manifest.apiRoutes || []) {
+      for (const route of manifest.apiRoutes ?? []) {
         // Convert :param to Rust radix router format
         const rustPath = route.urlPath;
 
@@ -364,23 +428,26 @@ export class Zap {
 
         if (existsSync(routeFile.replace(/\.ts$/, '.js')) || existsSync(routeFile)) {
           try {
-            const routeModule = await import(routeFile);
+            const routeModule = await import(routeFile) as Record<string, Handler | undefined>;
 
             // Register each HTTP method handler
-            const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'];
+            const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'] as const;
             for (const method of methods) {
-              if (routeModule[method]) {
-                this.registerRoute(method, rustPath, routeModule[method]);
-                console.log(`[Zap]   ✓ ${method} ${rustPath}`);
+              const methodHandler = routeModule[method];
+              if (methodHandler) {
+                this.registerRoute(method, rustPath, methodHandler);
+                console.log(`[Zap]   ${method} ${rustPath}`);
               }
             }
-          } catch (err) {
-            console.log(`[Zap] ⚠️  Failed to import ${routeFile}: ${err}`);
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.log(`[Zap] Failed to import ${routeFile}: ${message}`);
           }
         }
       }
-    } catch (err) {
-      console.error("[Zap] ❌ Failed to load route manifest:", err);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[Zap] Failed to load route manifest:", message);
     }
   }
 }
