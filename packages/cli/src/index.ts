@@ -2,11 +2,11 @@
 
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { newCommand } from './commands/new';
-import { devCommand } from './commands/dev';
-import { buildCommand } from './commands/build';
-import { serveCommand } from './commands/serve';
-import { codegenCommand } from './commands/codegen';
+import { newCommand } from './commands/new.js';
+import { devCommand } from './commands/dev.js';
+import { buildCommand } from './commands/build.js';
+import { serveCommand } from './commands/serve.js';
+import { codegenCommand } from './commands/codegen.js';
 
 const program = new Command();
 
@@ -41,13 +41,18 @@ program
   .description('Build for production')
   .option('--release', 'Build optimized release build', true)
   .option('-o, --output <dir>', 'Output directory', './dist')
+  .option('--target <target>', 'Cross-compile target (e.g., x86_64-unknown-linux-gnu)')
+  .option('--skip-frontend', 'Skip frontend build')
+  .option('--skip-codegen', 'Skip TypeScript codegen')
   .action((options) => buildCommand(options));
 
 program
   .command('serve')
   .description('Run production server')
-  .option('-p, --port <port>', 'Port to run on', '3000')
-  .option('-h, --host <host>', 'Host to bind to', '127.0.0.1')
+  .option('-p, --port <port>', 'Port to run on')
+  .option('--host <host>', 'Host to bind to')
+  .option('-c, --config <path>', 'Path to config file')
+  .option('-w, --workers <count>', 'Number of worker threads')
   .action((options) => serveCommand(options));
 
 program
