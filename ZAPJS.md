@@ -2,11 +2,11 @@
 
 > Fullstack web framework: React frontend + Rust backend compiled into a single deployable binary.
 
-**Status:** Phase 10.1-10.3 Complete (Security, Observability, Error Handling) | **Updated:** December 2024
+**Status:** Phase 8 & 10.5 Complete (Enhanced RPC, Production Hardening) | **Updated:** December 2024
 
 ---
 
-## Completed (Phases 1-7 + Type Safety + Phase 10.1-10.3)
+## Completed (Phases 1-8 + Type Safety + Phase 10.1-10.5)
 
 | Phase | Summary |
 |-------|---------|
@@ -17,10 +17,13 @@
 | 5. Production | LTO builds, Docker, cross-compilation, graceful shutdown |
 | 6. App Router | TanStack-style file routing, API routes, route tree codegen |
 | 7. create-zap-app | `npx create-zap-app`, templates, package manager selection |
+| **8. Enhanced RPC** | MessagePack, connection pooling, streaming, WebSocket mode |
 | **Type Safety** | Full bidirectional Rust↔TypeScript type safety with union types |
 | **10.1 Security** | Security headers, rate limiting, strict CORS middleware |
 | **10.2 Observability** | Prometheus metrics, X-Request-ID correlation, structured logging |
 | **10.3 Error Handling** | React ErrorBoundary, useRouteError hook, TanStack-style errorComponent |
+| **10.4 Caching** | ETag generation, Last-Modified, conditional requests (304) |
+| **10.5 Reliability** | IPC retry with exponential backoff, circuit breaker, Kubernetes health probes |
 
 **All packages complete:** `@zapjs/runtime`, `@zapjs/cli`, `@zapjs/dev-server`, `@zapjs/router`, `create-zap-app`, `zap-core`, `zap-server`, `zap-macros`, `zap-codegen`
 
@@ -30,10 +33,11 @@
 
 ## Roadmap
 
-### Phase 8: Enhanced RPC
-- [ ] MessagePack serialization (replace JSON)
-- [ ] Streaming responses
-- [ ] WebSocket mode option
+### Phase 8: Enhanced RPC ✅ COMPLETE
+- [x] MessagePack serialization (default, ~40% faster than JSON)
+- [x] Connection pooling (4 persistent connections, round-robin)
+- [x] Streaming responses (AsyncIterable handlers)
+- [x] WebSocket mode (bidirectional real-time communication)
 
 ### Phase 9: Edge/WASM Runtime
 - [ ] Compile Rust to WASM
@@ -63,15 +67,17 @@
 - [x] Route scanner detects `errorComponent` exports
 - [x] Codegen wires error components automatically
 
-#### 10.4 Caching & Performance
-- [ ] ETag generation for static files
-- [ ] If-None-Match → 304 Not Modified support
-- [ ] Last-Modified headers
+#### 10.4 Caching & Performance ✅ COMPLETE
+- [x] ETag generation (weak by default, strong SHA256 optional)
+- [x] If-None-Match → 304 Not Modified support
+- [x] If-Modified-Since → 304 Not Modified support
+- [x] Last-Modified headers (RFC 7231 format)
+- [x] Configurable per-handler caching options
 
-#### 10.5 Reliability
-- [ ] IPC retry logic (3 retries, exponential backoff)
-- [ ] Circuit breaker for persistent handler failures
-- [ ] Enhanced health checks (`/health/live`, `/health/ready`)
+#### 10.5 Reliability ✅ COMPLETE
+- [x] IPC retry logic (3 retries, exponential backoff with full jitter)
+- [x] Circuit breaker for persistent handler failures (CLOSED/OPEN/HALF_OPEN)
+- [x] Enhanced health checks (`/health/live`, `/health/ready`)
 
 #### 10.6 Type Safety ✅ COMPLETE
 - [x] Full bidirectional Rust↔TypeScript type safety
@@ -170,6 +176,83 @@ cors: {
 }
 ```
 
+### Enhanced RPC (Phase 8)
+
+**MessagePack Serialization** - Default protocol, ~40% faster than JSON:
+```
+Frame format: [4-byte big-endian length][payload]
+Auto-detect: First byte 0x7B = JSON, else MessagePack
+```
+
+**Connection Pooling** - Eliminates per-request connection overhead:
+- 4 persistent connections (configurable)
+- Round-robin distribution
+- Automatic reconnection on failure
+- Health checks with keep-alive
+
+**Streaming Responses** - For large payloads and real-time data:
+```typescript
+// routes/api/stream.ts
+export const GET = async function* ({ params }) {
+  yield { data: 'chunk 1\n' };
+  yield { data: 'chunk 2\n' };
+  yield { bytes: new Uint8Array([1, 2, 3]) };
+};
+```
+
+**WebSocket Mode** - Bidirectional real-time communication:
+```typescript
+// routes/api/chat.ts (WEBSOCKET export)
+export const WEBSOCKET = {
+  onConnect: async (socket) => {
+    console.log('Client connected:', socket.id);
+  },
+  onMessage: async (socket, message) => {
+    socket.send(`Echo: ${message}`);
+  },
+  onClose: async (socket, code, reason) => {
+    console.log('Client disconnected');
+  },
+};
+
+// routes/ws/chat.ts (default export in ws/ folder)
+export default {
+  onConnect: async (socket) => { /* ... */ },
+  onMessage: async (socket, message) => { /* ... */ },
+  onClose: async (socket, code, reason) => { /* ... */ },
+};
+```
+
+### Caching (10.4)
+
+**ETag Generation** - Automatic cache validation:
+```typescript
+// Weak ETag (default): W/"size-mtime_hex" - fast, no hashing
+// Strong ETag: "sha256_hex" - content-based, precise
+
+staticFiles: {
+  etag_strategy: 'weak',  // 'weak' | 'strong' | 'none'
+}
+```
+
+**Conditional Requests** - Returns 304 Not Modified when:
+- `If-None-Match` header matches ETag
+- `If-Modified-Since` header is after Last-Modified
+
+**Last-Modified Headers** - RFC 7231 format:
+```
+Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT
+```
+
+**Configuration**:
+```typescript
+staticFiles: {
+  etag_strategy: 'weak',
+  enable_last_modified: true,
+  cache_control: 'public, max-age=3600',
+}
+```
+
 ### Observability (10.2)
 
 **Prometheus Metrics** at `/metrics`:
@@ -192,6 +275,60 @@ import { logger } from '@zapjs/runtime';
 
 logger.info('User created', { request_id, userId: '123' });
 // {"level":"info","message":"User created","request_id":"abc-123","userId":"123","timestamp":"..."}
+```
+
+### Reliability (10.5)
+
+**IPC Retry Logic** - Exponential backoff with full jitter:
+```typescript
+// Default configuration:
+// - Base delay: 100ms
+// - Max delay: 10s
+// - Max retries: 3
+// - Formula: min(max_delay, base_delay * 2^attempt) * random(0, 1)
+
+// Automatic retry for transient failures
+// Non-retryable errors (400, 401, 403, 429) fail immediately
+```
+
+**Circuit Breaker** - Prevents cascading failures:
+```typescript
+// States: CLOSED → OPEN → HALF_OPEN → CLOSED
+// Configuration:
+circuit_breaker: {
+  failure_threshold: 5,      // Open after 5 failures
+  reset_timeout: '30s',      // Wait before half-open
+  success_threshold: 3,      // Close after 3 successes
+  failure_window: '60s',     // Failure counting window
+}
+
+// When OPEN: Returns 503 Service Unavailable immediately
+// Handler/validation errors don't trigger circuit breaker
+```
+
+**Enhanced Health Checks** - Kubernetes-style probes:
+```typescript
+// GET /health/live - Liveness probe
+// Returns 200 if process is alive, 503 if not
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "uptime_secs": 3600,
+  "components": [{ "name": "process", "status": "healthy" }]
+}
+
+// GET /health/ready - Readiness probe
+// Checks connection pool and circuit breaker
+{
+  "status": "healthy",  // or "degraded", "unhealthy"
+  "components": [
+    { "name": "connection_pool", "status": "healthy", "message": "4/4 connections healthy" },
+    { "name": "circuit_breaker", "status": "healthy", "message": "Circuit is CLOSED" }
+  ]
+}
+
+// Usage in server configuration:
+server.health_endpoints()  // Registers /health/live and /health/ready
 ```
 
 ### Error Handling (10.3)
@@ -347,6 +484,15 @@ ZapJS is production-ready as a **type-safe Rust RPC backend** - comparable to:
 | Structured logging | ✅ Complete |
 | React ErrorBoundary | ✅ Complete |
 | useRouteError hook | ✅ Complete |
+| MessagePack serialization | ✅ Complete |
+| Connection pooling | ✅ Complete |
+| Streaming responses | ✅ Complete |
+| WebSocket support | ✅ Complete |
+| ETag/Last-Modified | ✅ Complete |
+| Conditional requests (304) | ✅ Complete |
+| IPC retry with backoff | ✅ Complete |
+| Circuit breaker | ✅ Complete |
+| Kubernetes health probes | ✅ Complete |
 
 ### Gaps vs Next.js
 
@@ -357,11 +503,16 @@ ZapJS is production-ready as a **type-safe Rust RPC backend** - comparable to:
 | Image optimization | Built-in | None |
 | Middleware | Edge middleware | Security, rate limiting, CORS |
 | Data fetching | fetch() caching, ISR | Manual |
-| Layouts/templates | Nested layouts | None |
+| Layouts/templates | Nested layouts | Basic |
 | Metadata API | SEO, OpenGraph | None |
 | Deployment | Vercel, any Node host | Custom |
 | Error boundaries | error.tsx convention | TanStack-style errorComponent |
 | Observability | Manual | Prometheus, structured logging |
+| WebSocket | Manual | Built-in with IPC bridge |
+| Streaming | Server Components | AsyncIterable handlers |
+| Caching | Built-in | ETag, Last-Modified, 304 |
+| Resilience | Manual | Circuit breaker, retry with backoff |
+| Health checks | Manual | Kubernetes-style liveness/readiness |
 
 ### Recommended Use Cases
 

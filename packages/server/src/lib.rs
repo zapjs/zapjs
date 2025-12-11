@@ -91,6 +91,7 @@ pub mod handler;
 pub mod ipc;
 pub mod metrics;
 pub mod proxy;
+pub mod reliability;
 pub mod request;
 pub mod request_id;
 pub mod response;
@@ -111,6 +112,11 @@ pub use response::{Json, ZapResponse};
 pub use server::Zap;
 pub use r#static::{ETagStrategy, StaticHandler, StaticOptions, handle_static_files_with_headers};
 pub use websocket::{WsConfig, WsHandler, handle_websocket_connection, is_websocket_upgrade};
+pub use reliability::{
+    CircuitBreaker, CircuitBreakerConfig, CircuitBreakerStats, CircuitState,
+    HealthChecker, HealthCheckResponse, HealthStatus, ComponentHealth,
+    ResilientIpc, RetryConfig,
+};
 
 // Re-export important types from core crate for convenience
 pub use zap_core::{Method, StatusCode};

@@ -20,6 +20,7 @@ use crate::config::{ServerConfig, ZapConfig};
 use crate::error::{ZapError, ZapResult};
 use crate::handler::{AsyncHandler, BoxedHandler, Handler, SimpleHandler};
 use crate::proxy::ProxyHandler;
+use crate::reliability::{HealthChecker, HealthStatus};
 use crate::request::RequestData;
 use crate::response::{Json, ZapResponse};
 use crate::r#static::{handle_static_files, StaticHandler, StaticOptions};
@@ -285,9 +286,59 @@ impl Zap {
         self.use_middleware(zap_core::LoggerMiddleware::new())
     }
 
-    /// Health check endpoint
+    /// Simple health check endpoint (backwards compatible)
     pub fn health_check(self, path: &str) -> Self {
         self.get(path, || "OK")
+    }
+
+    /// Enhanced liveness probe (Kubernetes-style)
+    /// Returns 200 if the process is alive and can respond
+    pub fn health_live(self, path: &str) -> Self {
+        let checker = Arc::new(HealthChecker::new(env!("CARGO_PKG_VERSION").to_string()));
+        self.get_async(path, move |_req| {
+            let checker = checker.clone();
+            async move {
+                let response = checker.liveness();
+                let status_code = match response.status {
+                    HealthStatus::Healthy => 200,
+                    HealthStatus::Degraded => 200,
+                    HealthStatus::Unhealthy => 503,
+                };
+                ZapResponse::JsonWithStatus(
+                    serde_json::from_str(&response.to_json()).unwrap_or_default(),
+                    status_code,
+                )
+            }
+        })
+    }
+
+    /// Enhanced readiness probe (Kubernetes-style)
+    /// Returns 200 if the server can handle requests
+    pub fn health_ready(self, path: &str) -> Self {
+        let checker = Arc::new(HealthChecker::new(env!("CARGO_PKG_VERSION").to_string()));
+        self.get_async(path, move |_req| {
+            let checker = checker.clone();
+            async move {
+                let response = checker.readiness().await;
+                let status_code = match response.status {
+                    HealthStatus::Healthy => 200,
+                    HealthStatus::Degraded => 200,
+                    HealthStatus::Unhealthy => 503,
+                };
+                ZapResponse::JsonWithStatus(
+                    serde_json::from_str(&response.to_json()).unwrap_or_default(),
+                    status_code,
+                )
+            }
+        })
+    }
+
+    /// Register all health endpoints at once
+    /// - /health/live - Liveness probe
+    /// - /health/ready - Readiness probe
+    pub fn health_endpoints(self) -> Self {
+        self.health_live("/health/live")
+            .health_ready("/health/ready")
     }
 
     /// Metrics endpoint (basic)

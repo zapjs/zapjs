@@ -59,6 +59,8 @@ pub enum ZapResponse {
     Html(String),
     /// JSON response (auto-serialized)
     Json(serde_json::Value),
+    /// JSON response with custom status code
+    JsonWithStatus(serde_json::Value, u16),
     /// Binary response
     Bytes(Bytes),
     /// File response
@@ -108,6 +110,16 @@ impl ZapResponse {
                 });
                 hyper::Response::builder()
                     .status(200)
+                    .header("Content-Type", "application/json")
+                    .body(body)
+                    .unwrap()
+            }
+            ZapResponse::JsonWithStatus(json, status) => {
+                let body = serde_json::to_string(json).unwrap_or_else(|_| {
+                    r#"{"error": "Failed to serialize JSON"}"#.to_string()
+                });
+                hyper::Response::builder()
+                    .status(*status)
                     .header("Content-Type", "application/json")
                     .body(body)
                     .unwrap()
