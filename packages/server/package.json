@@ -1,0 +1,30 @@
+{
+  "name": "@zap-js/server",
+  "version": "0.1.0",
+  "description": "ZapJS server communication utilities",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "src",
+    "internal",
+    "!internal/*/src/**/*.rs",
+    "!internal/*/Cargo.toml"
+  ],
+  "scripts": {
+    "build": "echo 'No build needed for server package'",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "zap",
+    "zapjs",
+    "server",
+    "rpc",
+    "ipc"
+  ],
+  "author": "ZapJS",
+  "license": "MIT"
+}

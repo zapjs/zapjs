@@ -1,40 +1,39 @@
 {
-  "name": "zap-monorepo",
+  "name": "zapjs",
   "version": "0.1.0",
   "private": true,
-  "description": "ZapRS - Fullstack Rust + React framework",
+  "description": "High-performance fullstack React framework powered by Rust",
   "workspaces": [
-    "packages/runtime",
-    "packages/router",
-    "packages/cli",
-    "packages/dev-server",
-    "zaptest"
+    "packages/server",
+    "packages/client"
   ],
   "scripts": {
-    "build": "npm run build:rust && npm run build:ts",
-    "build:rust": "cargo build --release --workspace",
-    "build:ts": "tsc -p packages/runtime/tsconfig.json",
-    "dev": "bun run packages/runtime/src/index.ts",
-    "test": "cargo test --workspace && bun test tests/",
-    "test:integration": "bun test tests/integration/",
-    "test:unit": "bun test tests/unit/",
-    "test:rust": "cargo test --workspace",
-    "test:ts": "bun test tests/",
-    "lint": "tsc --noEmit",
-    "format": "prettier --write 'packages/**/*.{ts,js,json}' 'src/**/*.{rs,toml}'",
-    "clean": "rm -rf target dist packages/*/dist packages/*/node_modules",
-    "install-deps": "bun install"
+    "build": "cargo build --release --workspace",
+    "test": "cargo test --workspace",
+    "clean": "rm -rf target packages/*/dist packages/*/internal/*/dist",
+    "format": "prettier --write 'packages/**/*.{js,json}'"
   },
   "keywords": [
+    "react",
     "rust",
-    "http",
     "framework",
     "typescript",
-    "react",
     "fullstack",
     "server-functions",
     "performance",
-    "web-server"
+    "web-server",
+    "router",
+    "file-routing",
+    "next",
+    "remix",
+    "vite",
+    "ssr",
+    "ssg",
+    "middleware",
+    "rpc",
+    "websocket",
+    "hot-reload",
+    "hmr"
   ],
   "author": "saint0x",
   "license": "MIT",
@@ -43,12 +42,9 @@
     "url": "https://github.com/saint0x/zapjs.git"
   },
   "engines": {
-    "node": ">=16.0.0",
-    "bun": ">=1.0.0"
+    "node": ">=18.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.0.0",
     "prettier": "^3.0.0"
   }
 }

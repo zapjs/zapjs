@@ -128,7 +128,10 @@ fn default_error_status() -> u16 {
 pub fn serialize_message(msg: &IpcMessage, encoding: IpcEncoding) -> ZapResult<Vec<u8>> {
     match encoding {
         IpcEncoding::MessagePack => {
-            rmp_serde::to_vec(msg).map_err(|e| ZapError::ipc(format!("MessagePack serialize error: {}", e)))
+            // IMPORTANT: Use to_vec_named to preserve string field names
+            // This is required for #[serde(tag = "type")] to work correctly
+            // with @msgpack/msgpack on the TypeScript side
+            rmp_serde::to_vec_named(msg).map_err(|e| ZapError::ipc(format!("MessagePack serialize error: {}", e)))
         }
         IpcEncoding::Json => {
             serde_json::to_vec(msg).map_err(|e| ZapError::ipc(format!("JSON serialize error: {}", e)))
@@ -257,17 +260,16 @@ impl IpcClient {
         let payload = serialize_message(&msg, self.encoding)?;
         let len = payload.len() as u32;
 
-        // Write 4-byte big-endian length prefix
-        self.stream
-            .write_all(&len.to_be_bytes())
-            .await
-            .map_err(|e| ZapError::ipc(format!("Write length error: {}", e)))?;
+        // ATOMIC: Combine length prefix and payload into single buffer to prevent frame corruption
+        let mut frame = Vec::with_capacity(4 + payload.len());
+        frame.extend_from_slice(&len.to_be_bytes());
+        frame.extend_from_slice(&payload);
 
-        // Write payload
+        // Single atomic write
         self.stream
-            .write_all(&payload)
+            .write_all(&frame)
             .await
-            .map_err(|e| ZapError::ipc(format!("Write payload error: {}", e)))?;
+            .map_err(|e| ZapError::ipc(format!("Write frame error: {}", e)))?;
 
         self.stream.flush().await.map_err(|e| {
             ZapError::ipc(format!("Flush error: {}", e))

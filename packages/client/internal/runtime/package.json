@@ -1,0 +1,41 @@
+{
+  "name": "@internal/zapjs/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ZapRS runtime - TypeScript wrapper for Rust backend",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "bun run src/index.ts"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "zap",
+    "runtime",
+    "rust",
+    "typescript"
+  ],
+  "author": "saint0x",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "peerDependencies": {
+    "node": ">=16.0.0"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.0.0"
+  }
+}

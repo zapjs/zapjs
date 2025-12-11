@@ -51,3 +51,20 @@ tmp/
 
 # Test coverage
 coverage/
+
+# Development/test files
+TEST*.ts
+test-*.json
+stress-test-*.json
+server.log
+
+# Old documentation
+NEWPLAN.md
+IMPLEMENTATION_SUMMARY.md
+dumb.md
+
+# Design system (keep locally)
+DESIGNSYSTEM.json
+
+# Build outputs
+bin/

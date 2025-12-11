@@ -1,0 +1,46 @@
+{
+  "name": "@internal/zapjs/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ZapRS CLI - Fullstack framework CLI tool",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "zap": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "bun run src/index.ts",
+    "test": "bun test src/**/*.test.ts"
+  },
+  "keywords": [
+    "zap",
+    "cli",
+    "fullstack",
+    "rust",
+    "react"
+  ],
+  "author": "saint0x",
+  "license": "MIT",
+  "dependencies": {
+    "@zapjs/dev-server": "workspace:*",
+    "commander": "^11.0.0",
+    "chalk": "^5.3.0",
+    "inquirer": "^9.2.0",
+    "ora": "^6.3.0",
+    "get-port": "^7.0.0",
+    "chokidar": "^3.5.3",
+    "fs-extra": "^11.1.1",
+    "lodash.debounce": "^4.0.8",
+    "vite": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/fs-extra": "^11.0.0",
+    "@types/inquirer": "^9.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
