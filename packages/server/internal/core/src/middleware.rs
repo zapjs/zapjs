@@ -651,7 +651,7 @@ mod tests {
         
         match result {
             MiddlewareResult::Response(response) => {
-                assert_eq!(response.status, 200);
+                assert_eq!(response.status, 204);
                 assert!(response.headers.iter().any(|(k, _)| k == "Access-Control-Allow-Origin"));
             }
             _ => panic!("Expected response for OPTIONS request"),

@@ -1,7 +1,7 @@
 // Benchmarks endpoint - calls Rust backend via RPC
-import { rpcCall } from '../../src/generated/rpc-client';
+import { rpc } from '@zap-js/server';
 
 // GET /api/benchmarks - Returns performance benchmark data
 export const GET = async () => {
-  return await rpcCall('get_benchmarks', {});
+  return await rpc.call('get_benchmarks', {});
 };

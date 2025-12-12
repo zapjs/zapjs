@@ -1,5 +1,5 @@
 // Newsletter subscription endpoint - calls Rust backend via RPC
-import { rpcCall } from '../../src/generated/rpc-client';
+import { rpc } from '@zap-js/server';
 
 // POST /api/subscribe - Subscribe to newsletter
 export const POST = async ({ request }: { request: Request }) => {
@@ -18,7 +18,7 @@ export const POST = async ({ request }: { request: Request }) => {
       );
     }
 
-    const result = await rpcCall('subscribe', { email });
+    const result = await rpc.call('subscribe', { email });
 
     // Handle error responses from Rust
     if (result && typeof result === 'object' && 'success' in result && !result.success) {

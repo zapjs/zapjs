@@ -1,5 +1,5 @@
 // Request echo endpoint - calls Rust backend via RPC
-import { rpcCall } from '../../src/generated/rpc-client';
+import { rpc } from '@zap-js/server';
 
 interface ZapRequest {
   method: string;
@@ -38,7 +38,7 @@ function parseBody(body: string): unknown {
 
 // GET /api/echo - Echo GET request details
 export const GET = async (req: ZapRequest) => {
-  return await rpcCall('echo_request', {
+  return await rpc.call('echo_request', {
     method: 'GET',
     url: req.path_only,
     query: req.query,
@@ -49,7 +49,7 @@ export const GET = async (req: ZapRequest) => {
 
 // POST /api/echo - Echo POST request with body
 export const POST = async (req: ZapRequest) => {
-  return await rpcCall('echo_request', {
+  return await rpc.call('echo_request', {
     method: 'POST',
     url: req.path_only,
     query: req.query,
@@ -60,7 +60,7 @@ export const POST = async (req: ZapRequest) => {
 
 // PUT /api/echo - Echo PUT request with body
 export const PUT = async (req: ZapRequest) => {
-  return await rpcCall('echo_request', {
+  return await rpc.call('echo_request', {
     method: 'PUT',
     url: req.path_only,
     query: req.query,
@@ -71,7 +71,7 @@ export const PUT = async (req: ZapRequest) => {
 
 // DELETE /api/echo - Echo DELETE request
 export const DELETE = async (req: ZapRequest) => {
-  return await rpcCall('echo_request', {
+  return await rpc.call('echo_request', {
     method: 'DELETE',
     url: req.path_only,
     query: req.query,

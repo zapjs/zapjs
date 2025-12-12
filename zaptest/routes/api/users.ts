@@ -1,7 +1,8 @@
 // Users CRUD endpoint - calls Rust backend via RPC
-import { rpcCall } from '../../src/generated/rpc-client';
+import { rpc, types } from '@zap-js/server';
 
-interface ZapRequest {
+// Use the Request type from our server package
+type ZapRequest = {
   method: string;
   path: string;
   path_only: string;
@@ -10,14 +11,14 @@ interface ZapRequest {
   headers: Record<string, string>;
   body: string;
   cookies: Record<string, string>;
-}
+};
 
 // GET /api/users - List all users with pagination
 export const GET = async (req: ZapRequest) => {
   const limit = parseInt(req.query.limit || '10');
   const offset = parseInt(req.query.offset || '0');
 
-  return await rpcCall('list_users', { limit, offset });
+  return await rpc.call('list_users', { limit, offset });
 };
 
 // POST /api/users - Create a new user
@@ -34,7 +35,7 @@ export const POST = async (req: ZapRequest) => {
       };
     }
 
-    return await rpcCall('create_user', { name, email, role });
+    return await rpc.call('create_user', { name, email, role });
   } catch {
     return {
       status: 400,

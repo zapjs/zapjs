@@ -16,7 +16,9 @@
     "isolatedModules": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@zap-js/client": ["../packages/client/index.js"],
+      "@zap-js/server": ["../packages/server/index.js"]
     }
   },
   "include": ["src"],

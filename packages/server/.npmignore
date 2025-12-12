@@ -1,0 +1,48 @@
+# Rust source files
+src/**/*.rs
+internal/*/src
+Cargo.toml
+Cargo.lock
+
+# Build artifacts
+target/
+internal/*/target/
+
+# Internal crates source
+internal/core/Cargo.toml
+internal/macros/Cargo.toml
+internal/codegen/Cargo.toml
+
+# Test files
+**/*.test.ts
+**/*.test.js
+**/test
+**/tests
+**/__tests__
+
+# Development files
+.cargo/
+
+# Documentation
+*.md
+!README.md
+
+# Git files
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# We only ship the JavaScript wrapper files, not the Rust source
+# The Rust binary will be handled separately

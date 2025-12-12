@@ -1,0 +1,57 @@
+# Source TypeScript files (only ship compiled JS)
+internal/*/src
+internal/*/tsconfig.json
+internal/*/*.tsbuildinfo
+
+# Development files
+internal/*/node_modules
+internal/*/.turbo
+
+# Test files
+**/*.test.ts
+**/*.test.js
+**/*.spec.ts
+**/*.spec.js
+**/test
+**/tests
+**/__tests__
+
+# Build artifacts that shouldn't be published
+internal/*/dist/*.map
+internal/*/dist/*.d.ts.map
+
+# Development configuration
+.eslintrc*
+.prettierrc*
+jest.config.*
+vitest.config.*
+
+# Documentation
+*.md
+!README.md
+
+# Git files
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Lock files (consumers should generate their own)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb

@@ -68,3 +68,7 @@ DESIGNSYSTEM.json
 
 # Build outputs
 bin/
+
+# Reports
+BUNDLE_SIZE_REPORT.md
+PUBLISH_CHECKLIST.md

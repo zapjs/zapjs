@@ -1,7 +1,7 @@
 // Single user operations - calls Rust backend via RPC
-import { rpcCall } from '../../src/generated/rpc-client';
+import { rpc } from '@zap-js/server';
 
-interface ZapRequest {
+type ZapRequest = {
   method: string;
   path: string;
   path_only: string;
@@ -10,11 +10,11 @@ interface ZapRequest {
   headers: Record<string, string>;
   body: string;
   cookies: Record<string, string>;
-}
+};
 
 // GET /api/users/:id - Get a specific user
 export const GET = async ({ params }: { params: { id: string } }) => {
-  const result = await rpcCall('get_user', { id: params.id });
+  const result = await rpc.call('get_user', { id: params.id });
 
   if (result && typeof result === 'object' && 'error' in result) {
     return new Response(
@@ -41,7 +41,7 @@ export const PUT = async ({ params, request }: { params: { id: string }; request
       role = body.role;
     }
 
-    const result = await rpcCall('update_user', {
+    const result = await rpc.call('update_user', {
       id: params.id,
       name: name || null,
       email: email || null,
@@ -66,7 +66,7 @@ export const PUT = async ({ params, request }: { params: { id: string }; request
 
 // DELETE /api/users/:id - Delete a specific user
 export const DELETE = async ({ params }: { params: { id: string } }) => {
-  const result = await rpcCall('delete_user', { id: params.id });
+  const result = await rpc.call('delete_user', { id: params.id });
 
   if (result && typeof result === 'object' && 'error' in result) {
     return new Response(

@@ -7,6 +7,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@zap-js/client': path.resolve(__dirname, '../packages/client/index.js'),
+      '@zap-js/server': path.resolve(__dirname, '../packages/server/index.js'),
     },
   },
   server: {

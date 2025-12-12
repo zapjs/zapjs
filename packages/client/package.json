@@ -1,7 +1,15 @@
 {
   "name": "@zap-js/client",
-  "version": "0.1.0",
-  "description": "ZapJS client-side React framework with routing and development tools",
+  "version": "0.0.1",
+  "description": "High-performance fullstack React framework - Client package",
+  "homepage": "https://github.com/saint0x/zapjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/saint0x/zapjs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/saint0x/zapjs/issues"
+  },
   "type": "module",
   "main": "./index.js",
   "exports": {
@@ -21,7 +29,8 @@
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist internal/*/dist",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run clean && npm run build"
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -52,11 +61,26 @@
   "keywords": [
     "zap",
     "zapjs",
+    "zap-js",
     "react",
-    "client",
+    "framework",
     "router",
-    "framework"
+    "client",
+    "typescript",
+    "rust",
+    "fullstack",
+    "file-routing",
+    "ssr",
+    "ssg",
+    "middleware",
+    "hot-reload",
+    "hmr",
+    "vite",
+    "performance"
   ],
-  "author": "ZapJS",
-  "license": "MIT"
+  "author": "saint0x",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

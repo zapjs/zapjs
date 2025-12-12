@@ -1,7 +1,7 @@
 // Features endpoint - calls Rust backend via RPC
-import { rpcCall } from '../../src/generated/rpc-client';
+import { rpc } from '@zap-js/server';
 
 // GET /api/features - Returns all ZapJS features
 export const GET = async () => {
-  return await rpcCall('get_features', {});
+  return await rpc.call('get_features', {});
 };

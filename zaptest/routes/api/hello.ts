@@ -1,9 +1,9 @@
 // Hello endpoint - calls Rust backend via RPC
-import { rpcCall } from '../../src/generated/rpc-client';
+import { rpc } from '@zap-js/server';
 
 // GET /api/hello - Simple hello endpoint
 export const GET = async () => {
-  return await rpcCall('hello', {});
+  return await rpc.call('hello', {});
 };
 
 // POST /api/hello - Echo received data

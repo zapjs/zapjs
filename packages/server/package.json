@@ -1,7 +1,15 @@
 {
   "name": "@zap-js/server",
-  "version": "0.1.0",
-  "description": "ZapJS server communication utilities",
+  "version": "0.0.1",
+  "description": "High-performance fullstack React framework - Server package with Rust-powered backend",
+  "homepage": "https://github.com/saint0x/zapjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/saint0x/zapjs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/saint0x/zapjs/issues"
+  },
   "type": "module",
   "main": "./index.js",
   "exports": {
@@ -21,10 +29,22 @@
   "keywords": [
     "zap",
     "zapjs",
+    "zap-js",
     "server",
+    "rust",
     "rpc",
-    "ipc"
+    "ipc",
+    "typescript",
+    "fullstack",
+    "framework",
+    "http",
+    "websocket",
+    "performance",
+    "backend"
   ],
-  "author": "ZapJS",
-  "license": "MIT"
+  "author": "saint0x",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

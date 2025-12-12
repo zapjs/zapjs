@@ -1,7 +1,7 @@
 // Blog posts endpoint - calls Rust backend via RPC
-import { rpcCall } from '../../src/generated/rpc-client';
+import { rpc } from '@zap-js/server';
 
-interface ZapRequest {
+type ZapRequest = {
   method: string;
   path: string;
   path_only: string;
@@ -10,7 +10,7 @@ interface ZapRequest {
   headers: Record<string, string>;
   body: string;
   cookies: Record<string, string>;
-}
+};
 
 // GET /api/posts - List posts with pagination and filtering
 export const GET = async (req: ZapRequest) => {
@@ -19,7 +19,7 @@ export const GET = async (req: ZapRequest) => {
   const tag = req.query.tag || null;
   const author = req.query.author || null;
 
-  return await rpcCall('list_posts', { page, limit, tag, author });
+  return await rpc.call('list_posts', { page, limit, tag, author });
 };
 
 // POST /api/posts - Create a new post
