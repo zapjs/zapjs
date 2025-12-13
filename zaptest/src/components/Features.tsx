@@ -15,7 +15,7 @@ const features = [
   {
     icon: Zap,
     title: 'Rust Performance',
-    description: '9ns route lookups, MessagePack RPC, connection pooling. Production-grade speed.',
+    description: '20ns route lookups, MessagePack RPC, connection pooling. Production-grade speed.',
     color: 'zap',
   },
   {

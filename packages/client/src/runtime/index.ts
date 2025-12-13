@@ -138,7 +138,12 @@ export {
   type CsrfConfig,
   type CsrfTokenInputProps,
   type CsrfFormProps,
-} from "./csrf.jsx";
+} from "./csrf.js";
+
+// Re-export RPC client utilities
+export {
+  rpcCall,
+} from "./rpc-client.js";
 
 /**
  * Zap - Ultra-fast HTTP server for Node.js and Bun

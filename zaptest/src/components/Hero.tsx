@@ -74,7 +74,7 @@ export default function Hero() {
             className="mt-12 flex flex-wrap items-center justify-center gap-8 sm:gap-12"
           >
             {[
-              { value: '9ns', label: 'Route Lookup' },
+              { value: '20ns', label: 'Route Lookup' },
               { value: '<1ms', label: 'Response Time' },
               { value: '~4MB', label: 'Binary Size' },
             ].map((stat, i) => (

@@ -131,7 +131,7 @@ function IntroductionSection() {
         <FeatureCard
           icon={Zap}
           title="Rust Performance"
-          description="9ns route lookups, sub-millisecond responses with Hyper-based HTTP server"
+          description="20ns route lookups, sub-millisecond responses with Hyper-based HTTP server"
         />
         <FeatureCard
           icon={FileCode2}
@@ -369,7 +369,7 @@ function ArchitectureSection() {
 │  ├───────────────────┤  IPC ├────────────────────────────┤  │
 │  │                   │      │                            │  │
 │  │  @zapjs/runtime   │      │  zap-server (HTTP Server)  │  │
-│  │  - Zap class      │      │  - Radix router (9ns)      │  │
+│  │  - Zap class      │      │  - Radix router (20ns)     │  │
 │  │  - IPC client     │      │  - Middleware chain        │  │
 │  │                   │      │  - Static file serving     │  │
 │  │  @zapjs/router    │      │                            │  │
@@ -387,7 +387,7 @@ function ArchitectureSection() {
       </Para>
       <List items={[
         '1. Rust HTTP server receives the request',
-        '2. Radix router matches the path (~9ns for static routes)',
+        '2. Radix router matches the path (~20ns for static routes)',
         '3. If TypeScript handler, IPC message sent to Node process',
         '4. TypeScript executes the handler function',
         '5. Response sent back via IPC',
@@ -432,7 +432,7 @@ function ArchitectureSection() {
       />
 
       <Callout type="info">
-        <strong>Performance Note:</strong> IPC adds ~100μs overhead per request. Streaming and WebSocket are also supported via StreamChunk and WsMessage IPC types.
+        <strong>Performance Note:</strong> IPC adds ~1.2μs overhead per request. Streaming and WebSocket are also supported via StreamChunk and WsMessage IPC types.
       </Callout>
     </div>
   );
@@ -767,15 +767,15 @@ function PerformanceSection() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 my-6">
         <div className="p-5 bg-carbon-900/30 border border-carbon-800/50 rounded-xl">
           <p className="text-xs text-carbon-500 uppercase tracking-wider mb-1">Static Route Lookup</p>
-          <p className="text-3xl font-display font-bold text-zap-400">~9ns</p>
+          <p className="text-3xl font-display font-bold text-zap-400">~20ns</p>
         </div>
         <div className="p-5 bg-carbon-900/30 border border-carbon-800/50 rounded-xl">
           <p className="text-xs text-carbon-500 uppercase tracking-wider mb-1">Dynamic Route Lookup</p>
-          <p className="text-3xl font-display font-bold text-zap-400">~80ns</p>
+          <p className="text-3xl font-display font-bold text-zap-400">~81ns</p>
         </div>
         <div className="p-5 bg-carbon-900/30 border border-carbon-800/50 rounded-xl">
           <p className="text-xs text-carbon-500 uppercase tracking-wider mb-1">IPC Round-Trip</p>
-          <p className="text-3xl font-display font-bold text-zap-400">~100μs</p>
+          <p className="text-3xl font-display font-bold text-zap-400">~1.2μs</p>
         </div>
         <div className="p-5 bg-carbon-900/30 border border-carbon-800/50 rounded-xl">
           <p className="text-xs text-carbon-500 uppercase tracking-wider mb-1">Binary Size</p>

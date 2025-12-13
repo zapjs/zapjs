@@ -4,10 +4,10 @@ import { Gauge, TrendingUp, Zap, Server, Radio } from 'lucide-react';
 
 // Default data (shown immediately, replaced by API data when loaded)
 const defaultBenchmarks = [
-  { framework: 'ZapJS', requestsPerSec: 145000, latency: 0.8, color: 'zap', isZap: true },
+  { framework: 'ZapJS', requestsPerSec: 162000, latency: 0.8, color: 'zap', isZap: true },
   { framework: 'Actix', requestsPerSec: 140000, latency: 0.9, color: 'rust', isZap: false },
   { framework: 'Hyper', requestsPerSec: 135000, latency: 1.0, color: 'violet', isZap: false },
-  { framework: 'Express', requestsPerSec: 15000, latency: 8.5, color: 'emerald', isZap: false },
+  { framework: 'Express', requestsPerSec: 14400, latency: 8.5, color: 'emerald', isZap: false },
   { framework: 'Next.js', requestsPerSec: 12000, latency: 10.2, color: 'sky', isZap: false },
 ];
 
@@ -19,7 +19,7 @@ const colorMap: Record<string, string> = {
   'Next.js': 'sky',
 };
 
-const maxRequests = 150000;
+const maxRequests = 170000;
 
 function AnimatedNumber({ value, suffix = '', duration = 2 }: { value: number; suffix?: string; duration?: number }) {
   const [displayValue, setDisplayValue] = useState(0);
@@ -183,10 +183,10 @@ export default function Performance() {
             {/* Key metrics */}
             <div className="grid grid-cols-2 gap-4 sm:gap-6">
               {[
-                { icon: Zap, label: 'Route Lookup', value: '9ns', color: 'zap' },
-                { icon: TrendingUp, label: 'Throughput', value: '145k', suffix: '/s', color: 'emerald' },
+                { icon: Zap, label: 'Route Lookup', value: '20ns', color: 'zap' },
+                { icon: TrendingUp, label: 'Throughput', value: '162k', suffix: '/s', color: 'emerald' },
                 { icon: Server, label: 'Memory', value: '12MB', color: 'sky' },
-                { icon: Gauge, label: 'P99 Latency', value: '<2ms', color: 'violet' },
+                { icon: Gauge, label: 'P99 Latency', value: '<3ms', color: 'violet' },
               ].map((metric, i) => (
                 <motion.div
                   key={metric.label}

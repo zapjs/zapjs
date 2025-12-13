@@ -5,13 +5,13 @@
  * Implements standard benchmark routes for comparison testing
  */
 
-import { Zap } from '../../../packages/server/index.js';
+import { Zap } from '@zap-js/server';
 
 const PORT = parseInt(process.env.PORT || '3000');
 
 const server = Zap.new()
     .port(PORT)
-    .hostname('0.0.0.0')
+    .hostname('127.0.0.1')
 
     // Hello World - simplest possible route
     .get('/', () => 'Hello, World!')

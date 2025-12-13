@@ -85,8 +85,13 @@ const compareMetrics = (
         const baselineVal = baseline[metric];
         const currentVal = current[metric];
 
-        // Skip if either value is missing
+        // Skip if either value is missing or not a number
         if (baselineVal === undefined || currentVal === undefined) {
+            continue;
+        }
+
+        // Skip non-numeric fields (metadata)
+        if (typeof baselineVal !== 'number' || typeof currentVal !== 'number') {
             continue;
         }
 

@@ -16,14 +16,14 @@ const FRAMEWORKS = [
         name: 'Express.js',
         port: 3001,
         command: 'node',
-        args: ['servers/express-server.js'],
+        args: ['servers/express-server.cjs'],
         color: '\x1b[33m', // Yellow
     },
     {
         name: 'Fastify',
         port: 3002,
         command: 'node',
-        args: ['servers/fastify-server.js'],
+        args: ['servers/fastify-server.cjs'],
         color: '\x1b[36m', // Cyan
     },
     {
