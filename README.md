@@ -91,6 +91,16 @@ zap routes       # Display route tree
 zap codegen      # Generate TypeScript from Rust exports
 ```
 
+## Documentation
+
+- **[Complete API Reference](docs/API.md)** - Full SDK documentation for client and server APIs
+- **[Getting Started](docs/getting-started.md)** - Step-by-step setup guide
+- **[Architecture Overview](docs/ARCHITECTURE.md)** - System design and data flow
+- **[Usage Guide](docs/USAGE.md)** - Common patterns and examples
+- **[File Routing](docs/guides/file-routing.md)** - File-based routing guide
+- **[API Routes](docs/guides/api-routes.md)** - Building API endpoints
+- **[Deployment](docs/guides/deployment.md)** - Production deployment guide
+
 ## License
 
 MIT © ZapJS

@@ -1,6 +1,6 @@
 {
   "name": "@zap-js/client",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "High-performance fullstack React framework - Client package",
   "homepage": "https://github.com/saint0x/zapjs",
   "repository": {
@@ -33,17 +33,21 @@
     "test:coverage": "bun test --coverage"
   },
   "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "commander": "^12.0.0",
+    "@msgpack/msgpack": "^3.1.2",
+    "@types/fs-extra": "^11.0.4",
     "chalk": "^5.3.0",
     "chokidar": "^3.5.3",
+    "commander": "^12.0.0",
     "express": "^4.18.2",
+    "fs-extra": "^11.3.2",
     "http-proxy-middleware": "^2.0.6",
     "inquirer": "^9.2.12",
-    "ws": "^8.16.0",
+    "ora": "^6.0.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "tsx": "^4.21.0",
     "vite": "^5.0.0",
-    "ora": "^6.0.0"
+    "ws": "^8.16.0"
   },
   "peerDependencies": {
     "react": "^18.0.0",

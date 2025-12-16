@@ -915,19 +915,19 @@ function ClientRouterSection() {
       <CodeBlock
         lang="typescript"
         filename="Using Router Hooks"
-        code={`import { useRouter, useParams, usePathname, useSearchParams } from '@zap-js/client';
+        code={`import { router } from '@zap-js/client';
 
 function MyComponent() {
-  const router = useRouter();
-  const { id } = useParams<{ id: string }>();
-  const pathname = usePathname();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const routerInstance = router.useRouter();
+  const { id } = router.useParams<{ id: string }>();
+  const pathname = router.usePathname();
+  const [searchParams, setSearchParams] = router.useSearchParams();
 
   // Programmatic navigation
-  router.push('/posts/123');
-  router.replace('/login');
-  router.back();
-  router.prefetch('/dashboard');
+  routerInstance.push('/posts/123');
+  routerInstance.replace('/login');
+  routerInstance.back();
+  routerInstance.prefetch('/dashboard');
 }`}
       />
 
@@ -938,18 +938,18 @@ function MyComponent() {
       <CodeBlock
         lang="typescript"
         filename="Navigation Components"
-        code={`import { Link, NavLink } from '@zap-js/client';
+        code={`import { router } from '@zap-js/client';
 
 // Basic link
-<Link to="/posts/123">View Post</Link>
+<router.Link to="/posts/123">View Post</router.Link>
 
 // Replace history instead of push
-<Link to="/posts/123" replace>View Post</Link>
+<router.Link to="/posts/123" replace>View Post</router.Link>
 
 // NavLink with active state
-<NavLink to="/dashboard" activeClassName="active">
+<router.NavLink to="/dashboard" activeClassName="active">
   Dashboard
-</NavLink>`}
+</router.NavLink>`}
       />
 
       <Callout type="tip">
@@ -1264,10 +1264,10 @@ export function errorComponent({ error, reset }) {
       <CodeBlock
         lang="typescript"
         filename="Using useRouteError"
-        code={`import { useRouteError } from '@zap-js/client';
+        code={`import { errors } from '@zap-js/client';
 
 export function errorComponent() {
-  const { error, reset } = useRouteError();
+  const { error, reset } = errors.useRouteError();
   return <MyErrorUI error={error} onRetry={reset} />;
 }`}
       />

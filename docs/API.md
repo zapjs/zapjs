@@ -318,7 +318,304 @@ requestLogger.warn('Cache miss', { key: 'user:123' });
 
 ---
 
-### 5. Types Export
+### 5. WebSockets API
+
+**Purpose:** Real-time bidirectional communication with typed WebSocket handlers and utility functions.
+
+**Access:**
+```typescript
+import { websockets } from '@zap-js/client'
+import type { WsConnection, WsHandler, WsMessage } from '@zap-js/client'
+```
+
+**What It Offers:**
+- **Utilities:** `broadcast()`, `broadcastExcept()`, `sendJson()`, `parseMessage()`
+- **Helpers:** `createErrorMessage()`, `createSuccessMessage()`, `isWsMessage()`
+- **Types:** `WsConnection`, `WsHandler`, `WsMessage`
+
+**Core Types:**
+```typescript
+interface WsConnection {
+  id: string;                    // Unique connection ID
+  path: string;                  // WebSocket endpoint path
+  headers: Record<string, string>;
+  send(data: string): void;
+  sendBinary(data: Uint8Array): void;
+  close(code?: number, reason?: string): void;
+}
+
+interface WsHandler {
+  onConnect?: (connection: WsConnection) => void | Promise<void>;
+  onMessage?: (connection: WsConnection, message: string | Uint8Array) => void | Promise<void>;
+  onClose?: (connection: WsConnection, code?: number, reason?: string) => void | Promise<void>;
+  onError?: (connection: WsConnection, error: Error) => void | Promise<void>;
+}
+```
+
+**Utility Functions:**
+
+```typescript
+// Broadcast to multiple connections
+websockets.broadcast(
+  connections: WsConnection[],
+  data: string | Record<string, any>,
+  options?: { exclude?: string[]; binary?: boolean }
+): void
+
+// Broadcast to all except sender
+websockets.broadcastExcept(
+  connections: WsConnection[],
+  senderId: string,
+  data: string | Record<string, any>
+): void
+
+// Send JSON message
+websockets.sendJson(
+  connection: WsConnection,
+  data: Record<string, any>
+): void
+
+// Parse incoming message
+websockets.parseMessage(
+  message: string | Uint8Array
+): string | any
+
+// Create formatted responses
+websockets.createErrorMessage(error: string | Error): string
+websockets.createSuccessMessage(data: any): string
+
+// Type guard
+websockets.isWsMessage(msg: any): msg is WsMessage
+```
+
+**Key Features:**
+- Connection management with unique IDs
+- Broadcasting to multiple clients
+- JSON message helpers
+- Binary message support
+- Type-safe message parsing
+
+**User Benefits:**
+- Simplified real-time communication
+- Type-safe WebSocket handlers
+- Built-in broadcast patterns
+- Easy JSON messaging
+
+**Example Usage:**
+```typescript
+import { websockets } from '@zap-js/client'
+import type { WsConnection, WsHandler } from '@zap-js/client'
+
+const connections = new Map<string, WsConnection>();
+
+export const WEBSOCKET: WsHandler = {
+  onConnect: async (connection) => {
+    connections.set(connection.id, connection);
+
+    // Send welcome message
+    websockets.sendJson(connection, {
+      type: 'connected',
+      id: connection.id,
+      totalClients: connections.size
+    });
+
+    // Notify others
+    websockets.broadcastExcept(
+      Array.from(connections.values()),
+      connection.id,
+      { type: 'user_joined', userId: connection.id }
+    );
+  },
+
+  onMessage: async (connection, message) => {
+    const parsed = websockets.parseMessage(message);
+
+    // Broadcast to all
+    websockets.broadcast(
+      Array.from(connections.values()),
+      { type: 'message', from: connection.id, data: parsed }
+    );
+  },
+
+  onClose: async (connection) => {
+    connections.delete(connection.id);
+
+    websockets.broadcast(
+      Array.from(connections.values()),
+      { type: 'user_left', userId: connection.id }
+    );
+  },
+
+  onError: async (connection, error) => {
+    connection.send(websockets.createErrorMessage(error));
+  }
+};
+```
+
+**Location:** `packages/client/src/runtime/websockets-utils.ts`
+
+---
+
+### 6. Streaming API
+
+**Purpose:** Server-sent streaming responses with async iterables and utility functions for common streaming patterns.
+
+**Access:**
+```typescript
+import { streaming } from '@zap-js/client'
+import type { StreamChunk, StreamingHandler } from '@zap-js/client'
+```
+
+**What It Offers:**
+- **Creators:** `createChunk()`, `createStream()`, `streamJson()`, `streamSSE()`
+- **Transformers:** `mapStream()`, `filterStream()`, `batchStream()`, `delayStream()`
+- **Converters:** `fromReadableStream()`, `intervalStream()`
+- **Type Guard:** `isAsyncIterable()`
+
+**Core Types:**
+```typescript
+interface StreamChunk {
+  data?: string;        // String data
+  bytes?: Uint8Array;   // Binary data
+}
+
+type StreamingHandler<TParams, TQuery> = (
+  request: ZapRequest<TParams, TQuery>
+) => AsyncIterable<StreamChunk>;
+```
+
+**Utility Functions:**
+
+```typescript
+// Create chunks
+streaming.createChunk(data: string): StreamChunk
+streaming.createChunk(bytes: Uint8Array): StreamChunk
+
+// Stream creators
+streaming.createStream(
+  items: string[],
+  delimiter?: string
+): AsyncIterable<StreamChunk>
+
+streaming.streamJson<T>(objects: T[]): AsyncIterable<StreamChunk>
+
+streaming.streamSSE(events: Array<{
+  data: any;
+  event?: string;
+  id?: string | number;
+  retry?: number;
+}>): AsyncIterable<StreamChunk>
+
+// Stream transformers
+streaming.mapStream<T, U>(
+  source: AsyncIterable<T>,
+  mapper: (item: T) => U | Promise<U>
+): AsyncIterable<U>
+
+streaming.filterStream<T>(
+  source: AsyncIterable<T>,
+  predicate: (item: T) => boolean | Promise<boolean>
+): AsyncIterable<T>
+
+streaming.batchStream<T>(
+  source: AsyncIterable<T>,
+  batchSize: number
+): AsyncIterable<T[]>
+
+streaming.delayStream<T>(
+  source: AsyncIterable<T>,
+  delayMs: number
+): AsyncIterable<T>
+
+// Converters
+streaming.fromReadableStream<T>(
+  stream: ReadableStream<T>
+): AsyncIterable<T>
+
+streaming.intervalStream<T>(
+  interval: number,
+  generator: (count: number) => T,
+  maxCount?: number
+): AsyncIterable<StreamChunk>
+
+// Type guard
+streaming.isAsyncIterable<T>(value: unknown): value is AsyncIterable<T>
+```
+
+**Key Features:**
+- Async generator-based streaming
+- NDJSON (newline-delimited JSON) support
+- Server-Sent Events (SSE) format
+- Stream transformation pipelines
+- Interval-based streaming
+- ReadableStream compatibility
+
+**User Benefits:**
+- Simple API for complex streaming
+- Composable stream transformations
+- Support for multiple streaming formats
+- Type-safe async iteration
+
+**Example Usage:**
+
+```typescript
+import { streaming } from '@zap-js/client'
+
+// Stream JSON objects
+export async function GET() {
+  const users = await fetchUsers();
+  return streaming.streamJson(users);
+}
+
+// Stream with transformations
+export async function* GET() {
+  const source = await getDataStream();
+
+  // Transform and filter
+  yield* streaming.filterStream(
+    streaming.mapStream(source, item => ({
+      ...item,
+      processed: true
+    })),
+    item => item.value > 100
+  );
+}
+
+// Server-Sent Events
+export async function GET() {
+  return streaming.streamSSE([
+    { data: { count: 1 }, event: 'counter', id: 1 },
+    { data: { count: 2 }, event: 'counter', id: 2 },
+    { data: { count: 3 }, event: 'counter', id: 3 }
+  ]);
+}
+
+// Interval streaming
+export async function GET() {
+  return streaming.intervalStream(
+    1000,  // Every 1 second
+    (count) => ({ time: Date.now(), count }),
+    10     // Max 10 emissions
+  );
+}
+
+// Batched streaming
+export async function* GET() {
+  const largeDataset = await fetchLargeDataset();
+
+  // Send in batches of 100
+  yield* streaming.batchStream(
+    streaming.createStream(largeDataset.map(JSON.stringify)),
+    100
+  );
+}
+```
+
+**Location:** `packages/client/src/runtime/streaming-utils.ts`
+
+---
+
+### 7. Types Export
 
 **Purpose:** Comprehensive TypeScript definitions for type safety.
 
@@ -844,6 +1141,8 @@ isAsyncIterable<T>(value: unknown): value is AsyncIterable<T>
 | **Middleware** | Route protection | `requireAuth()`, `requireRole()`, `preloadData()` | `@zap-js/client/router` |
 | **Errors** | Error boundaries | `ErrorBoundary`, `useRouteError()`, `ZapError` | `@zap-js/client` |
 | **Logger** | Structured logging | `logger.info()`, `logger.error()`, `logger.child()` | `@zap-js/client` |
+| **WebSockets** | Real-time comms | `broadcast()`, `sendJson()`, `parseMessage()` | `@zap-js/client` |
+| **Streaming** | Server streaming | `streamJson()`, `streamSSE()`, `mapStream()` | `@zap-js/client` |
 | **Types** | Type safety | `Handler`, `ZapRequest`, `ZapConfig`, `IpcMessage` | `@zap-js/client` |
 
 ### Server APIs
