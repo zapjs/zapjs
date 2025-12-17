@@ -5,7 +5,7 @@
     "": {
       "name": "zaptest",
       "dependencies": {
-        "@zap-js/client": "0.0.4",
+        "@zap-js/client": "0.0.5",
         "@zap-js/server": "0.0.4",
         "class-variance-authority": "^0.7.0",
         "clsx": "^2.1.1",
@@ -214,7 +214,7 @@
 
     "@vitejs/plugin-react": ["@vitejs/plugin-react@4.7.0", "", { "dependencies": { "@babel/core": "^7.28.0", "@babel/plugin-transform-react-jsx-self": "^7.27.1", "@babel/plugin-transform-react-jsx-source": "^7.27.1", "@rolldown/pluginutils": "1.0.0-beta.27", "@types/babel__core": "^7.20.5", "react-refresh": "^0.17.0" }, "peerDependencies": { "vite": "^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0" } }, "sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA=="],
 
-    "@zap-js/client": ["@zap-js/client@0.0.4", "", { "dependencies": { "@msgpack/msgpack": "^3.1.2", "@types/fs-extra": "^11.0.4", "chalk": "^5.3.0", "chokidar": "^3.5.3", "commander": "^12.0.0", "express": "^4.18.2", "fs-extra": "^11.3.2", "http-proxy-middleware": "^2.0.6", "inquirer": "^9.2.12", "ora": "^6.0.0", "react": "^18.0.0", "react-dom": "^18.0.0", "tsx": "^4.21.0", "vite": "^5.0.0", "ws": "^8.16.0" }, "bin": { "zap": "dist/cli/index.js" } }, "sha512-44RVIaaK3kyLtZLpn062eGqerkFo69y6/4GdFUwpM0bh6n+cO7jV6GSOBqppYA7XmoneMgQly1ess5jmm5K+ZQ=="],
+    "@zap-js/client": ["@zap-js/client@0.0.5", "", { "dependencies": { "@msgpack/msgpack": "^3.1.2", "@types/fs-extra": "^11.0.4", "chalk": "^5.3.0", "chokidar": "^3.5.3", "commander": "^12.0.0", "express": "^4.18.2", "fs-extra": "^11.3.2", "http-proxy-middleware": "^2.0.6", "inquirer": "^9.2.12", "ora": "^6.0.0", "react": "^18.0.0", "react-dom": "^18.0.0", "tsx": "^4.21.0", "vite": "^5.0.0", "ws": "^8.16.0" }, "bin": { "zap": "dist/cli/index.js" } }, "sha512-CC8JtJrFVgXwt+dfTtk7CmFPlmBQh2iYyM1VaHORN4N18Rgb7+lRTz3Cz1ggT2KI/9/SFIzRhOtkmReVRwymjA=="],
 
     "@zap-js/server": ["@zap-js/server@0.0.4", "", { "dependencies": { "@zap-js/client": "^0.0.4" } }, "sha512-jxbpFx7+lYMjOn7GH4+ZmcQpn+FTcbNd/6Us41STxevbB4glpdFvvdxhhYj0sRXbpjVyNUIj/8K3lABl5phouQ=="],
 
@@ -657,6 +657,8 @@
     "yoctocolors-cjs": ["yoctocolors-cjs@2.1.3", "", {}, "sha512-U/PBtDf35ff0D8X8D0jfdzHYEPFxAI7jJlxZXwCSez5M3190m+QobIfh+sWDWSHMCWWJN2AWamkegn6vr6YBTw=="],
 
     "@inquirer/external-editor/iconv-lite": ["iconv-lite@0.7.1", "", { "dependencies": { "safer-buffer": ">= 2.1.2 < 3.0.0" } }, "sha512-2Tth85cXwGFHfvRgZWszZSvdo+0Xsqmw8k8ZwxScfcBneNUraK+dxRxRm24nszx80Y0TVio8kKLt5sLE7ZCLlw=="],
+
+    "@zap-js/server/@zap-js/client": ["@zap-js/client@0.0.4", "", { "dependencies": { "@msgpack/msgpack": "^3.1.2", "@types/fs-extra": "^11.0.4", "chalk": "^5.3.0", "chokidar": "^3.5.3", "commander": "^12.0.0", "express": "^4.18.2", "fs-extra": "^11.3.2", "http-proxy-middleware": "^2.0.6", "inquirer": "^9.2.12", "ora": "^6.0.0", "react": "^18.0.0", "react-dom": "^18.0.0", "tsx": "^4.21.0", "vite": "^5.0.0", "ws": "^8.16.0" }, "bin": { "zap": "dist/cli/index.js" } }, "sha512-44RVIaaK3kyLtZLpn062eGqerkFo69y6/4GdFUwpM0bh6n+cO7jV6GSOBqppYA7XmoneMgQly1ess5jmm5K+ZQ=="],
 
     "body-parser/debug": ["debug@2.6.9", "", { "dependencies": { "ms": "2.0.0" } }, "sha512-bC7ElrdJaJnPbAP+1EotYvqZsb3ecl5wi6Bfi6BJTUcNowp6cvspg0jXznRTKDjm/E7AdgFBVeAPVMNcKGsHMA=="],
 

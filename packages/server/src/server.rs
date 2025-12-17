@@ -613,7 +613,20 @@ impl Zap {
             );
         }
 
-        // Note: RPC endpoint (/__zap_rpc) is registered by the application binary
+        // Start RPC server if dispatch function provided
+        if let Some(dispatch_fn) = config.rpc_dispatch {
+            use crate::rpc::RpcServerHandle;
+
+            let rpc_server = RpcServerHandle::new(
+                config.ipc_socket_path.clone(),
+                dispatch_fn,
+            );
+
+            rpc_server.start().await
+                .map_err(|e| ZapError::config(format!("Failed to start RPC server: {}", e)))?;
+
+            info!("✅ RPC server started on {}.rpc", config.ipc_socket_path);
+        }
 
         // Add health check
         if !config.health_check_path.is_empty() {

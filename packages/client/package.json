@@ -1,6 +1,6 @@
 {
   "name": "@zap-js/client",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "High-performance fullstack React framework - Client package",
   "homepage": "https://github.com/saint0x/zapjs",
   "repository": {

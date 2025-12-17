@@ -1,6 +1,6 @@
 {
   "name": "@zap-js/server",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "High-performance fullstack React framework - Server package with Rust-powered backend",
   "homepage": "https://github.com/saint0x/zapjs",
   "repository": {
@@ -19,7 +19,7 @@
     "index.js"
   ],
   "dependencies": {
-    "@zap-js/client": "^0.0.4"
+    "@zap-js/client": "^0.0.5"
   },
   "keywords": [
     "zap",

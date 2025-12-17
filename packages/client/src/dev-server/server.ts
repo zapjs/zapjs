@@ -9,6 +9,7 @@ import { CodegenRunner } from './codegen-runner.js';
 import { HotReloadServer } from './hot-reload.js';
 import { RouteScannerRunner } from './route-scanner.js';
 import { ProcessManager, IpcServer, ZapConfig, RouteConfig } from '../runtime/index.js';
+import { initRpcClient } from '../runtime/rpc-client.js';
 import { cliLogger } from '../cli/utils/logger.js';
 
 // Register tsx loader for TypeScript imports
@@ -399,11 +400,18 @@ export class DevServer extends EventEmitter {
       await this.ipcServer.start();
       this.log('debug', `IPC server listening on ${this.socketPath}`);
 
+      // Initialize RPC client for bidirectional IPC communication
+      // This allows TypeScript route handlers to call Rust functions via rpc.call()
+      initRpcClient(this.socketPath);
+      this.log('debug', `RPC client initialized on ${this.socketPath}`);
+
       // Load and register route handlers
       const routes = await this.loadRouteHandlers(routeTree);
+      console.log(`[dev-server] Loaded ${routes.length} route configurations`);
 
       // Build Rust server configuration
       const config = this.buildRustConfig(routes);
+      console.log(`[dev-server] Built Rust config with ${config.routes.length} routes`);
 
       // Get binary path
       const binaryPath = this.rustBuilder.getBinaryPath();

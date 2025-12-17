@@ -6,11 +6,18 @@
 //! - CLI argument overrides
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
 use crate::error::{ZapError, ZapResult};
 
+/// User-provided RPC dispatch function
+///
+/// Takes (function_name, params) and returns Result<data, error_message>
+/// Using serde_json::Value for maximum flexibility
+pub type RpcDispatchFn = Arc<dyn Fn(String, serde_json::Value) -> Result<serde_json::Value, String> + Send + Sync>;
+
 /// Complete Zap server configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ZapConfig {
     /// HTTP server port
     pub port: u16,
@@ -52,6 +59,30 @@ pub struct ZapConfig {
     /// Metrics endpoint path
     #[serde(default)]
     pub metrics_path: Option<String>,
+
+    /// RPC dispatch function (code-only, not in JSON config)
+    /// Enables TypeScript handlers to call Rust functions via IPC
+    #[serde(skip)]
+    pub rpc_dispatch: Option<RpcDispatchFn>,
+}
+
+impl std::fmt::Debug for ZapConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZapConfig")
+            .field("port", &self.port)
+            .field("hostname", &self.hostname)
+            .field("ipc_socket_path", &self.ipc_socket_path)
+            .field("max_request_body_size", &self.max_request_body_size)
+            .field("request_timeout_secs", &self.request_timeout_secs)
+            .field("keepalive_timeout_secs", &self.keepalive_timeout_secs)
+            .field("routes", &self.routes)
+            .field("static_files", &self.static_files)
+            .field("middleware", &self.middleware)
+            .field("health_check_path", &self.health_check_path)
+            .field("metrics_path", &self.metrics_path)
+            .field("rpc_dispatch", &self.rpc_dispatch.as_ref().map(|_| "<function>"))
+            .finish()
+    }
 }
 
 /// Route configuration
@@ -127,6 +158,7 @@ impl Default for ZapConfig {
             middleware: MiddlewareConfig::default(),
             health_check_path: "/health".to_string(),
             metrics_path: None,
+            rpc_dispatch: None,
         }
     }
 }

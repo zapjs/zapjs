@@ -15,7 +15,7 @@ interface RouteTree {
     relativePath: string;
     urlPath: string;
     type: string;
-    params: Array<{ name: string; index: number; catchAll: boolean }>;
+    params: Array<{ name: string; index: number; catchAll: boolean; optional: boolean }>;
     isIndex: boolean;
   }>;
   apiRoutes: Array<{
@@ -23,9 +23,15 @@ interface RouteTree {
     relativePath: string;
     urlPath: string;
     type: string;
-    params: Array<{ name: string; index: number; catchAll: boolean }>;
+    params: Array<{ name: string; index: number; catchAll: boolean; optional: boolean }>;
     methods?: string[];
     isIndex: boolean;
+  }>;
+  wsRoutes: Array<{
+    filePath: string;
+    relativePath: string;
+    urlPath: string;
+    params: Array<{ name: string; index: number; catchAll: boolean; optional: boolean }>;
   }>;
   layouts: unknown[];
   root: unknown;
@@ -65,12 +71,11 @@ export class RouteScannerRunner extends EventEmitter {
    */
   private async loadRouter(): Promise<RouterModule | null> {
     try {
-      // Dynamic import using variable to prevent TypeScript from resolving at compile time
-      const moduleName = '@zapjs/router';
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const router = await (Function('moduleName', 'return import(moduleName)')(moduleName)) as RouterModule;
+      // Import from local router module
+      const router = await import('../router/index.js') as RouterModule;
       return router;
-    } catch {
+    } catch (error) {
+      console.error('[route-scanner] Failed to load router:', error);
       return null;
     }
   }

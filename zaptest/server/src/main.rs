@@ -1093,47 +1093,6 @@ async fn setup_signal_handlers() {
 }
 
 // ============================================================================
-// RPC HANDLER (shared between modes)
-// ============================================================================
-
-async fn handle_rpc(req: zap_server::RequestData) -> zap_server::response::ZapResponse {
-    use zap_server::response::Json;
-
-    let body = match req.body_string() {
-        Ok(b) => b,
-        Err(e) => {
-            let error_response = RpcResponse {
-                success: false,
-                data: None,
-                error: Some(ApiError {
-                    error: format!("Invalid request body encoding: {}", e),
-                    code: "INVALID_BODY".to_string(),
-                }),
-            };
-            return Json(serde_json::to_value(error_response).unwrap()).into();
-        }
-    };
-
-    match serde_json::from_str::<RpcRequest>(&body) {
-        Ok(rpc_request) => {
-            let response = dispatch_rpc(rpc_request);
-            Json(serde_json::to_value(response).unwrap()).into()
-        }
-        Err(e) => {
-            let error_response = RpcResponse {
-                success: false,
-                data: None,
-                error: Some(ApiError {
-                    error: format!("Invalid RPC request: {}", e),
-                    code: "INVALID_REQUEST".to_string(),
-                }),
-            };
-            Json(serde_json::to_value(error_response).unwrap()).into()
-        }
-    }
-}
-
-// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -1173,20 +1132,48 @@ async fn main() -> ZapResult<()> {
 
         let server_hostname = config.hostname.clone();
         let server_port = config.port;
+        let ipc_socket_path = config.ipc_socket_path.clone();
 
         info!("📡 Server will listen on http://{}:{}", server_hostname, server_port);
-        info!("🔌 IPC socket: {}", config.ipc_socket_path);
+        info!("🔌 IPC socket: {}", ipc_socket_path);
         info!("📊 Routes: {}", config.routes.len());
 
-        // Create server from config (IPC proxying for TypeScript routes)
-        // Add RPC endpoint that calls Rust #[export] functions directly
-        let app = Zap::from_config(config).await?
-            .post_async("/__zap_rpc", |req| async move {
-                handle_rpc(req).await
-            });
+        // Create RPC dispatch adapter for IPC communication
+        use std::sync::Arc;
+        use serde_json::Value;
+
+        let rpc_dispatch_fn = Arc::new(|function_name: String, params: Value| -> Result<Value, String> {
+            // Convert params from Value to HashMap
+            let params_map = if let Value::Object(map) = params {
+                map.into_iter().collect()
+            } else {
+                HashMap::new()
+            };
+
+            let request = RpcRequest {
+                method: function_name,
+                params: params_map,
+            };
+
+            let response = dispatch_rpc(request);
+
+            if response.success {
+                Ok(response.data.unwrap_or(Value::Null))
+            } else {
+                Err(response.error
+                    .map(|e| e.error)
+                    .unwrap_or_else(|| "Unknown error".to_string()))
+            }
+        });
+
+        // Attach RPC dispatch to config
+        config.rpc_dispatch = Some(rpc_dispatch_fn);
+
+        // Create server from config (IPC proxying for TypeScript routes + RPC server)
+        let app = Zap::from_config(config).await?;
 
         println!("🚀 ZapJS server running on http://{}:{}", server_hostname, server_port);
-        println!("📡 RPC endpoint: http://{}:{}/__zap_rpc", server_hostname, server_port);
+        println!("🔧 RPC server running on {}.rpc (IPC)", ipc_socket_path);
 
         info!("✅ Zap server initialized successfully (dev mode)");
 
@@ -1215,14 +1202,9 @@ async fn main() -> ZapResult<()> {
             .logging()
             .json_get("/api/health", |_req| {
                 json!({ "status": "ok" })
-            })
-            // RPC endpoint for TypeScript routes to call Rust functions
-            .post_async("/__zap_rpc", |req| async move {
-                handle_rpc(req).await
             });
 
         println!("🚀 ZapJS server running on http://{}:{}", hostname, port);
-        println!("📡 RPC endpoint: http://{}:{}/__zap_rpc", hostname, port);
 
         info!("✅ Zap server initialized successfully (standalone mode)");
 
