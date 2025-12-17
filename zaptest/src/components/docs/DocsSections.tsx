@@ -664,21 +664,26 @@ pub async fn get_user(id: String) -> Result<User, ApiError> {
 }`}
       />
 
-      <Heading level={2}>Generated TypeScript</Heading>
+      <Heading level={2}>Using RPC in TypeScript</Heading>
       <Para>
-        Running <code className="text-zap-400">zap-codegen</code> creates type-safe bindings:
+        Call Rust functions using the <code className="text-zap-400">rpc</code> namespace from the SDK:
       </Para>
       <CodeBlock
         lang="typescript"
-        filename="src/api/backend.ts (auto-generated)"
-        code={`import { rpcCall } from './rpc-client';
-import type { User, ApiError } from './types';
+        filename="Calling Server Functions"
+        code={`import { rpc } from '@zap-js/server';
+import type { User, ApiError } from './generated/types';
 
-export const backend = {
-  async getUser(id: string): Promise<User | ApiError> {
-    return rpcCall<User | ApiError>('get_user', { id });
-  },
-};`}
+// Type-safe RPC call with Result<T, E> union type
+const result = await rpc.call<User | ApiError>('get_user', { id: '123' });
+
+if ('code' in result) {
+  // TypeScript knows this is ApiError
+  console.error(result.code, result.message);
+} else {
+  // TypeScript knows this is User
+  console.log(result.name, result.email);
+}`}
       />
 
       <Heading level={2}>Using in React</Heading>
@@ -686,14 +691,15 @@ export const backend = {
         lang="typescript"
         filename="src/components/UserProfile.tsx"
         code={`import { useState, useEffect } from 'react';
-import { backend, User, ApiError } from '../api/backend';
+import { rpc } from '@zap-js/server';
+import type { User, ApiError } from '../generated/types';
 
 function UserProfile({ userId }: { userId: string }) {
   const [user, setUser] = useState<User | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    backend.getUser(userId).then(result => {
+    rpc.call<User | ApiError>('get_user', { id: userId }).then(result => {
       // Result<T, E> becomes T | E union type
       if ('code' in result) {
         setError(result.message);  // ApiError
@@ -975,7 +981,7 @@ function SSGSection() {
       <CodeBlock
         lang="typescript"
         filename="routes/blog/[slug].tsx"
-        code={`import { rpcCall } from '../../src/generated/rpc-client';
+        code={`import { rpc } from '@zap-js/server';
 
 interface ListPostsResponse {
   posts: Array<{ slug: string }>;
@@ -983,7 +989,7 @@ interface ListPostsResponse {
 
 // Called at build time to generate static pages
 export async function generateStaticParams(): Promise<Array<{ slug: string }>> {
-  const response = await rpcCall<ListPostsResponse>('list_posts', {
+  const response = await rpc.call<ListPostsResponse>('list_posts', {
     page: 1,
     limit: 100,
     tag: null,

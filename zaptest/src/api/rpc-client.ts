@@ -1,50 +1,18 @@
 /**
  * RPC Client for ZapJS Server Functions
- * Auto-generated - DO NOT EDIT MANUALLY
+ * Uses IPC for ultra-fast communication (< 1ms latency)
  */
 
-const IPC_ENDPOINT = 'http://127.0.0.1:3000/__zap_rpc';
-
-interface RpcRequest {
-  method: string;
-  params: Record<string, unknown>;
-}
-
-interface RpcResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-}
+import { rpc } from '@zap-js/server';
 
 /**
- * Make an RPC call to a Rust server function
+ * Make an RPC call to a Rust server function via IPC
  */
 export async function rpcCall<T>(
   method: string,
   params: Record<string, unknown> = {}
 ): Promise<T> {
-  const request: RpcRequest = { method, params };
-
-  const response = await fetch(IPC_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`RPC call failed: ${error}`);
-  }
-
-  const result: RpcResponse<T> = await response.json();
-
-  if (!result.success) {
-    throw new Error(result.error || 'Unknown RPC error');
-  }
-
-  return result.data as T;
+  return await rpc.call<T>(method, params);
 }
 
 /**

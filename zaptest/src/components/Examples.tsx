@@ -43,10 +43,11 @@ const examples: ApiExample[] = [
     category: 'simple',
     icon: Activity,
     curl: 'curl http://localhost:3000/api/stats',
-    codeSnippet: `import { server, StatsResponse, ApiError } from './generated/server';
+    codeSnippet: `import { rpc } from '@zap-js/server';
+import type { StatsResponse, ApiError } from './generated/types';
 
 // Type-safe RPC call with union return type
-const result = await server.default.getStats();
+const result = await rpc.call<StatsResponse | ApiError>('get_stats', {});
 
 if ('error' in result) {
   // TypeScript knows: ApiError
@@ -67,9 +68,10 @@ if ('error' in result) {
     category: 'simple',
     icon: Zap,
     curl: 'curl http://localhost:3000/api/features',
-    codeSnippet: `import { server, FeaturesResponse, ApiError } from './generated/server';
+    codeSnippet: `import { rpc } from '@zap-js/server';
+import type { FeaturesResponse, ApiError } from './generated/types';
 
-const result = await server.default.getFeatures();
+const result = await rpc.call<FeaturesResponse | ApiError>('get_features', {});
 
 if ('error' in result) {
   handleError(result); // ApiError
@@ -92,9 +94,10 @@ if ('error' in result) {
     category: 'simple',
     icon: Activity,
     curl: 'curl http://localhost:3000/api/benchmarks',
-    codeSnippet: `import { server, BenchmarksResponse, ApiError } from './generated/server';
+    codeSnippet: `import { rpc } from '@zap-js/server';
+import type { BenchmarksResponse, ApiError } from './generated/types';
 
-const result = await server.default.getBenchmarks();
+const result = await rpc.call<BenchmarksResponse | ApiError>('get_benchmarks', {});
 
 if (!('error' in result)) {
   // BenchmarksResponse with nested types
@@ -116,17 +119,21 @@ if (!('error' in result)) {
     category: 'complex',
     icon: Users,
     curl: 'curl http://localhost:3000/api/users',
-    codeSnippet: `import { server, User, ListUsersResponse, ApiError } from './generated/server';
+    codeSnippet: `import { rpc } from '@zap-js/server';
+import type { User, ListUsersResponse, ApiError } from './generated/types';
 
 // List users with pagination
-const listResult = await server.default.listUsers({ limit: 10, offset: 0 });
+const listResult = await rpc.call<ListUsersResponse | ApiError>('list_users', {
+  limit: 10,
+  offset: 0
+});
 if (!('error' in listResult)) {
   listResult.users.forEach(u => console.log(u.name, u.email));
   console.log(\`Total: \${listResult.total}, hasMore: \${listResult.hasMore}\`);
 }
 
 // Create a new user
-const createResult = await server.default.createUser({
+const createResult = await rpc.call<User | ApiError>('create_user', {
   name: 'Alice',
   email: 'alice@example.com',
   role: 'admin'
@@ -144,10 +151,11 @@ if (!('error' in createResult)) {
     category: 'complex',
     icon: FileText,
     curl: 'curl "http://localhost:3000/api/posts?page=1&limit=5"',
-    codeSnippet: `import { server, ListPostsResponse, ApiError } from './generated/server';
+    codeSnippet: `import { rpc } from '@zap-js/server';
+import type { ListPostsResponse, ApiError } from './generated/types';
 
 // Paginated posts with optional filters
-const result = await server.default.listPosts({
+const result = await rpc.call<ListPostsResponse | ApiError>('list_posts', {
   page: 1,
   limit: 5,
   tag: 'rust',      // string | null
@@ -173,9 +181,10 @@ if (!('error' in result)) {
     icon: Mail,
     sampleBody: { email: 'user@example.com' },
     curl: 'curl -X POST http://localhost:3000/api/subscribe -H "Content-Type: application/json" -d \'{"email":"user@example.com"}\'',
-    codeSnippet: `import { server, SubscribeResponse, ApiError } from './generated/server';
+    codeSnippet: `import { rpc } from '@zap-js/server';
+import type { SubscribeResponse, ApiError } from './generated/types';
 
-const result = await server.default.subscribe({
+const result = await rpc.call<SubscribeResponse | ApiError>('subscribe', {
   email: 'user@example.com'
 });
 
@@ -205,9 +214,10 @@ if ('error' in result) {
     category: 'complex',
     icon: Radio,
     curl: 'curl "http://localhost:3000/api/echo?foo=bar"',
-    codeSnippet: `import { server, EchoResponse, ApiError } from './generated/server';
+    codeSnippet: `import { rpc } from '@zap-js/server';
+import type { EchoResponse, ApiError } from './generated/types';
 
-const result = await server.default.echoRequest({
+const result = await rpc.call<EchoResponse | ApiError>('echo_request', {
   method: 'GET',
   url: '/api/echo',
   query: { foo: 'bar', debug: 'true' },
@@ -301,11 +311,11 @@ ws.send(JSON.stringify({ type: 'ping' }));`,
     icon: Layers,
     curl: 'curl http://localhost:3000/api/ssg-info',
     codeSnippet: `// routes/blog/[slug].tsx - SSG with dynamic params
-import { rpcCall } from '../../src/generated/rpc-client';
+import { rpc } from '@zap-js/server';
 
 // Called at build time - generates all blog post pages
 export async function generateStaticParams() {
-  const response = await rpcCall('list_posts', {
+  const response = await rpc.call('list_posts', {
     page: 1, limit: 100, tag: null, author: null
   });
   return response.posts.map(post => ({
