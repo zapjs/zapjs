@@ -91,6 +91,7 @@ pub mod handler;
 pub mod ipc;
 pub mod metrics;
 pub mod proxy;
+pub mod registry;
 pub mod reliability;
 pub mod request;
 pub mod request_id;
@@ -127,6 +128,16 @@ pub use zap_core::{Method, StatusCode};
 
 // Re-export macros for #[zap::export] syntax
 pub use zap_macros::export;
+
+// Re-export registry function for building RPC dispatchers
+pub use registry::build_rpc_dispatcher;
+
+// Internal types for macro use - not part of public API
+#[doc(hidden)]
+pub mod __private {
+    pub use inventory;
+    pub use crate::registry::{ExportedFunction, FunctionWrapper};
+}
 
 #[cfg(test)]
 mod tests {

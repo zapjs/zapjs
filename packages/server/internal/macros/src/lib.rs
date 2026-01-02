@@ -39,12 +39,16 @@ pub fn export(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generate metadata emission code (for build script to collect)
     let metadata_emission = generate_metadata_emission(&metadata);
 
-    // Return the original function + wrapper + metadata
+    // Generate inventory registration
+    let registration = generate_registration(&metadata);
+
+    // Return the original function + wrapper + metadata + registration
     let original = &input;
     let output = quote! {
         #original
         #wrapper
         #metadata_emission
+        #registration
     };
 
     TokenStream::from(output)
@@ -251,6 +255,44 @@ fn generate_metadata_emission(metadata: &FunctionMetadata) -> proc_macro2::Token
         #[doc(hidden)]
         #[allow(non_upper_case_globals)]
         pub const #const_name: &str = #metadata_str;
+    }
+}
+
+/// Generate inventory registration code for runtime function registry
+fn generate_registration(metadata: &FunctionMetadata) -> proc_macro2::TokenStream {
+    let fn_name = &metadata.name;
+    let wrapper_name = format_ident!("__zap_wrapper_{}", fn_name);
+    let is_async = metadata.is_async;
+
+    if is_async {
+        quote! {
+            ::zap_server::__private::inventory::submit! {
+                ::zap_server::__private::ExportedFunction {
+                    name: #fn_name,
+                    is_async: true,
+                    wrapper: ::zap_server::__private::FunctionWrapper::Async(
+                        |params| {
+                            // Clone params to move into the async block
+                            // This is necessary because the closure signature requires 'static lifetime
+                            let params_owned = params.clone();
+                            ::std::boxed::Box::pin(async move {
+                                #wrapper_name(&params_owned).await
+                            })
+                        }
+                    ),
+                }
+            }
+        }
+    } else {
+        quote! {
+            ::zap_server::__private::inventory::submit! {
+                ::zap_server::__private::ExportedFunction {
+                    name: #fn_name,
+                    is_async: false,
+                    wrapper: ::zap_server::__private::FunctionWrapper::Sync(#wrapper_name),
+                }
+            }
+        }
     }
 }
 

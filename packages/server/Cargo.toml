@@ -49,6 +49,9 @@ hex = "0.4"
 # Phase 10.5: Reliability
 fastrand = "2.0"
 
+# RPC function registry
+inventory = "0.3"
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 

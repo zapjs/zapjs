@@ -656,11 +656,9 @@ impl Zap {
         use crate::rpc::RpcServerHandle;
 
         let dispatch_fn = config.rpc_dispatch.unwrap_or_else(|| {
-            // Default no-op dispatcher for when no handlers are registered
-            Arc::new(|function_name: String, _params: serde_json::Value| {
-                warn!("RPC call to '{}' but no handlers registered", function_name);
-                Err(format!("RPC function '{}' not implemented", function_name))
-            })
+            // Auto-build dispatcher from inventory-registered functions
+            use crate::registry::build_rpc_dispatcher;
+            build_rpc_dispatcher()
         });
 
         let rpc_server = RpcServerHandle::new(
