@@ -1,6 +1,6 @@
 {
   "name": "@zap-js/client",
-  "version": "0.1.6",
+  "version": "0.1.8",
   "description": "High-performance fullstack React framework - Client package",
   "homepage": "https://github.com/saint0x/zapjs",
   "repository": {
@@ -74,9 +74,9 @@
     "ws": "^8.16.0"
   },
   "optionalDependencies": {
-    "@zap-js/darwin-arm64": "0.1.6",
-    "@zap-js/darwin-x64": "0.1.6",
-    "@zap-js/linux-x64": "0.1.6"
+    "@zap-js/darwin-arm64": "0.1.8",
+    "@zap-js/darwin-x64": "0.1.8",
+    "@zap-js/linux-x64": "0.1.8"
   },
   "peerDependencies": {
     "react": "^18.0.0",

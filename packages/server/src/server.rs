@@ -652,20 +652,26 @@ impl Zap {
             );
         }
 
-        // Start RPC server if dispatch function provided
-        if let Some(dispatch_fn) = config.rpc_dispatch {
-            use crate::rpc::RpcServerHandle;
+        // Always start RPC server for bidirectional TS↔Rust communication
+        use crate::rpc::RpcServerHandle;
 
-            let rpc_server = RpcServerHandle::new(
-                config.ipc_socket_path.clone(),
-                dispatch_fn,
-            );
+        let dispatch_fn = config.rpc_dispatch.unwrap_or_else(|| {
+            // Default no-op dispatcher for when no handlers are registered
+            Arc::new(|function_name: String, _params: serde_json::Value| {
+                warn!("RPC call to '{}' but no handlers registered", function_name);
+                Err(format!("RPC function '{}' not implemented", function_name))
+            })
+        });
 
-            rpc_server.start().await
-                .map_err(|e| ZapError::config(format!("Failed to start RPC server: {}", e)))?;
+        let rpc_server = RpcServerHandle::new(
+            config.ipc_socket_path.clone(),
+            dispatch_fn,
+        );
 
-            info!("✅ RPC server started on {}.rpc", config.ipc_socket_path);
-        }
+        rpc_server.start().await
+            .map_err(|e| ZapError::config(format!("Failed to start RPC server: {}", e)))?;
+
+        info!("✅ RPC server started on {}.rpc", config.ipc_socket_path);
 
         // Add health check
         if !config.health_check_path.is_empty() {
