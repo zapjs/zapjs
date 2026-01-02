@@ -1,6 +1,6 @@
 {
   "name": "@zap-js/darwin-arm64",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "description": "ZapJS native binaries for macOS ARM64 (Apple Silicon)",
   "os": ["darwin"],
   "cpu": ["arm64"],

@@ -1,6 +1,6 @@
 {
   "name": "@zap-js/darwin-x64",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "description": "ZapJS native binaries for macOS x64 (Intel)",
   "os": ["darwin"],
   "cpu": ["x64"],

@@ -1,6 +1,6 @@
 {
   "name": "@zap-js/linux-x64",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "description": "ZapJS native binaries for Linux x64",
   "os": ["linux"],
   "cpu": ["x64"],
