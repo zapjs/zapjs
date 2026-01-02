@@ -1,5 +1,5 @@
 //! # ZapServer
-//! 
+//!
 //! Ultra-fast HTTP server framework with Bun-inspired API
 //! 
 //! ## Features
@@ -83,6 +83,9 @@
 //!     Ok(server.listen().await?)
 //! }
 //! ```
+
+// Make `zap::` work as an alias for `zap_server::`
+extern crate self as zap;
 
 pub mod config;
 pub mod connection_pool;
