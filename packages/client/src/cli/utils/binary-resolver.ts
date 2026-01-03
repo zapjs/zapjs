@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
  * 3. Returns null to trigger cargo build fallback
  */
 export function resolveBinary(
-  binaryName: 'zap' | 'zap-codegen',
+  binaryName: 'zap' | 'zap-codegen' | 'splice',
   projectDir?: string
 ): string | null {
   const platform = process.platform;
@@ -83,4 +83,16 @@ export function isPlatformPackageInstalled(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Resolves the Splice binary using the same resolution strategy
+ *
+ * Resolution order:
+ * 1. Platform-specific npm package (@zap-js/darwin-arm64)
+ * 2. Local bin/ directory (user's project)
+ * 3. null (triggers cargo build fallback)
+ */
+export function resolveSpliceBinary(projectDir?: string): string | null {
+  return resolveBinary('splice', projectDir);
 }

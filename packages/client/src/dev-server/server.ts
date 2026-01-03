@@ -12,6 +12,9 @@ import { RouteScannerRunner } from './route-scanner.js';
 import { ProcessManager, IpcServer, ZapConfig, RouteConfig } from '../runtime/index.js';
 import { initRpcClient } from '../runtime/rpc-client.js';
 import { cliLogger } from '../cli/utils/logger.js';
+import { SpliceManager } from './splice-manager.js';
+import { hasUserServer, buildUserServer } from '../cli/utils/user-server.js';
+import { resolveSpliceBinary } from '../cli/utils/binary-resolver.js';
 
 // Register tsx loader for TypeScript imports
 // This must be called before any dynamic imports of .ts files
@@ -40,6 +43,8 @@ export interface DevServerConfig {
   binaryPath?: string;
   /** Path to pre-built zap-codegen binary */
   codegenBinaryPath?: string;
+  /** Path to pre-built splice binary */
+  spliceBinaryPath?: string;
 }
 
 interface ServerState {
@@ -101,6 +106,11 @@ export class DevServer extends EventEmitter {
   private socketPath: string = '';
   private currentRouteTree: RouteTree | null = null;
   private registeredHandlers: Map<string, string> = new Map(); // handlerId -> filePath
+
+  // Splice components for distributed Rust functions
+  private spliceManager: SpliceManager | null = null;
+  private splicePath: string = '';
+  private userServerBinaryPath: string | null = null;
 
   // Timing
   private startTime: number = 0;
@@ -256,6 +266,12 @@ export class DevServer extends EventEmitter {
       const routeTree = await this.scanRoutes();
       this.currentRouteTree = routeTree;
 
+      // Phase 2.75: Check for user server and start Splice if available
+      const hasServer = hasUserServer(this.config.projectDir);
+      if (hasServer) {
+        await this.startSplice();
+      }
+
       // Phase 3: Start Rust HTTP server with IPC
       await this.startRustServer(routeTree);
 
@@ -294,7 +310,13 @@ export class DevServer extends EventEmitter {
     cliLogger.newline();
     cliLogger.warn('Shutting down...');
 
-    // Kill Rust server first (most important)
+    // Stop Splice first
+    if (this.spliceManager) {
+      await this.spliceManager.stop();
+      this.spliceManager = null;
+    }
+
+    // Kill Rust server (most important)
     if (this.processManager) {
       this.processManager.stop();
       this.processManager = null;
@@ -598,7 +620,7 @@ export class DevServer extends EventEmitter {
    * Build Rust server configuration from routes
    */
   private buildRustConfig(routes: RouteConfig[]): ZapConfig {
-    return {
+    const config: ZapConfig = {
       port: this.config.rustPort!,
       hostname: '127.0.0.1',
       ipc_socket_path: this.socketPath,
@@ -612,6 +634,66 @@ export class DevServer extends EventEmitter {
       health_check_path: '/health',
       metrics_path: '/metrics',
     };
+
+    // Add Splice socket if available
+    if (this.splicePath && this.spliceManager?.isRunning()) {
+      config.splice_socket_path = this.splicePath;
+    }
+
+    return config;
+  }
+
+  /**
+   * Start Splice supervisor for distributed Rust functions
+   */
+  private async startSplice(): Promise<void> {
+    cliLogger.spinner('splice', 'Starting Splice supervisor...');
+
+    try {
+      // 1. Resolve Splice binary
+      const spliceBinaryPath =
+        this.config.spliceBinaryPath ||
+        resolveSpliceBinary(this.config.projectDir);
+
+      if (!spliceBinaryPath) {
+        cliLogger.warn('Splice binary not found (skipping distributed functions)');
+        return;
+      }
+
+      // 2. Build user server
+      const userServerPath = await buildUserServer(this.config.projectDir);
+
+      if (!userServerPath) {
+        cliLogger.warn('User server build failed (skipping Splice)');
+        return;
+      }
+
+      this.userServerBinaryPath = userServerPath;
+
+      // 3. Generate socket path for Splice
+      this.splicePath = path.join(
+        tmpdir(),
+        `splice-dev-${Date.now()}-${Math.random().toString(36).substring(7)}.sock`
+      );
+
+      // 4. Create and start Splice manager
+      this.spliceManager = new SpliceManager({
+        spliceBinaryPath,
+        workerBinaryPath: userServerPath,
+        socketPath: this.splicePath,
+        maxConcurrency: 1024,
+        timeout: 30,
+        watchPaths: [path.join(this.config.projectDir, 'server')],
+      });
+
+      await this.spliceManager.start();
+      cliLogger.succeedSpinner('splice', `Splice ready on ${this.splicePath}`);
+    } catch (err) {
+      cliLogger.failSpinner('splice', 'Failed to start Splice');
+      const message = err instanceof Error ? err.message : String(err);
+      this.log('error', `Splice error: ${message}`);
+      // Don't throw - continue without Splice
+    }
   }
 
   /**

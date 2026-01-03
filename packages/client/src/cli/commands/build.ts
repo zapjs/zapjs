@@ -2,8 +2,9 @@ import { execSync } from 'child_process';
 import { join, resolve } from 'path';
 import { existsSync, mkdirSync, copyFileSync, readdirSync, statSync, rmSync, writeFileSync } from 'fs';
 import { cliLogger } from '../utils/logger.js';
-import { resolveBinary, getPlatformIdentifier } from '../utils/binary-resolver.js';
+import { resolveBinary, getPlatformIdentifier, resolveSpliceBinary } from '../utils/binary-resolver.js';
 import { validateBuildStructure } from '../utils/build-validator.js';
+import { buildUserServerRelease } from '../utils/user-server.js';
 
 export interface BuildOptions {
   release?: boolean;
@@ -91,6 +92,9 @@ export async function buildCommand(options: BuildOptions): Promise<void> {
     // This happens AFTER frontend build so Vite doesn't overwrite it
     mkdirSync(join(outputDir, 'bin'), { recursive: true });
     await buildRust(outputDir, options);
+
+    // Step 4.5: Build user server and copy Splice binary (if available)
+    await buildUserServerAndSplice(outputDir);
 
     // Step 5: Create production config
     await createProductionConfig(outputDir, staticDir);
@@ -511,5 +515,39 @@ function getBinarySize(path: string): string {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   } catch {
     return 'unknown';
+  }
+}
+
+/**
+ * Build user's Rust server and copy Splice binary to dist/bin/
+ */
+async function buildUserServerAndSplice(outputDir: string): Promise<void> {
+  const projectDir = process.cwd();
+
+  // 1. Try to resolve pre-built Splice binary
+  const spliceBinary = resolveSpliceBinary(projectDir);
+
+  if (spliceBinary && existsSync(spliceBinary)) {
+    cliLogger.spinner('splice', 'Copying Splice binary...');
+
+    try {
+      const destBinary = join(outputDir, 'bin', 'splice');
+      copyFileSync(spliceBinary, destBinary);
+      execSync(`chmod +x "${destBinary}"`, { stdio: 'pipe' });
+
+      cliLogger.succeedSpinner('splice', 'Splice binary copied');
+    } catch (error) {
+      cliLogger.warn('Failed to copy Splice binary');
+    }
+  } else {
+    cliLogger.info('Splice binary not found (skipping)');
+  }
+
+  // 2. Build user server if it exists
+  const success = await buildUserServerRelease(projectDir, outputDir);
+
+  if (!success) {
+    // Warning already logged by buildUserServerRelease
+    return;
   }
 }

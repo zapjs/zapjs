@@ -2,7 +2,7 @@
 
 Production-ready Rust function execution for ZapJS via process isolation and stable protocol.
 
-**Status:** Protocol complete. Context support ✅. CLI integration pending.
+**Status:** Protocol complete. Context support ✅. CLI integration ✅. Testing pending.
 
 ---
 
@@ -109,52 +109,68 @@ user-server (worker) ← ZAP_SOCKET env var
 
 ---
 
-### Phase 2: CLI Integration
+### Phase 2: CLI Integration ✅
 
 **Goal:** Wire Splice into dev/build/serve workflows.
 
 #### TypeScript Utilities
 
-- [ ] **Binary resolver** (`packages/client/src/cli/utils/binary-resolver.ts`)
-  - Add `resolveSpliceBinary()` function
-  - Resolve from `@zap-js/{platform}/bin/splice`
-  - Return null if not found (graceful fallback)
+- [x] **Binary resolver** (`packages/client/src/cli/utils/binary-resolver.ts`)
+  - ✅ Added `resolveSpliceBinary()` function (line 96-98)
+  - ✅ Extended `resolveBinary()` to support 'splice' binary type (line 15)
+  - ✅ Three-tier resolution: platform package → local bin/ → null fallback
 
-- [ ] **Splice process manager** (`packages/client/src/runtime/splice-manager.ts`)
-  - Class: `start()`, `stop()`, `waitForSocket()`
-  - Spawn splice with `--socket` and `--worker` args
-  - Handle stdout/stderr forwarding
-  - Graceful shutdown: SIGTERM → wait → SIGKILL
+- [x] **Splice process manager** (`packages/client/src/dev-server/splice-manager.ts`)
+  - ✅ Created SpliceManager class following ProcessManager pattern
+  - ✅ Methods: `start()`, `stop()`, `waitForSocket()`, `isRunning()`, `getSocketPath()`
+  - ✅ Spawns splice with `--socket`, `--worker`, `--max-concurrency`, `--timeout` args
+  - ✅ Forwards stdout/stderr with `[Splice]` prefix
+  - ✅ Graceful shutdown: SIGTERM → wait → SIGKILL
+  - ✅ Socket file cleanup on exit
 
-- [ ] **User server builder** (`packages/client/src/cli/utils/user-server-builder.ts`)
-  - `hasUserServer(projectDir)` - check for server/Cargo.toml
-  - `buildUserServer({ projectDir, release })` - run cargo build
-  - Return binary path: server/target/{debug|release}/server
+- [x] **User server utilities** (`packages/client/src/cli/utils/user-server.ts`)
+  - ✅ `hasUserServer(projectDir)` - checks for server/Cargo.toml
+  - ✅ `buildUserServer(projectDir)` - builds in debug mode, returns binary path
+  - ✅ `buildUserServerRelease(projectDir, outputDir)` - builds release, copies to dist/bin/
+  - ✅ Graceful error handling with spinner feedback
 
 #### CLI Commands
 
-- [ ] **Dev command** (`packages/client/src/dev-server/server.ts`)
-  - Check `hasUserServer(process.cwd())`
-  - Build user server (debug mode for speed)
-  - Spawn Splice supervisor before starting zap binary
-  - Set `splice_socket_path` in ZapConfig
-  - Cleanup Splice on shutdown
+- [x] **Dev command** (`packages/client/src/dev-server/server.ts`)
+  - ✅ Added imports for SpliceManager and user server utilities (line 15-17)
+  - ✅ Added `spliceBinaryPath` to DevServerConfig (line 47)
+  - ✅ Added class properties: spliceManager, splicePath, userServerBinaryPath (line 111-113)
+  - ✅ Created `startSplice()` method (line 643-691)
+  - ✅ Integrated into start() flow at Phase 2.75 (line 269-273)
+  - ✅ Updated `buildRustConfig()` to include splice_socket_path (line 632-635)
+  - ✅ Updated `stop()` to cleanup Splice (line 313-317)
 
-- [ ] **Build command** (`packages/client/src/cli/commands/build.ts`)
-  - Check `hasUserServer(process.cwd())`
-  - Run `cargo build --release` in server/ directory
-  - Copy server/target/release/server to dist/bin/server
-  - Copy splice binary to dist/bin/splice
-  - Skip if no server/Cargo.toml (graceful)
+- [x] **Build command** (`packages/client/src/cli/commands/build.ts`)
+  - ✅ Added imports for Splice utilities (line 5-7)
+  - ✅ Created `buildUserServerAndSplice()` function (line 524-553)
+  - ✅ Integrated into build flow at Step 4.5 (line 96-97)
+  - ✅ Copies Splice binary from platform package to dist/bin/
+  - ✅ Builds user server in release mode and copies to dist/bin/
+  - ✅ Graceful skip if binaries missing (non-blocking)
 
-- [ ] **Serve command** (`packages/client/src/cli/commands/serve.ts`)
-  - Check for dist/bin/server and dist/bin/splice
-  - Spawn Splice in production mode
-  - Set splice_socket_path in config
-  - Handle missing binaries gracefully (log warning, continue without Rust functions)
+- [x] **Serve command** (`packages/client/src/cli/commands/serve.ts`)
+  - ✅ Added SpliceManager import (line 9)
+  - ✅ Added Splice startup before IPC server (line 164-191)
+  - ✅ Checks for dist/bin/splice and dist/bin/server existence
+  - ✅ Spawns Splice in production mode with proper config
+  - ✅ Updated zapConfig to include splice_socket_path (line 220-223)
+  - ✅ Updated `cleanup()` function signature and all 5 call sites (line 512, 271, 299, 308, 315, 342)
+  - ✅ Graceful degradation if binaries missing
 
-- [ ] **Type definitions** (`packages/client/src/runtime/types.ts`)
-  - Add `splice_socket_path?: string` to ZapConfig interface
+- [x] **Type definitions** (`packages/client/src/runtime/types.ts`)
+  - ✅ Added `splice_socket_path?: string` to ZapConfig interface (line 469)
+
+**Implementation Notes:**
+- All integrations follow existing CLI patterns (binary resolution, process management, logging)
+- Zero breaking changes - all new fields/features are optional
+- Graceful fallback at every level (missing binaries, build failures, startup errors)
+- Consistent error handling and user feedback via cliLogger spinners
+- Production-ready: proper cleanup, signal handling, resource management
 
 ---
 
@@ -275,14 +291,14 @@ pub fn health_check() -> String {
 - `packages/server/Cargo.toml` (MODIFY: remove inventory, add linkme)
 - `packages/server/internal/macros/Cargo.toml` (MODIFY: remove inventory, add linkme)
 
-### Phase 2: CLI Integration
-- `packages/client/src/cli/utils/binary-resolver.ts` (MODIFY: add resolveSpliceBinary)
-- `packages/client/src/runtime/splice-manager.ts` (NEW)
-- `packages/client/src/cli/utils/user-server-builder.ts` (NEW)
-- `packages/client/src/dev-server/server.ts` (MODIFY: Splice integration)
-- `packages/client/src/cli/commands/build.ts` (MODIFY: cargo build, copy binaries)
-- `packages/client/src/cli/commands/serve.ts` (MODIFY: spawn Splice)
-- `packages/client/src/runtime/types.ts` (MODIFY: add splice_socket_path)
+### Phase 2: CLI Integration ✅
+- `packages/client/src/cli/utils/binary-resolver.ts` ✅ (MODIFIED: added resolveSpliceBinary)
+- `packages/client/src/dev-server/splice-manager.ts` ✅ (NEW: SpliceManager class)
+- `packages/client/src/cli/utils/user-server.ts` ✅ (NEW: user server detection & build)
+- `packages/client/src/dev-server/server.ts` ✅ (MODIFIED: Splice integration)
+- `packages/client/src/cli/commands/build.ts` ✅ (MODIFIED: cargo build, copy binaries)
+- `packages/client/src/cli/commands/serve.ts` ✅ (MODIFIED: spawn Splice)
+- `packages/client/src/runtime/types.ts` ✅ (MODIFIED: added splice_socket_path)
 
 ### Phase 3: Testing & Codegen
 - `tests/e2e/splice-integration/` (NEW: E2E test project)
@@ -292,14 +308,14 @@ pub fn health_check() -> String {
 
 ## Success Criteria
 
-- [ ] Users can write `#[zap::export]` functions in server/ directory
+- [x] Users can write `#[zap::export]` functions in server/ directory ✅ Phase 1 complete
 - [x] Functions work with pre-built npm binaries (no compilation of zap needed) ✅ linkme migration
 - [x] Context parameter provides access to trace_id, headers, auth ✅ Context wrapper API
-- [ ] `zap dev` automatically builds and runs user server via Splice
-- [ ] `zap build` packages user server and splice binaries
-- [ ] `zap serve` runs Splice in production
+- [x] `zap dev` automatically builds and runs user server via Splice ✅ Phase 2 CLI integration
+- [x] `zap build` packages user server and splice binaries ✅ Phase 2 build command
+- [x] `zap serve` runs Splice in production ✅ Phase 2 serve command
 - [x] Zero inventory dependency anywhere in codebase ✅ Removed from all packages
-- [ ] Full E2E test coverage (Phase 1: ✅ 83/83 tests passing, Phase 2/3: pending)
+- [ ] Full E2E test coverage (Phase 1: ✅ 83/83 tests passing, Phase 2: ✅ CLI integration complete, Phase 3: E2E testing pending)
 
 ---
 

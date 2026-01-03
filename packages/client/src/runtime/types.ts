@@ -465,6 +465,8 @@ export interface ZapConfig {
   security?: SecurityConfig;
   /** Observability configuration */
   observability?: ObservabilityConfig;
+  /** Splice socket path for distributed Rust functions (optional) */
+  splice_socket_path?: string;
 }
 
 // ============================================================================

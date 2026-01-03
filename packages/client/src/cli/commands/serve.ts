@@ -6,6 +6,7 @@ import { pathToFileURL } from 'url';
 import { findAvailablePort } from '../utils/port-finder.js';
 import { IpcServer, ProcessManager, ZapConfig, RouteConfig } from '../../runtime/index.js';
 import { cliLogger } from '../utils/logger.js';
+import { SpliceManager } from '../../dev-server/splice-manager.js';
 
 export interface ServeOptions {
   port?: string;
@@ -160,6 +161,35 @@ async function runProductionServer(
   // Generate unique socket path
   const socketPath = join(tmpdir(), `zap-prod-${Date.now()}-${Math.random().toString(36).substring(7)}.sock`);
 
+  // Check for Splice and user server binaries
+  let spliceManager: SpliceManager | null = null;
+  const spliceBinPath = join(workDir, 'bin', 'splice');
+  const userServerBinPath = join(workDir, 'bin', 'server');
+
+  if (existsSync(spliceBinPath) && existsSync(userServerBinPath)) {
+    cliLogger.spinner('splice-prod', 'Starting Splice...');
+
+    const spliceSocketPath = join(tmpdir(), `splice-prod-${Date.now()}.sock`);
+
+    spliceManager = new SpliceManager({
+      spliceBinaryPath: spliceBinPath,
+      workerBinaryPath: userServerBinPath,
+      socketPath: spliceSocketPath,
+      maxConcurrency: 1024,
+      timeout: 30,
+    });
+
+    try {
+      await spliceManager.start();
+      cliLogger.succeedSpinner('splice-prod', 'Splice started');
+    } catch (err) {
+      cliLogger.failSpinner('splice-prod', 'Splice failed to start');
+      const message = err instanceof Error ? err.message : String(err);
+      cliLogger.warn(`Continuing without Splice: ${message}`);
+      spliceManager = null;
+    }
+  }
+
   // Start IPC server for TypeScript handlers
   cliLogger.spinner('ipc', 'Starting IPC server...');
   const ipcServer = new IpcServer(socketPath);
@@ -186,6 +216,11 @@ async function runProductionServer(
     },
     health_check_path: '/health',
   };
+
+  // Add Splice socket if available
+  if (spliceManager && spliceManager.isRunning()) {
+    zapConfig.splice_socket_path = spliceManager.getSocketPath();
+  }
 
   // Also check for static directory in workDir
   const staticDir = join(workDir, 'static');
@@ -233,7 +268,7 @@ async function runProductionServer(
     cliLogger.failSpinner('rpc', 'Failed to connect RPC client');
     const message = err instanceof Error ? err.message : String(err);
     cliLogger.error(message);
-    cleanup(ipcServer, tempConfigPath);
+    cleanup(ipcServer, tempConfigPath, spliceManager);
     if (!rustProcess.killed) {
       rustProcess.kill();
     }
@@ -261,7 +296,7 @@ async function runProductionServer(
       if (output.includes('error') || output.includes('Error')) {
         cliLogger.failSpinner('rust', 'Server failed to start');
         cliLogger.error(output);
-        cleanup(ipcServer, tempConfigPath);
+        cleanup(ipcServer, tempConfigPath, spliceManager);
         process.exit(1);
       }
     }
@@ -270,14 +305,14 @@ async function runProductionServer(
 
   rustProcess.on('error', (err: Error) => {
     cliLogger.failSpinner('rust', `Failed to start: ${err.message}`);
-    cleanup(ipcServer, tempConfigPath);
+    cleanup(ipcServer, tempConfigPath, spliceManager);
     process.exit(1);
   });
 
   rustProcess.on('exit', (code: number | null) => {
     if (code !== 0 && code !== null) {
       cliLogger.error(`Server exited with code ${code}`);
-      cleanup(ipcServer, tempConfigPath);
+      cleanup(ipcServer, tempConfigPath, spliceManager);
       process.exit(code);
     }
   });
@@ -304,7 +339,7 @@ async function runProductionServer(
     await ipcServer.stop();
 
     // Cleanup temp config
-    cleanup(null, tempConfigPath);
+    cleanup(null, tempConfigPath, spliceManager);
 
     // Force kill after timeout
     setTimeout(() => {
@@ -474,7 +509,15 @@ function formatHandlerResponse(result: unknown): { status: number; headers: Reco
 /**
  * Cleanup temp files
  */
-function cleanup(ipcServer: IpcServer | null, configPath: string): void {
+function cleanup(ipcServer: IpcServer | null, configPath: string, spliceManager?: SpliceManager | null): void {
+  if (spliceManager) {
+    try {
+      spliceManager.stop();
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+
   if (ipcServer) {
     try {
       ipcServer.stop();
