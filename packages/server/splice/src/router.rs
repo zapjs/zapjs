@@ -21,6 +21,9 @@ pub enum RouterError {
 
     #[error("Worker not available")]
     WorkerUnavailable,
+
+    #[error("Execution error: {0}")]
+    ExecutionError(String),
 }
 
 #[derive(Debug, Clone)]
@@ -175,8 +178,8 @@ impl Router {
                 self.cleanup_request(request_id).await;
                 match msg {
                     Message::InvokeResult { result, .. } => Ok(result),
-                    Message::InvokeError { .. } => {
-                        Err(RouterError::Cancelled) // Simplified for now
+                    Message::InvokeError { message, .. } => {
+                        Err(RouterError::ExecutionError(message))
                     }
                     _ => Err(RouterError::WorkerUnavailable),
                 }

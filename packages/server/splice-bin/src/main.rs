@@ -54,8 +54,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let supervisor_config = SupervisorConfig::default();
     let router_config = RouterConfig {
         max_concurrent_requests: cli.max_concurrency,
+        max_concurrent_per_function: 256, // Increased to handle test load
         default_timeout: Duration::from_secs(cli.timeout),
-        ..Default::default()
     };
 
     let worker_socket = cli.socket.parent()
@@ -68,7 +68,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         worker_socket.clone(),
     );
 
-    let router = Arc::new(Router::new(router_config));
+    // Create router and wire up worker channel BEFORE wrapping in Arc
+    let mut router = Router::new(router_config);
+    let (supervisor_tx, mut supervisor_rx) = mpsc::channel::<Message>(100);
+    router.set_worker_tx(supervisor_tx);
+    let router = Arc::new(router);
     let metrics = Metrics::new();
     let mut reload_manager = ReloadManager::new(cli.worker.clone());
 
@@ -132,6 +136,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("Received {} exports from worker", exports.len());
         router.update_exports(exports).await;
     }
+
+    // Split worker_framed into separate read/write halves
+    let (mut worker_write, mut worker_read) = worker_framed.split();
+
+    // Task 1: Supervisor→Worker bridge (mpsc → worker socket)
+    tokio::spawn(async move {
+        while let Some(msg) = supervisor_rx.recv().await {
+            if let Err(e) = worker_write.send(msg).await {
+                error!("Failed to send message to worker: {}", e);
+                break;
+            }
+        }
+        warn!("Supervisor→Worker bridge terminated");
+    });
+
+    // Task 2: Worker→Supervisor bridge (worker socket → Router)
+    let router_for_worker = Arc::clone(&router);
+    tokio::spawn(async move {
+        while let Some(result) = worker_read.next().await {
+            match result {
+                Ok(msg) => {
+                    router_for_worker.handle_worker_message(msg).await;
+                }
+                Err(e) => {
+                    error!("Worker frame decode error: {}", e);
+                    break;
+                }
+            }
+        }
+        warn!("Worker→Supervisor bridge terminated");
+    });
 
     // Create host listener socket
     if cli.socket.exists() {
@@ -197,6 +232,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             splice::router::RouterError::Overloaded => (splice::protocol::ERR_OVERLOADED, splice::protocol::ErrorKind::System, "System overloaded".to_string()),
                                                             splice::router::RouterError::Cancelled => (splice::protocol::ERR_CANCELLED, splice::protocol::ErrorKind::System, "Request cancelled".to_string()),
                                                             splice::router::RouterError::WorkerUnavailable => (2004, splice::protocol::ErrorKind::System, "Worker not available".to_string()),
+                                                            splice::router::RouterError::ExecutionError(msg) => (2000, splice::protocol::ErrorKind::User, msg),
                                                         };
                                                         let _ = host_framed.send(Message::InvokeError {
                                                             request_id,
