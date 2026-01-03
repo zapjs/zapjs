@@ -6,7 +6,7 @@ edition = "2021"
 [lib]
 name = "test_server"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["rlib"]
 
 [[bin]]
 name = "test-server"

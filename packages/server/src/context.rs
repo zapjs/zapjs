@@ -3,7 +3,7 @@
 //! This module provides the `Context` type that gives user-exported functions
 //! access to request metadata like trace IDs, headers, and authentication information.
 
-use crate::splice_worker::{RequestContext, AuthContext};
+use splice::protocol::{RequestContext, AuthContext};
 
 /// Request execution context available to exported functions
 ///

@@ -127,7 +127,7 @@ pub fn build_rpc_dispatcher() -> crate::rpc::RpcDispatchFn {
     info!("RPC registry: {} functions registered", registry.len());
 
     // Return dispatcher closure with context support
-    Arc::new(move |function_name: String, params: Value, context_data: Option<crate::splice_worker::RequestContext>| {
+    Arc::new(move |function_name: String, params: Value, context_data: Option<splice::protocol::RequestContext>| {
         // Convert params to HashMap for wrapper functions
         let params_map: HashMap<String, Value> = match params {
             Value::Object(map) => map.into_iter().collect(),

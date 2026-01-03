@@ -15,7 +15,7 @@ use crate::error::{ZapError, ZapResult};
 /// Takes (function_name, params, context) and returns Result<data, error_message>
 /// Using serde_json::Value for maximum flexibility
 /// The optional RequestContext provides trace IDs, headers, and auth information
-pub type RpcDispatchFn = Arc<dyn Fn(String, serde_json::Value, Option<crate::splice_worker::RequestContext>) -> Result<serde_json::Value, String> + Send + Sync>;
+pub type RpcDispatchFn = Arc<dyn Fn(String, serde_json::Value, Option<splice::protocol::RequestContext>) -> Result<serde_json::Value, String> + Send + Sync>;
 
 /// Complete Zap server configuration
 #[derive(Clone, Serialize, Deserialize)]

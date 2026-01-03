@@ -139,6 +139,10 @@ pub use zap_macros::export;
 // Re-export registry function for building RPC dispatchers
 pub use registry::build_rpc_dispatcher;
 
+// Re-export Splice protocol types for user worker code
+pub use splice::protocol::{Message, Role, ExportMetadata, RequestContext, AuthContext};
+pub use splice_worker::run as splice_worker_run;
+
 // Internal types for macro use - not part of public API
 #[doc(hidden)]
 pub mod __private {

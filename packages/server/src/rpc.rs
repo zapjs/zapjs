@@ -54,7 +54,7 @@ use crate::error::{ZapError, ZapResult};
 /// Takes (function_name, params, context) and returns Result<data, error_message>
 /// Using serde_json::Value for maximum flexibility - users can deserialize in their dispatch
 /// The optional RequestContext provides trace IDs, headers, and auth information
-pub type RpcDispatchFn = Arc<dyn Fn(String, serde_json::Value, Option<crate::splice_worker::RequestContext>) -> Result<serde_json::Value, String> + Send + Sync + 'static>;
+pub type RpcDispatchFn = Arc<dyn Fn(String, serde_json::Value, Option<splice::protocol::RequestContext>) -> Result<serde_json::Value, String> + Send + Sync + 'static>;
 
 /// RPC call message from TypeScript
 #[derive(Debug, Clone, Serialize, Deserialize)]

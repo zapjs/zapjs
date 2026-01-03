@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UnixListener;
 use tokio::sync::mpsc;
@@ -67,9 +68,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         worker_socket.clone(),
     );
 
-    let router = Router::new(router_config);
+    let router = Arc::new(Router::new(router_config));
     let metrics = Metrics::new();
     let mut reload_manager = ReloadManager::new(cli.worker.clone());
+
+    // Create worker listener socket BEFORE starting worker
+    if worker_socket.exists() {
+        tokio::fs::remove_file(&worker_socket).await?;
+    }
+    let worker_listener = UnixListener::bind(&worker_socket)?;
+    info!("Worker socket listening on: {}", worker_socket.display());
+
+    // Start accepting connections in background
+    let accept_handle = tokio::spawn(async move {
+        worker_listener.accept().await
+    });
 
     // Start worker
     match supervisor.start().await {
@@ -82,15 +95,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Create worker listener socket
-    if worker_socket.exists() {
-        tokio::fs::remove_file(&worker_socket).await?;
-    }
-    let worker_listener = UnixListener::bind(&worker_socket)?;
-    info!("Worker socket listening on: {}", worker_socket.display());
-
-    // Accept worker connection
-    let (worker_stream, _) = worker_listener.accept().await?;
+    // Wait for worker connection
+    let (worker_stream, _) = accept_handle.await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))??;
     let mut worker_framed = Framed::new(worker_stream, SpliceCodec::default());
 
     // Worker handshake
@@ -158,13 +165,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 info!("Host handshake complete");
 
                                 // Handle host connection in separate task
+                                let exports_for_task = exports.clone();
+                                let router_for_task = Arc::clone(&router);
                                 tokio::spawn(async move {
-                                    // This is a simplified version - full implementation would handle
-                                    // all message types and route to worker
                                     while let Some(Ok(msg)) = host_framed.next().await {
                                         match msg {
                                             Message::ListExports => {
-                                                // Send exports back
+                                                info!("Host requested exports list");
+                                                let _ = host_framed.send(Message::ListExportsResult {
+                                                    exports: exports_for_task.clone(),
+                                                }).await;
+                                            }
+                                            Message::Invoke { request_id, function_name, params, deadline_ms, context } => {
+                                                info!("Host invoked: {}", function_name);
+                                                match router_for_task.invoke(
+                                                    function_name.clone(),
+                                                    params.clone(),
+                                                    deadline_ms,
+                                                    context,
+                                                ).await {
+                                                    Ok(result) => {
+                                                        let _ = host_framed.send(Message::InvokeResult {
+                                                            request_id,
+                                                            result,
+                                                            duration_us: 0,
+                                                        }).await;
+                                                    }
+                                                    Err(e) => {
+                                                        let (code, kind, message) = match e {
+                                                            splice::router::RouterError::Timeout => (splice::protocol::ERR_TIMEOUT, splice::protocol::ErrorKind::System, "Request timeout".to_string()),
+                                                            splice::router::RouterError::Overloaded => (splice::protocol::ERR_OVERLOADED, splice::protocol::ErrorKind::System, "System overloaded".to_string()),
+                                                            splice::router::RouterError::Cancelled => (splice::protocol::ERR_CANCELLED, splice::protocol::ErrorKind::System, "Request cancelled".to_string()),
+                                                            splice::router::RouterError::WorkerUnavailable => (2004, splice::protocol::ErrorKind::System, "Worker not available".to_string()),
+                                                        };
+                                                        let _ = host_framed.send(Message::InvokeError {
+                                                            request_id,
+                                                            code,
+                                                            kind,
+                                                            message,
+                                                            details: None,
+                                                        }).await;
+                                                    }
+                                                }
                                             }
                                             Message::Shutdown => {
                                                 let _ = host_framed.send(Message::ShutdownAck).await;

@@ -668,7 +668,7 @@ impl Zap {
 
             // Build dispatch function that forwards to Splice
             let splice_client = std::sync::Arc::new(tokio::sync::RwLock::new(splice_client));
-            std::sync::Arc::new(move |function_name: String, params: serde_json::Value, _context: Option<crate::splice_worker::RequestContext>| {
+            std::sync::Arc::new(move |function_name: String, params: serde_json::Value, _context: Option<splice::protocol::RequestContext>| {
                 let splice_client = splice_client.clone();
                 let function_name = function_name.clone();
                 let params = params.clone();

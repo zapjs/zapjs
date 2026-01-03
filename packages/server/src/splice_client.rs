@@ -10,7 +10,8 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{error, info, warn};
 use std::collections::HashMap;
 
-use crate::splice_worker::{SpliceMessage, ExportMetadata, RequestContext};
+// Import Splice protocol types from canonical source
+use splice::protocol::{Message, ExportMetadata, RequestContext, Role, SpliceCodec};
 
 pub struct SpliceClient {
     tx: mpsc::Sender<ClientRequest>,
@@ -34,16 +35,16 @@ impl SpliceClient {
         let stream = UnixStream::connect(&socket_path).await?;
 
         // Send handshake
-        Self::send_raw_message(&stream, SpliceMessage::Handshake {
+        Self::send_raw_message(&stream, Message::Handshake {
             protocol_version: 0x00010000,
-            role: 1, // Host
+            role: Role::Host,
             capabilities: 0b11, // Streaming + Cancellation
             max_frame_size: 100 * 1024 * 1024,
         }).await?;
 
         // Wait for handshake ack
         match Self::receive_raw_message(&stream).await? {
-            SpliceMessage::HandshakeAck { export_count, .. } => {
+            Message::HandshakeAck { export_count, .. } => {
                 info!("Handshake complete, {} exports available", export_count);
             }
             _ => {
@@ -52,10 +53,10 @@ impl SpliceClient {
         }
 
         // Request exports
-        Self::send_raw_message(&stream, SpliceMessage::ListExports).await?;
+        Self::send_raw_message(&stream, Message::ListExports).await?;
 
         let exports = match Self::receive_raw_message(&stream).await? {
-            SpliceMessage::ListExportsResult { exports } => {
+            Message::ListExportsResult { exports } => {
                 info!("Received {} exports", exports.len());
                 Arc::new(tokio::sync::RwLock::new(exports))
             }
@@ -120,7 +121,6 @@ impl SpliceClient {
         use futures::stream::StreamExt;
         use futures::sink::SinkExt;
         use tokio_util::codec::Framed;
-        use crate::splice_worker::SpliceCodec;
 
         let mut framed = Framed::new(stream, SpliceCodec::default());
         let mut pending_requests: HashMap<u64, oneshot::Sender<Result<serde_json::Value, String>>> =
@@ -145,7 +145,7 @@ impl SpliceClient {
                                 .map_err(|e| format!("Failed to serialize params: {}", e))?;
 
                             // Send invoke message
-                            let msg = SpliceMessage::Invoke {
+                            let msg = Message::Invoke {
                                 request_id,
                                 function_name,
                                 params: Bytes::from(params_bytes),
@@ -162,7 +162,7 @@ impl SpliceClient {
                             pending_requests.insert(request_id, response_tx);
                         }
                         ClientRequest::Shutdown => {
-                            framed.send(SpliceMessage::Shutdown).await.map_err(|e| e.to_string())?;
+                            framed.send(Message::Shutdown).await.map_err(|e| e.to_string())?;
                             break;
                         }
                     }
@@ -171,19 +171,19 @@ impl SpliceClient {
                 // Handle splice messages
                 result = framed.next() => {
                     match result {
-                        Some(Ok(SpliceMessage::InvokeResult { request_id, result, .. })) => {
+                        Some(Ok(Message::InvokeResult { request_id, result, .. })) => {
                             if let Some(response_tx) = pending_requests.remove(&request_id) {
                                 let result_json: serde_json::Value = rmp_serde::from_slice(&result)
                                     .unwrap_or_else(|_| serde_json::json!(null));
                                 let _ = response_tx.send(Ok(result_json));
                             }
                         }
-                        Some(Ok(SpliceMessage::InvokeError { request_id, message, .. })) => {
+                        Some(Ok(Message::InvokeError { request_id, message, .. })) => {
                             if let Some(response_tx) = pending_requests.remove(&request_id) {
                                 let _ = response_tx.send(Err(message));
                             }
                         }
-                        Some(Ok(SpliceMessage::ShutdownAck)) => {
+                        Some(Ok(Message::ShutdownAck)) => {
                             info!("Splice client shutdown acknowledged");
                             break;
                         }
@@ -206,9 +206,8 @@ impl SpliceClient {
 
     async fn send_raw_message(
         stream: &UnixStream,
-        msg: SpliceMessage,
+        msg: Message,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::splice_worker::SpliceCodec;
         use tokio_util::codec::Encoder;
         use bytes::BytesMut;
 
@@ -223,8 +222,7 @@ impl SpliceClient {
 
     async fn receive_raw_message(
         stream: &UnixStream,
-    ) -> Result<SpliceMessage, Box<dyn std::error::Error>> {
-        use crate::splice_worker::SpliceCodec;
+    ) -> Result<Message, Box<dyn std::error::Error>> {
         use tokio_util::codec::Decoder;
         use bytes::BytesMut;
 
