@@ -4,12 +4,18 @@
 //! access to request metadata like trace IDs, headers, and authentication information.
 
 use splice::protocol::{RequestContext, AuthContext};
+use tokio_util::sync::CancellationToken;
 
 /// Request execution context available to exported functions
 ///
 /// Provides access to request metadata like trace IDs, headers, and authentication.
 /// This is an optional parameter for exported functions - functions can choose to
 /// accept a `Context` parameter as their first argument to access request metadata.
+///
+/// # Cancellation Support
+///
+/// The context includes a cancellation token that allows long-running functions to
+/// cooperatively handle cancellation (e.g., due to timeout or client disconnect).
 ///
 /// # Example
 /// ```ignore
@@ -26,10 +32,24 @@ use splice::protocol::{RequestContext, AuthContext};
 ///
 ///     format!("Processed by {} (trace: {})", user, trace_id)
 /// }
+///
+/// #[export]
+/// pub async fn long_task(ctx: &Context, data: Vec<u64>) -> Result<u64, String> {
+///     let mut sum = 0;
+///     for (i, &n) in data.iter().enumerate() {
+///         // Check for cancellation periodically
+///         if i % 1000 == 0 && ctx.is_cancelled() {
+///             return Err("Request cancelled".to_string());
+///         }
+///         sum += n;
+///     }
+///     Ok(sum)
+/// }
 /// ```
 #[derive(Debug, Clone)]
 pub struct Context {
     inner: RequestContext,
+    cancellation_token: CancellationToken,
 }
 
 impl Context {
@@ -37,9 +57,25 @@ impl Context {
     ///
     /// This is an internal constructor used by the runtime to wrap
     /// the protocol-level RequestContext in the user-facing Context type.
+    /// Creates a fresh cancellation token.
     #[doc(hidden)]
     pub fn new(inner: RequestContext) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            cancellation_token: CancellationToken::new(),
+        }
+    }
+
+    /// Create context with a specific cancellation token
+    ///
+    /// This is used by the worker to create contexts with tokens that can be
+    /// triggered when Cancel messages are received.
+    #[doc(hidden)]
+    pub fn with_cancellation(inner: RequestContext, token: CancellationToken) -> Self {
+        Self {
+            inner,
+            cancellation_token: token,
+        }
     }
 
     /// Get the distributed trace ID for this request
@@ -128,5 +164,51 @@ impl Context {
         self.auth()
             .map(|a| a.roles.contains(&role.to_string()))
             .unwrap_or(false)
+    }
+
+    /// Check if this request has been cancelled
+    ///
+    /// Returns `true` if the request was cancelled (e.g., due to timeout or client disconnect).
+    /// Long-running functions should periodically check this and return early if cancelled.
+    ///
+    /// Cancellation is **cooperative** - functions must explicitly check and respond to it.
+    /// Functions that don't check will continue running even after cancellation.
+    ///
+    /// # Example
+    /// ```ignore
+    /// #[export]
+    /// pub async fn long_computation(ctx: &Context, data: Vec<u64>) -> Result<u64, String> {
+    ///     let mut sum = 0;
+    ///     for (i, chunk) in data.chunks(1000).enumerate() {
+    ///         // Check every 1000 items
+    ///         if ctx.is_cancelled() {
+    ///             return Err("Request cancelled".to_string());
+    ///         }
+    ///         sum += chunk.iter().sum::<u64>();
+    ///     }
+    ///     Ok(sum)
+    /// }
+    /// ```
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation_token.is_cancelled()
+    }
+
+    /// Get a future that completes when the request is cancelled
+    ///
+    /// This can be used with `tokio::select!` for automatic cancellation handling.
+    /// The returned future will complete when the cancellation token is triggered.
+    ///
+    /// # Example
+    /// ```ignore
+    /// #[export]
+    /// pub async fn interruptible_work(ctx: &Context) -> Result<String, String> {
+    ///     tokio::select! {
+    ///         result = expensive_database_query() => Ok(result),
+    ///         _ = ctx.cancelled() => Err("Request cancelled".to_string()),
+    ///     }
+    /// }
+    /// ```
+    pub async fn cancelled(&self) {
+        self.cancellation_token.cancelled().await
     }
 }

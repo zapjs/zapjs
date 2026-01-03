@@ -111,7 +111,7 @@ lazy_static::lazy_static! {
 /// // Use with RpcServerHandle::new()
 /// ```
 pub fn build_rpc_dispatcher() -> crate::rpc::RpcDispatchFn {
-    use tracing::{info, debug};
+    use tracing::{info, debug, error};
 
     let mut registry: HashMap<String, &'static ExportedFunction> = HashMap::new();
 
@@ -121,7 +121,18 @@ pub fn build_rpc_dispatcher() -> crate::rpc::RpcDispatchFn {
             "Registered RPC function: {} (async: {}, context: {})",
             func.name, func.is_async, func.has_context
         );
-        registry.insert(func.name.to_string(), func);
+
+        // Check for duplicate exports
+        if let Some(existing) = registry.insert(func.name.to_string(), func) {
+            error!("Duplicate RPC export detected: function '{}' is exported multiple times", func.name);
+            error!("  First export:     async={}, context={}", existing.is_async, existing.has_context);
+            error!("  Duplicate export: async={}, context={}", func.is_async, func.has_context);
+            panic!(
+                "Duplicate RPC export: '{}' is exported multiple times. \
+                 Each function name must be unique across all #[zap::export] declarations.",
+                func.name
+            );
+        }
     }
 
     info!("RPC registry: {} functions registered", registry.len());

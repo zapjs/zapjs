@@ -14,7 +14,7 @@ path = "src/lib.rs"
 [dependencies]
 zap-core = { path = "internal/core" }
 zap-macros = { path = "internal/macros" }
-splice = { path = "splice", optional = true }
+splice = { path = "splice" }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 futures = "0.3"
