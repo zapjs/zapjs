@@ -7,12 +7,13 @@ import { execSync } from 'child_process';
 describe('Splice Hot Reload E2E', () => {
   let harness: SpliceTestHarness;
   const port = 40000 + Math.floor(Math.random() * 10000);
+  let projectDir: string;
   let testServerDir: string;
   let libRsPath: string;
   let originalSource: string;
 
   beforeAll(async () => {
-    const projectDir = join(__dirname, '../..');
+    projectDir = join(__dirname, '../..');
     testServerDir = join(__dirname, 'test-server');
     libRsPath = join(testServerDir, 'src/lib.rs');
 
@@ -21,13 +22,14 @@ describe('Splice Hot Reload E2E', () => {
 
     // Initial build
     console.log('[Tests] Building test-server...');
-    execSync('cargo build', {
-      cwd: testServerDir,
+    execSync('cargo build -p test-server', {
+      cwd: projectDir,
       stdio: 'inherit',
     });
 
-    const workerBinary = join(testServerDir, 'target/debug/test-server');
     const platform = process.platform === 'darwin' ? 'darwin-arm64' : 'linux-x64';
+    const arch = process.platform === 'darwin' && process.arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-unknown-linux-gnu';
+    const workerBinary = join(projectDir, `target/${arch}/debug/test-server`);
     const spliceBinary = join(projectDir, `packages/platforms/${platform}/bin/splice`);
 
     harness = new SpliceTestHarness({

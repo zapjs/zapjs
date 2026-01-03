@@ -5,7 +5,8 @@ members = [
     "packages/server/internal/macros",
     "packages/server/internal/codegen",
     "packages/server/splice",
-    "packages/server/splice-bin"
+    "packages/server/splice-bin",
+    "tests/e2e-splice/test-server"
 ]
 resolver = "2"
 

@@ -13,7 +13,7 @@ name = "test-server"
 path = "src/main.rs"
 
 [dependencies]
-zap-server = { path = "../../../packages/server" }
+zap = { path = "../../../packages/server" }
 splice = { path = "../../../packages/server/splice" }
 tokio = { workspace = true, features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }

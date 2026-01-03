@@ -8,14 +8,15 @@ describe('Splice Crash Recovery', () => {
 
   beforeAll(async () => {
     const projectDir = join(__dirname, '../..');
-    const workerBinary = join(__dirname, 'test-server/target/debug/test-server');
     const platform = process.platform === 'darwin' ? 'darwin-arm64' : 'linux-x64';
+    const arch = process.platform === 'darwin' && process.arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-unknown-linux-gnu';
+    const workerBinary = join(projectDir, `target/${arch}/debug/test-server`);
     const spliceBinary = join(projectDir, `packages/platforms/${platform}/bin/splice`);
 
     console.log('[Tests] Building test-server...');
     const { execSync } = await import('child_process');
-    execSync('cargo build', {
-      cwd: join(__dirname, 'test-server'),
+    execSync('cargo build -p test-server', {
+      cwd: projectDir,
       stdio: 'inherit',
     });
 

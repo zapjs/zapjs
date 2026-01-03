@@ -16,7 +16,7 @@ pub fn add_numbers(a: i32, b: i32) -> i32 {
 
 // Test 3: Async function with Context
 #[export]
-pub async fn get_trace_info(ctx: Context) -> serde_json::Value {
+pub async fn get_trace_info(ctx: &Context) -> serde_json::Value {
     serde_json::json!({
         "trace_id": ctx.trace_id(),
         "span_id": ctx.span_id(),
@@ -25,7 +25,7 @@ pub async fn get_trace_info(ctx: Context) -> serde_json::Value {
 
 // Test 4: Function that reads headers
 #[export]
-pub fn echo_headers(ctx: Context) -> serde_json::Value {
+pub fn echo_headers(ctx: &Context) -> serde_json::Value {
     let headers: Vec<(String, String)> = ctx
         .headers()
         .iter()
@@ -37,7 +37,7 @@ pub fn echo_headers(ctx: Context) -> serde_json::Value {
 
 // Test 5: Function that checks auth context
 #[export]
-pub fn check_auth(ctx: Context) -> Result<serde_json::Value, String> {
+pub fn check_auth(ctx: &Context) -> Result<serde_json::Value, String> {
     let user_id = ctx.user_id().ok_or("Not authenticated")?;
 
     let is_admin = ctx.has_role("admin");

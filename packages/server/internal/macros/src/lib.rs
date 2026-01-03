@@ -77,10 +77,18 @@ fn validate_function(func: &ItemFn) -> Result<(), proc_macro::TokenStream> {
 
 /// Check if a type is Context (for Context parameter detection)
 fn is_context_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "Context";
+    // Handle both Context and &Context
+    match ty {
+        syn::Type::Path(type_path) => {
+            if let Some(segment) = type_path.path.segments.last() {
+                return segment.ident == "Context";
+            }
         }
+        syn::Type::Reference(type_ref) => {
+            // Recurse to check if the referenced type is Context
+            return is_context_type(&type_ref.elem);
+        }
+        _ => {}
     }
     false
 }
@@ -365,13 +373,14 @@ fn generate_registration(metadata: &FunctionMetadata) -> proc_macro2::TokenStrea
             }
         }
         (true, true) => {
-            // Async with context
+            // Async with context (clone context for 'static future)
             quote! {
                 ::zap_server::__private::FunctionWrapper::AsyncCtx(
                     |ctx, params| {
+                        let ctx_owned = ctx.clone();
                         let params_owned = params.clone();
                         ::std::boxed::Box::pin(async move {
-                            #wrapper_name(ctx, &params_owned).await
+                            #wrapper_name(&ctx_owned, &params_owned).await
                         })
                     }
                 )
