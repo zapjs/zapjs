@@ -92,7 +92,7 @@ No isolated router timing, IPC round-trip, isolated SSR proof or local synthetic
 
 The current Rust layer includes:
 
-- `zap-runtime`: compiled route parsing and lookup with unsafe URL path rejection.
+- `zap-runtime`: compiled route parsing and lookup with unsafe URL path rejection plus request id/auth/deadline policy admission.
 - `zap-splice`: bounded Rust worker transport with cancellation, deadlines, crash cleanup and subprocess coverage.
 - `zap-render`: Rust-owned QuickJS execution with Web Stream, route/action `Response` support and typed execution failures, explicit host calls, output limits and CPU interruption.
 - `zap-build`: Rust-only TSX bundling through Rolldown/Oxc for server IIFE and browser module outputs.
@@ -106,7 +106,7 @@ ZapJS is production-ready only after these gates are executable and recorded:
 1. real React HTML SSR and Flight run through the Rust-owned engine with cancellation, streaming and memory limits;
 2. the Rust graph emits matching server bundles, browser chunks, client references, action IDs and route manifests;
 3. hydration, client navigation, pending/error boundaries and React-wired server actions are verified in Aegis;
-4. application route handlers and server functions execute through the Rust-owned runtime with explicit body/input/context limits;
+4. application route handlers and server functions execute through the Rust-owned runtime with explicit body/input/context limits and application-specific authorization hooks;
 5. Splice adds tested streaming only if the framework needs a streaming worker boundary;
 6. native managed deployment artifacts are produced and verified on the target platform;
 7. development, build, test and deploy commands run through the Rust toolchain;

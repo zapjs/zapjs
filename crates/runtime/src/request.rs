@@ -67,6 +67,12 @@ pub enum RequestPlanError {
     BodyTooLarge,
     #[error("server action module is not executable")]
     ActionModule,
+    #[error("request context is missing required state")]
+    MissingContext,
+    #[error("request context is not authorized")]
+    Unauthorized,
+    #[error("request deadline exceeds configured limit")]
+    DeadlineTooLong,
 }
 
 const PAGE_METHODS: &[Method] = &[Method::GET, Method::HEAD];
@@ -99,6 +105,43 @@ pub struct ActionInput<'a> {
     pub origin: Option<&'a str>,
     pub expected_origin: Option<&'a str>,
     pub declared_body_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvocationContext<'a> {
+    pub request_id: Option<&'a str>,
+    pub authenticated: bool,
+    pub deadline_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionPolicy {
+    pub require_request_id: bool,
+    pub require_authenticated: bool,
+    pub max_deadline_ms: u64,
+}
+
+impl Default for ExecutionPolicy {
+    fn default() -> Self {
+        Self {
+            require_request_id: false,
+            require_authenticated: false,
+            max_deadline_ms: 30_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionContext {
+    pub request_id: Option<String>,
+    pub authenticated: bool,
+    pub deadline_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionPlan<T> {
+    pub target: T,
+    pub context: ExecutionContext,
 }
 
 pub fn admit_request_input<'a>(
@@ -144,6 +187,44 @@ pub fn admit_action_input<'a>(
             ImmediateResponse::new(StatusCode::PAYLOAD_TOO_LARGE),
         )),
         Err(error) => Err(error),
+    }
+}
+
+pub fn admit_request_execution<'a>(
+    manifest: &'a CompiledManifest,
+    input: &RequestInput<'_>,
+    limits: &AdmissionLimits,
+    context: &InvocationContext<'_>,
+    policy: &ExecutionPolicy,
+) -> Result<AdmissionOutcome<ExecutionPlan<RequestTarget<'a>>>, RequestPlanError> {
+    match admit_request_input(manifest, input, limits)? {
+        AdmissionOutcome::Dispatch(target) => match enforce_execution_context(context, policy) {
+            Ok(context) => Ok(AdmissionOutcome::Dispatch(ExecutionPlan {
+                target,
+                context,
+            })),
+            Err(error) => Ok(AdmissionOutcome::Respond(context_error_response(error)?)),
+        },
+        AdmissionOutcome::Respond(response) => Ok(AdmissionOutcome::Respond(response)),
+    }
+}
+
+pub fn admit_action_execution<'a>(
+    manifest: &'a CompiledManifest,
+    input: &ActionInput<'_>,
+    limits: &AdmissionLimits,
+    context: &InvocationContext<'_>,
+    policy: &ExecutionPolicy,
+) -> Result<AdmissionOutcome<ExecutionPlan<ActionAdmission<'a>>>, RequestPlanError> {
+    match admit_action_input(manifest, input, limits)? {
+        AdmissionOutcome::Dispatch(target) => match enforce_execution_context(context, policy) {
+            Ok(context) => Ok(AdmissionOutcome::Dispatch(ExecutionPlan {
+                target,
+                context,
+            })),
+            Err(error) => Ok(AdmissionOutcome::Respond(context_error_response(error)?)),
+        },
+        AdmissionOutcome::Respond(response) => Ok(AdmissionOutcome::Respond(response)),
     }
 }
 
@@ -251,6 +332,37 @@ pub fn plan_action<'a>(
     Ok(ActionAdmission {
         target: ActionTarget { action },
     })
+}
+
+fn enforce_execution_context(
+    context: &InvocationContext<'_>,
+    policy: &ExecutionPolicy,
+) -> Result<ExecutionContext, RequestPlanError> {
+    if policy.require_request_id && context.request_id.is_none_or(str::is_empty) {
+        return Err(RequestPlanError::MissingContext);
+    }
+    if policy.require_authenticated && !context.authenticated {
+        return Err(RequestPlanError::Unauthorized);
+    }
+    let deadline_ms = context.deadline_ms.unwrap_or(policy.max_deadline_ms);
+    if deadline_ms == 0 || deadline_ms > policy.max_deadline_ms {
+        return Err(RequestPlanError::DeadlineTooLong);
+    }
+    Ok(ExecutionContext {
+        request_id: context.request_id.map(str::to_owned),
+        authenticated: context.authenticated,
+        deadline_ms,
+    })
+}
+
+fn context_error_response(error: RequestPlanError) -> Result<ImmediateResponse, RequestPlanError> {
+    match error {
+        RequestPlanError::MissingContext | RequestPlanError::DeadlineTooLong => {
+            Ok(ImmediateResponse::new(StatusCode::BAD_REQUEST))
+        }
+        RequestPlanError::Unauthorized => Ok(ImmediateResponse::new(StatusCode::UNAUTHORIZED)),
+        error => Err(error),
+    }
 }
 
 fn allow_header(methods: &[Method]) -> String {
@@ -644,6 +756,106 @@ mod tests {
             )
             .unwrap(),
             AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::PAYLOAD_TOO_LARGE))
+        );
+    }
+
+    #[test]
+    fn execution_admission_enforces_context_policy_before_dispatch() {
+        let manifest = compiled();
+        let limits = AdmissionLimits { max_body_bytes: 16 };
+        let policy = ExecutionPolicy {
+            require_request_id: true,
+            require_authenticated: true,
+            max_deadline_ms: 50,
+        };
+        let context = InvocationContext {
+            request_id: Some("req-1"),
+            authenticated: true,
+            deadline_ms: Some(25),
+        };
+
+        match admit_request_execution(
+            &manifest,
+            &RequestInput {
+                method: &Method::POST,
+                path: "/api/echo",
+                declared_body_bytes: None,
+            },
+            &limits,
+            &context,
+            &policy,
+        )
+        .unwrap()
+        {
+            AdmissionOutcome::Dispatch(plan) => {
+                assert!(matches!(plan.target, RequestTarget::RouteHandler { .. }));
+                assert_eq!(plan.context.request_id.as_deref(), Some("req-1"));
+                assert!(plan.context.authenticated);
+                assert_eq!(plan.context.deadline_ms, 25);
+            }
+            outcome => panic!("unexpected outcome: {outcome:?}"),
+        }
+
+        assert_eq!(
+            admit_request_execution(
+                &manifest,
+                &RequestInput {
+                    method: &Method::POST,
+                    path: "/api/echo",
+                    declared_body_bytes: None,
+                },
+                &limits,
+                &InvocationContext {
+                    request_id: None,
+                    authenticated: true,
+                    deadline_ms: Some(25),
+                },
+                &policy,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::BAD_REQUEST))
+        );
+        assert_eq!(
+            admit_action_execution(
+                &manifest,
+                &ActionInput {
+                    method: &Method::POST,
+                    action_id: "action:page#save",
+                    origin: None,
+                    expected_origin: None,
+                    declared_body_bytes: None,
+                },
+                &limits,
+                &InvocationContext {
+                    request_id: Some("req-2"),
+                    authenticated: false,
+                    deadline_ms: Some(25),
+                },
+                &policy,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::UNAUTHORIZED))
+        );
+        assert_eq!(
+            admit_action_execution(
+                &manifest,
+                &ActionInput {
+                    method: &Method::POST,
+                    action_id: "action:page#save",
+                    origin: None,
+                    expected_origin: None,
+                    declared_body_bytes: None,
+                },
+                &limits,
+                &InvocationContext {
+                    request_id: Some("req-3"),
+                    authenticated: true,
+                    deadline_ms: Some(51),
+                },
+                &policy,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::BAD_REQUEST))
         );
     }
 
