@@ -95,7 +95,7 @@ The current Rust layer includes:
 - `zap-runtime`: compiled route parsing and lookup with unsafe URL path rejection, manifest source/bundle path validation, route/action module-kind validation, client/server bundle boundary validation, route-handler method and GET-to-HEAD admission, request id/auth/deadline and cache/privacy policy admission and cache-control header decisions.
 - `zap-splice`: bounded Rust worker transport with cancellation, deadlines, crash cleanup and subprocess coverage.
 - `zap-render`: Rust-owned QuickJS execution with Web Stream, route/action `Response` support, response status/header validation, typed execution failures, explicit host calls, output limits and CPU interruption.
-- `zap-build`: Rust-only TSX bundling through Rolldown/Oxc for server IIFE and browser module outputs, GET-to-HEAD route-handler method derivation, generated GET fallback for HEAD route-handler bundles, duplicate graph module ID rejection and strict cache export validation.
+- `zap-build`: Rust-only TSX bundling through Rolldown/Oxc for server IIFE and browser module outputs, GET-to-HEAD route-handler method derivation, generated GET fallback for HEAD route-handler bundles, duplicate graph module ID rejection, unavailable platform-module rejection and strict cache export validation.
 
 This is foundation work, not a full production framework claim.
 

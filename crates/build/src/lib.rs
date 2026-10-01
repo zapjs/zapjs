@@ -1385,4 +1385,31 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
         assert!(code.contains("Zap"));
         assert!(code.contains("export"));
     }
+
+    #[tokio::test]
+    async fn rejects_unavailable_platform_modules() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("entry.ts"),
+            "import fs from 'node:fs'; export const value = fs.readFileSync;",
+        )
+        .unwrap();
+        let output = temp.path().join("dist/client.js");
+        let error = bundle(&BundleOptions::new(
+            temp.path(),
+            Path::new("entry.ts"),
+            &output,
+            Target::Browser,
+        ))
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("bundle cannot depend on unavailable modules"),
+            "{error:?}"
+        );
+        assert!(!output.exists());
+    }
 }
