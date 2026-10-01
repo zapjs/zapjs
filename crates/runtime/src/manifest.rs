@@ -49,6 +49,8 @@ pub struct ModuleRef {
     pub kind: ModuleKind,
     pub browser_chunk: Option<PathBuf>,
     pub server_bundle: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flight_bundle: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,14 +161,20 @@ pub enum ManifestError {
     InvalidActionModuleKind { action: String, module: String },
     #[error("module {module} is missing a server bundle")]
     MissingServerBundle { module: String },
+    #[error("module {module} is missing a Flight bundle")]
+    MissingFlightBundle { module: String },
     #[error("module {module} has an empty server bundle path")]
     EmptyServerBundle { module: String },
+    #[error("module {module} has an empty Flight bundle path")]
+    EmptyFlightBundle { module: String },
     #[error("module {module} has an unsafe source path: {path}")]
     InvalidModulePath { module: String, path: PathBuf },
     #[error("module {module} has an unsafe bundle path: {path}")]
     InvalidBundlePath { module: String, path: PathBuf },
     #[error("client module {module} must not declare a server bundle")]
     UnexpectedClientServerBundle { module: String },
+    #[error("client module {module} must not declare a Flight bundle")]
+    UnexpectedClientFlightBundle { module: String },
     #[error("client module {module} is missing a browser chunk")]
     MissingBrowserChunk { module: String },
     #[error("layout {layout} has an unsafe source path: {path}")]
@@ -402,6 +410,27 @@ impl CompiledManifest {
                     });
                 }
             }
+            match (&module.kind, &module.flight_bundle) {
+                (ModuleKind::Client, Some(_)) => {
+                    return Err(ManifestError::UnexpectedClientFlightBundle {
+                        module: module.id.clone(),
+                    });
+                }
+                (_, Some(path)) if path.as_os_str().is_empty() => {
+                    return Err(ManifestError::EmptyFlightBundle {
+                        module: module.id.clone(),
+                    });
+                }
+                (_, Some(path)) => {
+                    if !is_safe_manifest_path(path) {
+                        return Err(ManifestError::InvalidBundlePath {
+                            module: module.id.clone(),
+                            path: path.clone(),
+                        });
+                    }
+                }
+                (_, None) => {}
+            }
             if let Some(path) = &module.browser_chunk {
                 if !is_safe_manifest_path(path) {
                     return Err(ManifestError::InvalidBundlePath {
@@ -439,6 +468,11 @@ impl CompiledManifest {
             }
             if module.server_bundle.is_none() {
                 return Err(ManifestError::MissingServerBundle {
+                    module: module.id.clone(),
+                });
+            }
+            if route.kind == RouteKind::Page && module.flight_bundle.is_none() {
+                return Err(ManifestError::MissingFlightBundle {
                     module: module.id.clone(),
                 });
             }
@@ -775,6 +809,7 @@ mod tests {
                     kind: ModuleKind::Server,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/shop/_id_/page.js")),
+                    flight_bundle: Some(PathBuf::from(".zap/server/shop/_id_/page.flight.js")),
                 },
                 ModuleRef {
                     id: "shop/_id_/actions".into(),
@@ -782,6 +817,7 @@ mod tests {
                     kind: ModuleKind::ServerActions,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/shop/_id_/actions.js")),
+                    flight_bundle: None,
                 },
                 ModuleRef {
                     id: "shop/_id_/counter".into(),
@@ -789,6 +825,7 @@ mod tests {
                     kind: ModuleKind::Client,
                     browser_chunk: Some(PathBuf::from(".zap/browser/shop/_id_/counter.js")),
                     server_bundle: None,
+                    flight_bundle: None,
                 },
             ],
             actions: vec![ActionRef {

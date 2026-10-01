@@ -357,8 +357,6 @@ impl ApplicationExecutor {
                 invocation,
                 ..
             } => {
-                let bundle_path = self.root.join(&invocation.server_bundle);
-                let bundle = read_artifact_string(&bundle_path)?;
                 let request_json = target
                     .renderer_request_json(input.path, &input.headers, &input.body)?
                     .expect("page targets produce renderer payloads");
@@ -366,6 +364,8 @@ impl ApplicationExecutor {
                 let body = if input.method == Method::HEAD {
                     String::new()
                 } else if wants_flight {
+                    let bundle_path = self.root.join(&invocation.flight_bundle);
+                    let bundle = read_artifact_string(&bundle_path)?;
                     Renderer::new(bundle)
                         .flight(&request_json)
                         .map_err(|source| ExecuteError::RenderArtifact {
@@ -373,6 +373,8 @@ impl ApplicationExecutor {
                             source,
                         })?
                 } else {
+                    let bundle_path = self.root.join(&invocation.server_bundle);
+                    let bundle = read_artifact_string(&bundle_path)?;
                     let rendered =
                         Renderer::new(bundle)
                             .render(&request_json)
@@ -1011,7 +1013,12 @@ mod tests {
         fs::write(root.join("public/logo.txt"), "zap").unwrap();
         fs::write(
             root.join(".zap/server/page.js"),
-            r#"globalThis.ZapRender = { render(request) { const q = request.searchParams && request.searchParams.q ? `:${request.searchParams.q[0]}` : ""; const lang = request.headers && request.headers["accept-language"] ? `:${request.headers["accept-language"]}` : ""; return `<main>${request.method}:${request.path}${q}${lang}</main>`; }, flight(request) { return `flight:${request.method}:${request.path}:${request.headers["rsc"] || "0"}`; } };"#,
+            r#"globalThis.ZapRender = { render(request) { const q = request.searchParams && request.searchParams.q ? `:${request.searchParams.q[0]}` : ""; const lang = request.headers && request.headers["accept-language"] ? `:${request.headers["accept-language"]}` : ""; return `<main>${request.method}:${request.path}${q}${lang}</main>`; } };"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join(".zap/server/page.flight.js"),
+            r#"globalThis.ZapRender = { flight(request) { return `flight:${request.method}:${request.path}:${request.headers["rsc"] || "0"}`; } };"#,
         )
         .unwrap();
         fs::write(
@@ -1073,6 +1080,7 @@ mod tests {
                     kind: ModuleKind::Server,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/page.js")),
+                    flight_bundle: Some(PathBuf::from(".zap/server/page.flight.js")),
                 },
                 ModuleRef {
                     id: "echo".into(),
@@ -1080,6 +1088,7 @@ mod tests {
                     kind: ModuleKind::Server,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/api/echo/route.js")),
+                    flight_bundle: None,
                 },
                 ModuleRef {
                     id: "actions".into(),
@@ -1087,6 +1096,7 @@ mod tests {
                     kind: ModuleKind::ServerActions,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/actions.js")),
+                    flight_bundle: None,
                 },
                 ModuleRef {
                     id: "client".into(),
@@ -1094,6 +1104,7 @@ mod tests {
                     kind: ModuleKind::Client,
                     browser_chunk: Some(PathBuf::from(".zap/browser/client.js")),
                     server_bundle: None,
+                    flight_bundle: None,
                 },
             ],
             actions: vec![ActionRef {

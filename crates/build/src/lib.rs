@@ -1140,6 +1140,34 @@ pub async fn build_application(
             });
         }
 
+        if let Some(flight_bundle) = &module.flight_bundle {
+            let flight_entry =
+                write_page_flight_entry(&root, &options.graph.out_dir, module, &source_entry)?;
+            let output = absolute(&root, flight_bundle);
+            let mut bundle_options = BundleOptions::new(
+                &root,
+                &flight_entry,
+                &output,
+                Target::Server {
+                    global: "ZapRender".into(),
+                },
+            );
+            bundle_options.aliases = options.aliases.clone();
+            bundle_options.conditions = options.server_conditions.clone();
+            bundle_options.minify = options.minify;
+            let built = bundle(&bundle_options).await.with_context(|| {
+                format!("build Flight bundle for module {}", module.path.display())
+            })?;
+            bundles.push(BuiltBundle {
+                module: module.id.clone(),
+                target: BuiltBundleTarget::Server,
+                output,
+                files: built.files,
+                bytes: built.bytes,
+                warnings: built.warnings,
+            });
+        }
+
         if let Some(browser_chunk) = &module.browser_chunk {
             let output = absolute(&root, browser_chunk);
             let mut bundle_options =
@@ -1188,9 +1216,28 @@ fn write_page_server_entry(
     module: &ModuleRef,
     source_entry: &Path,
 ) -> Result<PathBuf> {
+    write_page_entry(root, out_dir, module, source_entry, "js")
+}
+
+fn write_page_flight_entry(
+    root: &Path,
+    out_dir: &Path,
+    module: &ModuleRef,
+    source_entry: &Path,
+) -> Result<PathBuf> {
+    write_page_entry(root, out_dir, module, source_entry, "flight.js")
+}
+
+fn write_page_entry(
+    root: &Path,
+    out_dir: &Path,
+    module: &ModuleRef,
+    source_entry: &Path,
+    extension: &str,
+) -> Result<PathBuf> {
     let entry = absolute(root, out_dir)
         .join("entries/server")
-        .join(format!("{}.js", module.id));
+        .join(format!("{}.{}", module.id, extension));
     let parent = entry
         .parent()
         .context("generated page server entry needs a parent directory")?;
@@ -1761,14 +1808,22 @@ fn deployment_manifest_json(graph: &ApplicationGraph, manifest_path: &Path) -> R
     let server_bundles = graph
         .modules
         .iter()
-        .filter_map(|module| {
-            module.server_bundle.as_ref().map(|bundle| {
+        .flat_map(|module| {
+            let server = module.server_bundle.as_ref().map(|bundle| {
                 serde_json::json!({
                     "module": module.id,
                     "kind": module_kind_name(&module.kind),
                     "path": bundle,
                 })
-            })
+            });
+            let flight = module.flight_bundle.as_ref().map(|bundle| {
+                serde_json::json!({
+                    "module": module.id,
+                    "kind": "page-flight",
+                    "path": bundle,
+                })
+            });
+            server.into_iter().chain(flight)
         })
         .collect::<Vec<_>>();
 
@@ -2033,6 +2088,12 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
         .map(|layout| (layout.id.clone(), layout))
         .collect::<BTreeMap<_, _>>();
 
+    let page_route_modules = route_sources
+        .iter()
+        .filter(|(_, route_kind, _)| *route_kind == RouteKind::Page)
+        .map(|(id, _, _)| id.clone())
+        .collect::<BTreeSet<_>>();
+
     let mut routes = Vec::new();
     for (id, route_kind, methods) in route_sources {
         let module = modules
@@ -2078,6 +2139,11 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
     for module in modules.values() {
         let server_bundle = (module.kind != ModuleKind::Client)
             .then(|| out_dir.join("server").join(format!("{}.js", module.id)));
+        let flight_bundle = page_route_modules.contains(&module.id).then(|| {
+            out_dir
+                .join("server")
+                .join(format!("{}.flight.js", module.id))
+        });
         let browser_chunk = (module.kind == ModuleKind::Client)
             .then(|| out_dir.join("browser").join(format!("{}.js", module.id)));
         module_refs.push(ModuleRef {
@@ -2086,6 +2152,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             kind: module.kind.clone(),
             browser_chunk,
             server_bundle,
+            flight_bundle,
         });
     }
     module_refs.sort_by(|a, b| a.id.cmp(&b.id));
@@ -3697,6 +3764,8 @@ export const Label = 'count';
         let manifest = fs::read_to_string(&output.manifest).unwrap();
         assert!(manifest.contains("ForceDynamic"));
         assert!(manifest.contains(".zap/server/page.js"));
+        assert!(manifest.contains(".zap/server/page.flight.js"));
+        assert!(manifest.contains(".zap/server/shop/_id_/page.flight.js"));
         assert!(manifest.contains(".zap/browser/actions.js"));
         let deployment: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&output.deployment).unwrap()).unwrap();
@@ -3708,11 +3777,16 @@ export const Label = 'count';
         assert_eq!(deployment["routes"], 4);
         assert_eq!(deployment["actions"], 1);
         assert_eq!(deployment["client_references"], 2);
-        assert_eq!(deployment["server_bundles"].as_array().unwrap().len(), 5);
+        assert_eq!(deployment["server_bundles"].as_array().unwrap().len(), 7);
         assert!(deployment["server_bundles"].as_array().unwrap().iter().any(
             |entry| entry["module"] == "actions"
                 && entry["kind"] == "server-actions"
                 && entry["path"] == ".zap/server/actions.js"
+        ));
+        assert!(deployment["server_bundles"].as_array().unwrap().iter().any(
+            |entry| entry["module"] == "page"
+                && entry["kind"] == "page-flight"
+                && entry["path"] == ".zap/server/page.flight.js"
         ));
         assert!(
             deployment["browser_assets"]
@@ -3771,7 +3845,7 @@ export const Label = 'count';
             .iter()
             .filter(|bundle| bundle.target == BuiltBundleTarget::Browser)
             .count();
-        assert_eq!(server_outputs, 5);
+        assert_eq!(server_outputs, 7);
         assert_eq!(browser_outputs, 1);
         let page_bundle = temp.path().join(".zap/server/page.js");
         let route_bundle = temp.path().join(".zap/server/api/echo/route.js");
@@ -3833,9 +3907,11 @@ export const Label = 'count';
         let page_entry_source =
             fs::read_to_string(temp.path().join(".zap/entries/server/page.js")).unwrap();
         assert!(page_entry_source.contains("react-dom/server.browser"));
-        assert!(page_entry_source.contains("defaultZapFlight"));
-        assert!(page_entry_source.contains("ZAP_FLIGHT 1"));
-        assert!(page_entry_source.contains("export async function flight"));
+        let page_flight_entry_source =
+            fs::read_to_string(temp.path().join(".zap/entries/server/page.flight.js")).unwrap();
+        assert!(page_flight_entry_source.contains("defaultZapFlight"));
+        assert!(page_flight_entry_source.contains("ZAP_FLIGHT 1"));
+        assert!(page_flight_entry_source.contains("export async function flight"));
         let route_entry_source =
             fs::read_to_string(temp.path().join(".zap/entries/server/api/echo/route.js")).unwrap();
         assert!(route_entry_source.contains("new Request(zapRequestUrl"));

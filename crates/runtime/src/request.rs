@@ -38,6 +38,7 @@ pub enum RequestTarget<'a> {
 pub struct PageInvocation {
     pub method: Method,
     pub server_bundle: PathBuf,
+    pub flight_bundle: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -362,6 +363,13 @@ pub fn plan_request<'a>(
                     },
                 ));
             };
+            let Some(flight_bundle) = &module.flight_bundle else {
+                return Err(RequestPlanError::Manifest(
+                    ManifestError::MissingFlightBundle {
+                        module: module.id.clone(),
+                    },
+                ));
+            };
             let hydration = manifest.route_hydration(matched.route)?;
             Ok(RequestTarget::Page {
                 route: matched.route,
@@ -371,6 +379,7 @@ pub fn plan_request<'a>(
                 invocation: PageInvocation {
                     method: method.clone(),
                     server_bundle: server_bundle.clone(),
+                    flight_bundle: flight_bundle.clone(),
                 },
             })
         }
@@ -883,6 +892,7 @@ mod tests {
                     kind: ModuleKind::Server,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/page.js")),
+                    flight_bundle: Some(PathBuf::from(".zap/server/page.flight.js")),
                 },
                 ModuleRef {
                     id: "static-page".into(),
@@ -890,6 +900,7 @@ mod tests {
                     kind: ModuleKind::Server,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/static-page.js")),
+                    flight_bundle: Some(PathBuf::from(".zap/server/static-page.flight.js")),
                 },
                 ModuleRef {
                     id: "dynamic-page".into(),
@@ -897,6 +908,7 @@ mod tests {
                     kind: ModuleKind::Server,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/dynamic-page.js")),
+                    flight_bundle: Some(PathBuf::from(".zap/server/dynamic-page.flight.js")),
                 },
                 ModuleRef {
                     id: "handler".into(),
@@ -904,6 +916,7 @@ mod tests {
                     kind: ModuleKind::Server,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/handler.js")),
+                    flight_bundle: None,
                 },
                 ModuleRef {
                     id: "get-handler".into(),
@@ -911,6 +924,7 @@ mod tests {
                     kind: ModuleKind::Server,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/get-handler.js")),
+                    flight_bundle: None,
                 },
                 ModuleRef {
                     id: "actions".into(),
@@ -918,6 +932,7 @@ mod tests {
                     kind: ModuleKind::ServerActions,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/actions.js")),
+                    flight_bundle: None,
                 },
             ],
             actions: vec![ActionRef {
@@ -960,6 +975,10 @@ mod tests {
                 assert_eq!(
                     invocation.server_bundle,
                     PathBuf::from(".zap/server/page.js")
+                );
+                assert_eq!(
+                    invocation.flight_bundle,
+                    PathBuf::from(".zap/server/page.flight.js")
                 );
             }
             target => panic!("unexpected target: {target:?}"),
@@ -1262,6 +1281,10 @@ mod tests {
                 assert_eq!(
                     invocation.server_bundle,
                     PathBuf::from(".zap/server/page.js")
+                );
+                assert_eq!(
+                    invocation.flight_bundle,
+                    PathBuf::from(".zap/server/page.flight.js")
                 );
             }
             outcome => panic!("unexpected outcome: {outcome:?}"),
