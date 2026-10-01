@@ -486,8 +486,13 @@ fn is_valid_route_methods(route: &RouteEntry) -> bool {
 
 fn is_safe_asset_url(path: &str) -> bool {
     path.starts_with('/')
-        && !path.is_empty()
+        && path != "/"
         && path.len() <= 16 * 1024
+        && path.chars().all(|character| {
+            character.is_ascii()
+                && !character.is_ascii_control()
+                && !character.is_ascii_whitespace()
+        })
         && !path.contains(['?', '#', '\\'])
         && !path
             .trim_matches('/')
@@ -606,6 +611,27 @@ mod tests {
         });
         assert!(matches!(
             CompiledManifest::new(unsafe_asset).unwrap_err(),
+            ManifestError::InvalidAssetPath(_)
+        ));
+
+        let mut root_asset = manifest();
+        root_asset.assets[0].url_path = "/".into();
+        assert!(matches!(
+            CompiledManifest::new(root_asset).unwrap_err(),
+            ManifestError::InvalidAssetPath(_)
+        ));
+
+        let mut whitespace_asset = manifest();
+        whitespace_asset.assets[0].url_path = "/images/logo mark.svg".into();
+        assert!(matches!(
+            CompiledManifest::new(whitespace_asset).unwrap_err(),
+            ManifestError::InvalidAssetPath(_)
+        ));
+
+        let mut unicode_asset = manifest();
+        unicode_asset.assets[0].url_path = "/images/café.svg".into();
+        assert!(matches!(
+            CompiledManifest::new(unicode_asset).unwrap_err(),
             ManifestError::InvalidAssetPath(_)
         ));
 

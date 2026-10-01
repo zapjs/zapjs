@@ -1445,6 +1445,34 @@ export default function Page(){}
     }
 
     #[test]
+    fn application_graph_rejects_unsafe_public_asset_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(temp.path().join("public/images")).unwrap();
+        fs::write(
+            app.join("page.tsx"),
+            "export default function Page(){}
+",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("public/images/logo mark.svg"),
+            "<svg/>
+",
+        )
+        .unwrap();
+
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("asset URL path must be absolute and safe"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn application_graph_rejects_ambiguous_route_groups() {
         let temp = tempfile::tempdir().unwrap();
         let app = temp.path().join("app");
