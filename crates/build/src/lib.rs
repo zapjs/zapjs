@@ -242,6 +242,12 @@ fn validate_local_module(root: &Path, path: &Path, visited: &mut BTreeSet<PathBu
             path.display()
         );
     }
+    if has_non_static_dynamic_import(&text) {
+        bail!(
+            "bundle cannot depend on non-static dynamic import in {}",
+            path.display()
+        );
+    }
     for specifier in module_specifiers(&text) {
         if is_unavailable_platform_specifier(&specifier) {
             bail!(
@@ -265,6 +271,24 @@ enum JsToken {
     Number(String),
     String(String),
     Punct(char),
+}
+
+fn has_non_static_dynamic_import(text: &str) -> bool {
+    let tokens = js_tokens(text);
+    tokens.iter().enumerate().any(|(index, token)| {
+        if !matches!(token, JsToken::Ident(value) if value == "import")
+            || !matches!(tokens.get(index + 1), Some(JsToken::Punct('(')))
+        {
+            return false;
+        }
+        match tokens.get(index + 2) {
+            Some(JsToken::String(_)) => !matches!(
+                tokens.get(index + 3),
+                Some(JsToken::Punct(')') | JsToken::Punct(','))
+            ),
+            _ => true,
+        }
+    })
 }
 
 fn module_specifiers(text: &str) -> Vec<String> {
@@ -2175,6 +2199,18 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
                 "export async function load(){ return import(`fs/promises`); }",
             ),
             (
+                "computed_dynamic_import.ts",
+                "export async function load(name){ return import(name); }",
+            ),
+            (
+                "concatenated_dynamic_import.ts",
+                "export async function load(){ return import('f' + 's'); }",
+            ),
+            (
+                "template_expr_dynamic_import.ts",
+                "export async function load(name){ return import(`${name}`); }",
+            ),
+            (
                 "spaced_commonjs_require.ts",
                 "const vm = require (\n  'vm'\n); export const value = vm;",
             ),
@@ -2251,7 +2287,10 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
                     .contains("bundle cannot depend on unavailable platform module")
                     || error
                         .to_string()
-                        .contains("bundle cannot depend on unavailable platform global"),
+                        .contains("bundle cannot depend on unavailable platform global")
+                    || error
+                        .to_string()
+                        .contains("bundle cannot depend on non-static dynamic import"),
                 "{name}: {error:?}"
             );
             assert!(!output.exists(), "{name}");
