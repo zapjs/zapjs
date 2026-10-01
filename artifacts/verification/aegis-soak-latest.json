@@ -2,17 +2,17 @@
   "schema": "zap.aegis_matrix.v1",
   "ok": true,
   "date": "2026-10-01",
-  "profile": "smoke",
-  "fixture_root": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-matrix-z15uq6c9",
-  "serve_url": "http://127.0.0.1:56904",
-  "cycles": 3,
-  "elapsed_seconds": 4.865,
-  "cycles_per_second": 0.617,
+  "profile": "soak",
+  "fixture_root": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-matrix-00np47sy",
+  "serve_url": "http://127.0.0.1:56980",
+  "cycles": 50,
+  "elapsed_seconds": 33.687,
+  "cycles_per_second": 1.484,
   "aegis": {
-    "addr": "127.0.0.1:56905",
-    "log_path": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-56905.log",
+    "addr": "127.0.0.1:56983",
+    "log_path": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-56983.log",
     "mode": "detached_serve",
-    "pid": 56083,
+    "pid": 56104,
     "profile": "default",
     "runtime_executable": "/Users/deepsaint/Applications/Aegis.app/Contents/MacOS/aegis_cli"
   },
@@ -21,14 +21,14 @@
     "Aegis loaded the app through zap serve",
     "initial page hydration ran through the generated hydrateRoot bundle",
     "browser action proxy posted a root action to /_zap/action and rendered the response",
-    "same-origin navigation reached a nested dynamic route with decoded query data across 3 cycle(s)",
-    "layout and page client references hydrated after navigation and invoked server actions across 3 cycle(s)",
-    "catch-all navigation rendered decoded params and query data across 3 cycle(s)",
+    "same-origin navigation reached a nested dynamic route with decoded query data across 50 cycle(s)",
+    "layout and page client references hydrated after navigation and invoked server actions across 50 cycle(s)",
+    "catch-all navigation rendered decoded params and query data across 50 cycle(s)",
     "failed navigation emitted an error navigation state through the Rust-generated bootstrap"
   ],
   "page_snapshot": {
     "title": null,
-    "url": "http://127.0.0.1:56904/docs/a/b/c?view=full",
+    "url": "http://127.0.0.1:56980/docs/a/b/c?view=full",
     "canonical_url": null,
     "visible_text": "<[object Object]>rootshopdocsbrokenZap navigation failed: 500 docs:a/b/c:view:full",
     "content_scopes": {
@@ -43,19 +43,19 @@
       {
         "index": 0,
         "text": "shop",
-        "href": "http://127.0.0.1:56904/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:56980/shop/cafe?color=blue",
         "title": null
       },
       {
         "index": 1,
         "text": "docs",
-        "href": "http://127.0.0.1:56904/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:56980/docs/a/b/c?view=full",
         "title": null
       },
       {
         "index": 2,
         "text": "broken",
-        "href": "http://127.0.0.1:56904/broken",
+        "href": "http://127.0.0.1:56980/broken",
         "title": null
       }
     ],
@@ -63,19 +63,19 @@
       {
         "index": 2,
         "text": "broken",
-        "href": "http://127.0.0.1:56904/broken",
+        "href": "http://127.0.0.1:56980/broken",
         "title": null
       },
       {
         "index": 0,
         "text": "shop",
-        "href": "http://127.0.0.1:56904/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:56980/shop/cafe?color=blue",
         "title": null
       },
       {
         "index": 1,
         "text": "docs",
-        "href": "http://127.0.0.1:56904/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:56980/docs/a/b/c?view=full",
         "title": null
       }
     ],
@@ -106,7 +106,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:56904/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:56980/shop/cafe?color=blue",
         "actions": [
           "click",
           "open",
@@ -125,7 +125,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:56904/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:56980/docs/a/b/c?view=full",
         "actions": [
           "click",
           "open",
@@ -144,7 +144,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:56904/broken",
+        "href": "http://127.0.0.1:56980/broken",
         "actions": [
           "click",
           "open",
@@ -183,7 +183,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:56904/broken",
+        "href": "http://127.0.0.1:56980/broken",
         "actions": [
           "click",
           "open",
@@ -202,7 +202,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:56904/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:56980/shop/cafe?color=blue",
         "actions": [
           "click",
           "open",
@@ -221,7 +221,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:56904/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:56980/docs/a/b/c?view=full",
         "actions": [
           "click",
           "open",

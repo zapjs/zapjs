@@ -153,17 +153,23 @@ def wait_eval(addr: str, code: str, label: str, timeout: float = 8.0) -> Any:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--out", default="artifacts/verification/aegis-matrix-latest.json")
-    parser.add_argument("--cycles", type=int, default=3, help="navigation/action cycles to run through shop and docs before the final failing route")
+    parser.add_argument("--out", default=None, help="report path; defaults to the selected profile's latest report")
+    parser.add_argument("--profile", choices=["smoke", "soak"], default="smoke", help="smoke runs a quick matrix; soak runs a longer production-hardening matrix")
+    parser.add_argument("--cycles", type=int, default=None, help="navigation/action cycles to run through shop and docs before the final failing route")
     parser.add_argument("--keep-temp", action="store_true")
     args = parser.parse_args()
+    if args.cycles is None:
+        args.cycles = 3 if args.profile == "smoke" else 50
     if args.cycles < 1:
         raise SystemExit("--cycles must be at least 1")
+    if args.out is None:
+        args.out = "artifacts/verification/aegis-matrix-latest.json" if args.profile == "smoke" else "artifacts/verification/aegis-soak-latest.json"
 
     if not AEGIS.exists():
         raise SystemExit(f"Aegis CLI not found at {AEGIS}")
 
     work = Path(tempfile.mkdtemp(prefix="zapjs-aegis-matrix-"))
+    started_at = time.time()
     zap_proc: subprocess.Popen[str] | None = None
     aegis_pid: int | None = None
     try:
@@ -215,13 +221,17 @@ def main() -> int:
 
         snapshot = api(aegis_addr, "GET", "/page")
         events = api(aegis_addr, "GET", "/events")
+        elapsed_seconds = round(time.time() - started_at, 3)
         report = {
             "schema": "zap.aegis_matrix.v1",
             "ok": True,
             "date": time.strftime("%Y-%m-%d"),
+            "profile": args.profile,
             "fixture_root": str(work),
             "serve_url": serve_url,
             "cycles": args.cycles,
+            "elapsed_seconds": elapsed_seconds,
+            "cycles_per_second": round(args.cycles / elapsed_seconds, 3) if elapsed_seconds > 0 else None,
             "aegis": detach_json,
             "validated": [
                 "Rust zap build emitted a React graph fixture without invoking a JavaScript runtime",
