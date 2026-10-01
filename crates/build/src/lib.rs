@@ -579,6 +579,9 @@ fn unavailable_platform_global(text: &str) -> Option<String> {
         if let Some(value) = ambient_platform_global_string_member(&tokens, index) {
             return Some(value);
         }
+        if let Some(value) = ambient_platform_global_probe(&tokens, index) {
+            return Some(value);
+        }
         let JsToken::Ident(value) = token else {
             return None;
         };
@@ -590,16 +593,41 @@ fn ambient_platform_global_string_member(tokens: &[JsToken], index: usize) -> Op
     let Some(JsToken::Ident(root)) = tokens.get(index) else {
         return None;
     };
-    if !matches!(root.as_str(), "globalThis" | "global" | "window" | "self")
-        || !matches!(tokens.get(index + 1), Some(JsToken::Punct('[')))
-    {
+    if !is_global_object_name(root) {
         return None;
     }
-    let Some(JsToken::String(value)) = tokens.get(index + 2) else {
+    let member_start = optional_chain_member_start(tokens, index + 1)?;
+    let Some(JsToken::String(value)) = tokens.get(member_start + 1) else {
         return None;
     };
     if !is_unavailable_platform_global_name(value)
-        || !matches!(tokens.get(index + 3), Some(JsToken::Punct(']')))
+        || !matches!(tokens.get(member_start + 2), Some(JsToken::Punct(']')))
+    {
+        return None;
+    }
+    Some(value.clone())
+}
+
+fn optional_chain_member_start(tokens: &[JsToken], index: usize) -> Option<usize> {
+    if matches!(tokens.get(index), Some(JsToken::Punct('['))) {
+        return Some(index);
+    }
+    if matches!(tokens.get(index), Some(JsToken::Punct('?')))
+        && matches!(tokens.get(index + 1), Some(JsToken::Punct('.')))
+        && matches!(tokens.get(index + 2), Some(JsToken::Punct('[')))
+    {
+        return Some(index + 2);
+    }
+    None
+}
+
+fn ambient_platform_global_probe(tokens: &[JsToken], index: usize) -> Option<String> {
+    let Some(JsToken::String(value)) = tokens.get(index) else {
+        return None;
+    };
+    if !is_unavailable_platform_global_name(value)
+        || !matches!(tokens.get(index + 1), Some(JsToken::Ident(operator)) if operator == "in")
+        || !matches!(tokens.get(index + 2), Some(JsToken::Ident(root)) if is_global_object_name(root))
     {
         return None;
     }
@@ -617,12 +645,15 @@ fn is_ambient_platform_global_reference(tokens: &[JsToken], index: usize) -> boo
         return false;
     }
     if matches!(tokens.get(index.wrapping_sub(1)), Some(JsToken::Punct('.'))) {
-        return matches!(
-            tokens.get(index.wrapping_sub(2)),
-            Some(JsToken::Ident(root)) if matches!(root.as_str(), "globalThis" | "global" | "window" | "self")
-        );
+        return matches!(tokens.get(index.wrapping_sub(2)), Some(JsToken::Ident(root)) if is_global_object_name(root))
+            || (matches!(tokens.get(index.wrapping_sub(2)), Some(JsToken::Punct('?')))
+                && matches!(tokens.get(index.wrapping_sub(3)), Some(JsToken::Ident(root)) if is_global_object_name(root)));
     }
     true
+}
+
+fn is_global_object_name(value: &str) -> bool {
+    matches!(value, "globalThis" | "global" | "window" | "self")
 }
 
 fn is_unavailable_platform_global_name(value: &str) -> bool {
@@ -2136,6 +2167,18 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
             (
                 "global_bracket_process.ts",
                 "export const value = globalThis['process'];",
+            ),
+            (
+                "optional_chain_process.ts",
+                "export const value = globalThis?.process;",
+            ),
+            (
+                "optional_chain_bracket_process.ts",
+                "export const value = globalThis?.['process'];",
+            ),
+            (
+                "global_probe_process.ts",
+                "export const value = 'process' in globalThis;",
             ),
             (
                 "module_exports.ts",
