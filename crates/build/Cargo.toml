@@ -1,0 +1,15 @@
+[package]
+name = "zap-build"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT"
+description = "Rust-owned React and TypeScript compilation for ZapJS"
+
+[dependencies]
+anyhow = "1"
+rolldown = "=1.2.12"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tempfile = "3"

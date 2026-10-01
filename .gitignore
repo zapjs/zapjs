@@ -1,83 +1,30 @@
-# Build artifacts
+# Rust build artifacts
 target/
-dist/
-build/
-*.o
-*.a
-*.so
-*.dylib
+Cargo.lock
 
-# Package managers
-node_modules/
-package-lock.json
-yarn.lock
-bun.lockb
-pnpm-lock.yaml
-
-# IDE
+# Local editor and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.DS_Store
+Thumbs.db
 
-# Environment
+# Local environment files
 .env
 .env.local
 .env.*.local
 .env.development.local
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
+# Logs and temporary files
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Cache
-.cache/
-.eslintcache
-.turbo/
-
-# Temporary
 tmp/
 *.tmp
 
-# TypeScript build info
-*.tsbuildinfo
-
-# Test coverage
-coverage/
-
-# Development/test files
-TEST*.ts
-test-*.json
-stress-test-*.json
-server.log
-
-# Old documentation
-NEWPLAN.md
-IMPLEMENTATION_SUMMARY.md
-dumb.md
-
-# Design system (keep locally)
-DESIGNSYSTEM.json
-
-# Build outputs
-bin/
-
-# Reports
-BUNDLE_SIZE_REPORT.md
-PUBLISH_CHECKLIST.md
-
 # Local deterministic-run caches and captured verification output
 .fozzy/
-artifacts/verification/
-
-# Managed application output and native modules
-.zap/
-.vercel/
-*.node
+artifacts/verification/*
+!artifacts/verification/rust-only-crates.fozzy.json
+!artifacts/verification/rust-only-crates-host.fozzy.json
+!artifacts/verification/rust-only-crates-host.trace.fozzy

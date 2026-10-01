@@ -86,7 +86,7 @@ The fastest architecture is the one that removes request-time work and measures 
 7. use Rust for measured CPU-heavy work;
 8. optimize codecs, allocation and lookup paths when profiles show they matter.
 
-No nanosecond router benchmark, IPC round-trip, isolated SSR proof or local synthetic result establishes production superiority. Production claims require equivalent workloads, pinned Next.js comparison, cold/warm latency, p50/p95/p99, memory, CPU, throughput, client JS transferred, build/HMR time and error rates under a stated load/SLO.
+No isolated router timing, IPC round-trip, isolated SSR proof or local synthetic result establishes production superiority. Production claims require equivalent workloads, pinned Next.js comparison, cold/warm latency, p50/p95/p99, memory, CPU, throughput, client JS transferred, build/HMR time and error rates under a stated load/SLO.
 
 ## Current implementation evidence
 

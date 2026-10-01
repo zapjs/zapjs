@@ -147,8 +147,8 @@ impl Renderer {
                     )?,
                 )?;
                 ctx.eval::<(), _>(include_str!("host.js"))?;
-                ctx.eval::<(), _>(include_str!("../vendor/abort.js"))?;
-                ctx.eval::<(), _>(include_str!("../vendor/streams.js"))?;
+                ctx.eval::<(), _>(include_str!("../polyfills/abort.js"))?;
+                ctx.eval::<(), _>(include_str!("../polyfills/streams.js"))?;
                 ctx.eval::<(), _>(self.bundle.as_bytes())?;
                 ctx.globals().set("__zap_input", request_json)?;
                 let promise: Promise =
