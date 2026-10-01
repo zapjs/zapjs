@@ -101,7 +101,7 @@ This is foundation work, not a full production framework claim.
 
 ## Release gates
 
-ZapJS is production-ready only after these gates are executable and recorded:
+ZapJS can make a production claim only after these gates are executable and recorded:
 
 1. real React HTML SSR and Flight run through the Rust-owned engine with cancellation, streaming and memory limits;
 2. the Rust graph emits matching server bundles, browser chunks, client references, action IDs and route manifests;
