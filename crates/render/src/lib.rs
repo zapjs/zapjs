@@ -3,6 +3,7 @@
 //! are exposed to JavaScript. Explicit host operations provide application data.
 
 use rquickjs::{Context, Ctx, Exception, Function, Promise, Runtime, TypedArray};
+use serde::Deserialize;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -25,6 +26,19 @@ impl fmt::Display for RenderError {
     }
 }
 impl std::error::Error for RenderError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RouteResponseMetadata {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+}
 
 #[derive(Clone)]
 pub struct Limits {
@@ -84,9 +98,13 @@ impl Renderer {
             .map_err(|error| RenderError(format!("Render output is not UTF-8: {error}")))
     }
     pub fn handle_route(&self, request_json: &str) -> Result<String, RenderError> {
+        Ok(self.handle_route_response(request_json)?.body)
+    }
+
+    pub fn handle_route_response(&self, request_json: &str) -> Result<RouteResponse, RenderError> {
         let bytes = Rc::new(RefCell::new(Vec::new()));
         let sink = bytes.clone();
-        self.route_stream(
+        let metadata = self.route_response_stream(
             request_json,
             Arc::new(AtomicBool::new(false)),
             move |chunk| {
@@ -95,8 +113,13 @@ impl Renderer {
             },
         )?;
         let bytes = std::mem::take(&mut *bytes.borrow_mut());
-        String::from_utf8(bytes)
-            .map_err(|error| RenderError(format!("Route output is not UTF-8: {error}")))
+        let body = String::from_utf8(bytes)
+            .map_err(|error| RenderError(format!("Route output is not UTF-8: {error}")))?;
+        Ok(RouteResponse {
+            status: metadata.status,
+            headers: metadata.headers,
+            body,
+        })
     }
 
     /// Streams actual React chunks as they are produced. The sink owns transport
@@ -112,7 +135,7 @@ impl Renderer {
         F: FnMut(Vec<u8>) -> Result<(), String> + 'static,
     {
         self.entry_stream(
-            "__zap_consume(ZapRender.render(JSON.parse(__zap_input)))",
+            "__zap_consume(ZapRender.render(JSON.parse(__zap_input))).then(() => '')",
             request_json,
             cancelled,
             sink,
@@ -130,12 +153,34 @@ impl Renderer {
     where
         F: FnMut(Vec<u8>) -> Result<(), String> + 'static,
     {
-        self.entry_stream(
-            "__zap_consume(ZapRoute.handle(JSON.parse(__zap_input)))",
+        self.route_response_stream(request_json, cancelled, sink)
+            .map(|_| ())
+    }
+
+    pub fn route_response_stream<F>(
+        &self,
+        request_json: &str,
+        cancelled: Arc<AtomicBool>,
+        sink: F,
+    ) -> Result<RouteResponseMetadata, RenderError>
+    where
+        F: FnMut(Vec<u8>) -> Result<(), String> + 'static,
+    {
+        let json = self.entry_value_stream(
+            "__zap_route_response(ZapRoute.handle(JSON.parse(__zap_input)))",
             request_json,
             cancelled,
             sink,
-        )
+        )?;
+        let metadata: RouteResponseMetadata = serde_json::from_str(&json)
+            .map_err(|error| RenderError(format!("Route response metadata is invalid: {error}")))?;
+        if !(200..=599).contains(&metadata.status) {
+            return Err(RenderError(format!(
+                "Route response status is invalid: {}",
+                metadata.status
+            )));
+        }
+        Ok(metadata)
     }
 
     fn entry_stream<F>(
@@ -143,8 +188,22 @@ impl Renderer {
         entry_expression: &'static str,
         request_json: &str,
         cancelled: Arc<AtomicBool>,
-        mut sink: F,
+        sink: F,
     ) -> Result<(), RenderError>
+    where
+        F: FnMut(Vec<u8>) -> Result<(), String> + 'static,
+    {
+        self.entry_value_stream(entry_expression, request_json, cancelled, sink)
+            .map(|_| ())
+    }
+
+    fn entry_value_stream<F>(
+        &self,
+        entry_expression: &'static str,
+        request_json: &str,
+        cancelled: Arc<AtomicBool>,
+        mut sink: F,
+    ) -> Result<String, RenderError>
     where
         F: FnMut(Vec<u8>) -> Result<(), String> + 'static,
     {
@@ -159,7 +218,7 @@ impl Renderer {
         })));
         let context = Context::full(&runtime).map_err(engine_error)?;
         context.with(|ctx| {
-            let execute = || -> rquickjs::Result<()> {
+            let execute = || -> rquickjs::Result<String> {
                 ctx.globals().set(
                     "__zap_now",
                     Function::new(ctx.clone(), move || start.elapsed().as_secs_f64() * 1000.0)?,
@@ -214,7 +273,7 @@ impl Renderer {
                     if Instant::now() >= deadline {
                         return Err(Exception::throw_message(&ctx, "Render deadline exceeded"));
                     }
-                    if let Some(result) = promise.result::<()>() {
+                    if let Some(result) = promise.result::<String>() {
                         return result;
                     }
                     // Bound each microtask batch so a self-replenishing queue cannot
@@ -348,6 +407,21 @@ mod tests {
             .handle_route(r#"{"method":"POST","path":"/api/echo"}"#)
             .unwrap();
         assert_eq!(output, "POST:/api/echo");
+    }
+
+    #[test]
+    fn handles_route_response_metadata_from_bundle() {
+        let response = route_handler(
+            r#"return new Response(JSON.stringify({ok: true}), {status: 201, headers: {'content-type': 'application/json'}});"#,
+        )
+        .handle_route_response(r#"{"method":"POST","path":"/api/echo"}"#)
+        .unwrap();
+        assert_eq!(response.status, 201);
+        assert_eq!(
+            response.headers,
+            vec![("content-type".into(), "application/json".into())]
+        );
+        assert_eq!(response.body, r#"{"ok":true}"#);
     }
 
     #[test]

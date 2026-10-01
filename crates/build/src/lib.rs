@@ -414,10 +414,11 @@ const allowedMethods = [{allowed}];
 
 function normalizeZapOutput(value) {{
   if (value == null) return "";
+  if (typeof Response !== "undefined" && value instanceof Response) return value;
   if (typeof value === "string") return value;
   if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return value;
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
-  throw new TypeError("Zap route output must be text or a ReadableStream until the Response adapter is installed");
+  throw new TypeError("Zap route output must be text, a Response or a ReadableStream");
 }}
 
 export async function handle(request) {{
@@ -1069,7 +1070,7 @@ export function Counter(){ return '1'; }
         .unwrap();
         fs::write(
             app.join("api/echo/route.ts"),
-            "export function POST(request){ return `echo:${request.method}:${request.path}`; }
+            "export function POST(request){ return new Response(`echo:${request.method}:${request.path}`, {status: 202, headers: {'x-zap-route': 'echo'}}); }
 ",
         )
         .unwrap();
@@ -1118,9 +1119,11 @@ export function Counter(){ return '1'; }
             .unwrap();
         assert_eq!(rendered, "home:/");
         let handled = Renderer::new(fs::read_to_string(route_bundle).unwrap())
-            .handle_route(r#"{"method":"POST","path":"/api/echo"}"#)
+            .handle_route_response(r#"{"method":"POST","path":"/api/echo"}"#)
             .unwrap();
-        assert_eq!(handled, "echo:POST:/api/echo");
+        assert_eq!(handled.status, 202);
+        assert_eq!(handled.headers, vec![("x-zap-route".into(), "echo".into())]);
+        assert_eq!(handled.body, "echo:POST:/api/echo");
     }
 
     #[tokio::test]
