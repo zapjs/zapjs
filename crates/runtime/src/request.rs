@@ -35,12 +35,67 @@ pub enum RequestPlanError {
     ActionMethod,
     #[error("server action origin is not allowed")]
     ActionOrigin,
+    #[error("request body exceeds configured limit")]
+    BodyTooLarge,
     #[error("server action module is not executable")]
     ActionModule,
 }
 
 const PAGE_METHODS: &[Method] = &[Method::GET, Method::HEAD];
 const ASSET_METHODS: &[Method] = &[Method::GET, Method::HEAD];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmissionLimits {
+    pub max_body_bytes: u64,
+}
+
+impl Default for AdmissionLimits {
+    fn default() -> Self {
+        Self {
+            max_body_bytes: 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestInput<'a> {
+    pub method: &'a Method,
+    pub path: &'a str,
+    pub declared_body_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionInput<'a> {
+    pub method: &'a Method,
+    pub action_id: &'a str,
+    pub origin: Option<&'a str>,
+    pub expected_origin: Option<&'a str>,
+    pub declared_body_bytes: Option<u64>,
+}
+
+pub fn plan_request_input<'a>(
+    manifest: &'a CompiledManifest,
+    input: &RequestInput<'_>,
+    limits: &AdmissionLimits,
+) -> Result<RequestTarget<'a>, RequestPlanError> {
+    enforce_body_limit(input.declared_body_bytes, limits)?;
+    plan_request(manifest, input.method, input.path)
+}
+
+pub fn plan_action_input<'a>(
+    manifest: &'a CompiledManifest,
+    input: &ActionInput<'_>,
+    limits: &AdmissionLimits,
+) -> Result<ActionAdmission<'a>, RequestPlanError> {
+    enforce_body_limit(input.declared_body_bytes, limits)?;
+    plan_action(
+        manifest,
+        input.method,
+        input.action_id,
+        input.origin,
+        input.expected_origin,
+    )
+}
 
 pub fn plan_request<'a>(
     manifest: &'a CompiledManifest,
@@ -143,6 +198,16 @@ fn normalize_origin(value: &str) -> Option<String> {
         scheme.to_ascii_lowercase(),
         authority.to_ascii_lowercase()
     ))
+}
+
+fn enforce_body_limit(
+    declared_body_bytes: Option<u64>,
+    limits: &AdmissionLimits,
+) -> Result<(), RequestPlanError> {
+    if declared_body_bytes.is_some_and(|bytes| bytes > limits.max_body_bytes) {
+        return Err(RequestPlanError::BodyTooLarge);
+    }
+    Ok(())
 }
 
 fn allowed_methods(route: &RouteEntry) -> Vec<Method> {
@@ -284,6 +349,51 @@ mod tests {
                 Some("https://example.com"),
             ),
             Err(RequestPlanError::ActionOrigin)
+        ));
+    }
+
+    #[test]
+    fn enforces_body_limits_before_route_or_action_dispatch() {
+        let manifest = compiled();
+        let limits = AdmissionLimits { max_body_bytes: 4 };
+        assert!(matches!(
+            plan_request_input(
+                &manifest,
+                &RequestInput {
+                    method: &Method::POST,
+                    path: "/api/echo",
+                    declared_body_bytes: Some(5),
+                },
+                &limits,
+            ),
+            Err(RequestPlanError::BodyTooLarge)
+        ));
+        assert!(matches!(
+            plan_action_input(
+                &manifest,
+                &ActionInput {
+                    method: &Method::POST,
+                    action_id: "action:page#save",
+                    origin: None,
+                    expected_origin: None,
+                    declared_body_bytes: Some(5),
+                },
+                &limits,
+            ),
+            Err(RequestPlanError::BodyTooLarge)
+        ));
+        assert!(matches!(
+            plan_request_input(
+                &manifest,
+                &RequestInput {
+                    method: &Method::POST,
+                    path: "/api/echo",
+                    declared_body_bytes: Some(4),
+                },
+                &limits,
+            )
+            .unwrap(),
+            RequestTarget::RouteHandler { .. }
         ));
     }
 
