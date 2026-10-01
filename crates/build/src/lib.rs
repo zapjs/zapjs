@@ -272,6 +272,12 @@ pub async fn build_application(
         .filter(|route| route.kind == RouteKind::Page)
         .map(|route| route.module.clone())
         .collect::<BTreeSet<_>>();
+    let handler_methods = graph
+        .routes
+        .iter()
+        .filter(|route| route.kind == RouteKind::Handler)
+        .map(|route| (route.module.clone(), route.methods.clone()))
+        .collect::<BTreeMap<_, _>>();
 
     for module in &graph.modules {
         let source_entry = app_root.join(&module.path);
@@ -280,6 +286,17 @@ pub async fn build_application(
                 (
                     write_page_server_entry(&root, &options.graph.out_dir, module, &source_entry)?,
                     "ZapRender".into(),
+                )
+            } else if let Some(methods) = handler_methods.get(&module.id) {
+                (
+                    write_route_handler_server_entry(
+                        &root,
+                        &options.graph.out_dir,
+                        module,
+                        &source_entry,
+                        methods,
+                    )?,
+                    "ZapRoute".into(),
                 )
             } else {
                 (source_entry.clone(), bundle_global(&module.id))
@@ -363,6 +380,56 @@ export async function render(request) {{
     throw new TypeError("Zap page module must export a default function");
   }}
   return normalizeZapOutput(await renderPage(request));
+}}
+"#
+    );
+    fs::write(&entry, body).with_context(|| format!("write {}", entry.display()))?;
+    Ok(entry)
+}
+
+fn write_route_handler_server_entry(
+    root: &Path,
+    out_dir: &Path,
+    module: &ModuleRef,
+    source_entry: &Path,
+    methods: &[String],
+) -> Result<PathBuf> {
+    let entry = absolute(root, out_dir)
+        .join("entries/server")
+        .join(format!("{}.js", module.id));
+    let parent = entry
+        .parent()
+        .context("generated route handler server entry needs a parent directory")?;
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let source = js_string(&source_entry.to_string_lossy());
+    let allowed = methods
+        .iter()
+        .map(|method| format!("\"{}\"", js_string(method)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let body = format!(
+        r#"import * as routeModule from "{source}";
+
+const allowedMethods = [{allowed}];
+
+function normalizeZapOutput(value) {{
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
+  throw new TypeError("Zap route output must be text or a ReadableStream until the Response adapter is installed");
+}}
+
+export async function handle(request) {{
+  const method = String(request && request.method || "").toUpperCase();
+  if (!allowedMethods.includes(method)) {{
+    throw new TypeError(`Zap route handler does not export ${{method || "a request method"}}`);
+  }}
+  const handler = routeModule[method];
+  if (typeof handler !== "function") {{
+    throw new TypeError(`Zap route handler export ${{method}} must be a function`);
+  }}
+  return normalizeZapOutput(await handler(request));
 }}
 "#
     );
@@ -985,6 +1052,7 @@ const hidden = 1;
         let temp = tempfile::tempdir().unwrap();
         let app = temp.path().join("app");
         fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(app.join("api/echo")).unwrap();
         fs::write(
             app.join("page.tsx"),
             "export const dynamic = 'force-dynamic';
@@ -996,6 +1064,12 @@ export default function Page(request){ return `home:${request.path}`; }
             app.join("client.tsx"),
             "'use client';
 export function Counter(){ return '1'; }
+",
+        )
+        .unwrap();
+        fs::write(
+            app.join("api/echo/route.ts"),
+            "export function POST(request){ return `echo:${request.method}:${request.path}`; }
 ",
         )
         .unwrap();
@@ -1012,6 +1086,8 @@ export function Counter(){ return '1'; }
         let compiled = CompiledManifest::load(&output.manifest).unwrap();
         let matched = compiled.resolve("/").unwrap().unwrap();
         assert_eq!(matched.route.module, "page");
+        let handler = compiled.resolve("/api/echo").unwrap().unwrap();
+        assert_eq!(handler.route.module, "api/echo/route");
 
         let server_outputs = output
             .bundles
@@ -1023,17 +1099,28 @@ export function Counter(){ return '1'; }
             .iter()
             .filter(|bundle| bundle.target == BuiltBundleTarget::Browser)
             .count();
-        assert_eq!(server_outputs, 1);
+        assert_eq!(server_outputs, 2);
         assert_eq!(browser_outputs, 1);
         let page_bundle = temp.path().join(".zap/server/page.js");
+        let route_bundle = temp.path().join(".zap/server/api/echo/route.js");
         assert!(page_bundle.is_file());
+        assert!(route_bundle.is_file());
         assert!(!temp.path().join(".zap/server/client.js").exists());
         assert!(temp.path().join(".zap/browser/client.js").is_file());
         assert!(temp.path().join(".zap/entries/server/page.js").is_file());
+        assert!(
+            temp.path()
+                .join(".zap/entries/server/api/echo/route.js")
+                .is_file()
+        );
         let rendered = Renderer::new(fs::read_to_string(page_bundle).unwrap())
             .render(r#"{"path":"/"}"#)
             .unwrap();
         assert_eq!(rendered, "home:/");
+        let handled = Renderer::new(fs::read_to_string(route_bundle).unwrap())
+            .handle_route(r#"{"method":"POST","path":"/api/echo"}"#)
+            .unwrap();
+        assert_eq!(handled, "echo:POST:/api/echo");
     }
 
     #[tokio::test]
