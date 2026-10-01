@@ -582,6 +582,9 @@ fn unavailable_platform_global(text: &str) -> Option<String> {
         if let Some(value) = ambient_platform_global_probe(&tokens, index) {
             return Some(value);
         }
+        if let Some(value) = destructured_platform_global_from_global_object(&tokens, index) {
+            return Some(value);
+        }
         let JsToken::Ident(value) = token else {
             return None;
         };
@@ -632,6 +635,41 @@ fn ambient_platform_global_probe(tokens: &[JsToken], index: usize) -> Option<Str
         return None;
     }
     Some(value.clone())
+}
+
+fn destructured_platform_global_from_global_object(
+    tokens: &[JsToken],
+    index: usize,
+) -> Option<String> {
+    if !matches!(tokens.get(index), Some(JsToken::Punct('{'))) {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut candidate = None::<String>;
+    for cursor in index..tokens.len() {
+        match tokens.get(cursor) {
+            Some(JsToken::Punct('{')) => depth += 1,
+            Some(JsToken::Punct('}')) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return if matches!(tokens.get(cursor + 1), Some(JsToken::Punct('=')))
+                        && matches!(tokens.get(cursor + 2), Some(JsToken::Ident(root)) if is_global_object_name(root))
+                    {
+                        candidate
+                    } else {
+                        None
+                    };
+                }
+            }
+            Some(JsToken::Ident(value)) | Some(JsToken::String(value)) if depth == 1 => {
+                if is_unavailable_platform_global_name(value) {
+                    candidate = Some(value.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn is_ambient_platform_global_reference(tokens: &[JsToken], index: usize) -> bool {
@@ -2179,6 +2217,14 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
             (
                 "global_probe_process.ts",
                 "export const value = 'process' in globalThis;",
+            ),
+            (
+                "global_destructure_process.ts",
+                "const { process } = globalThis; export const value = process;",
+            ),
+            (
+                "global_destructure_alias_buffer.ts",
+                "const { Buffer: Bytes } = globalThis; export const value = Bytes;",
             ),
             (
                 "module_exports.ts",
