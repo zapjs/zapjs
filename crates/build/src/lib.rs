@@ -249,6 +249,7 @@ fn validate_local_module(root: &Path, path: &Path, visited: &mut BTreeSet<PathBu
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum JsToken {
     Ident(String),
+    Number(String),
     String(String),
     Punct(char),
 }
@@ -319,6 +320,18 @@ fn js_tokens(text: &str) -> Vec<JsToken> {
         }
         if ch == '\'' || ch == '"' {
             tokens.push(JsToken::String(read_js_string(ch, &mut chars)));
+            continue;
+        }
+        if ch.is_ascii_digit() {
+            let mut number = String::from(ch);
+            while let Some((_, next)) = chars.peek().copied() {
+                if !next.is_ascii_digit() {
+                    break;
+                }
+                number.push(next);
+                chars.next();
+            }
+            tokens.push(JsToken::Number(number));
             continue;
         }
         if ch == '`' {
@@ -1100,31 +1113,28 @@ fn layout_chain(dir: &Path, layouts: &BTreeMap<PathBuf, LayoutRef>) -> Vec<Strin
 
 fn parse_cache_policy(text: &str) -> Result<CachePolicy> {
     let mut policy = CachePolicy::default();
-    for line in text.lines().map(str::trim) {
-        if let Some(value) = line.strip_prefix("export const dynamic") {
-            let Some(value) = export_literal(value) else {
-                continue;
-            };
-            policy.dynamic = match value {
-                "auto" => DynamicPolicy::Auto,
-                "force-static" => DynamicPolicy::ForceStatic,
-                "force-dynamic" => DynamicPolicy::ForceDynamic,
-                other => bail!("invalid dynamic value: {other}"),
-            };
-        }
-        if let Some(value) = line.strip_prefix("export const revalidate") {
-            let Some((_, rhs)) = value.split_once('=') else {
-                continue;
-            };
-            let rhs = rhs.trim().trim_end_matches(';').trim();
-            if rhs == "false" {
+    for (name, value) in exported_const_values(text) {
+        match (name.as_str(), value) {
+            ("dynamic", JsToken::String(value)) => {
+                policy.dynamic = match value.as_str() {
+                    "auto" => DynamicPolicy::Auto,
+                    "force-static" => DynamicPolicy::ForceStatic,
+                    "force-dynamic" => DynamicPolicy::ForceDynamic,
+                    other => bail!("invalid dynamic value: {other}"),
+                };
+            }
+            ("revalidate", JsToken::Ident(value)) if value == "false" => {
                 policy.revalidate_seconds = None;
-            } else {
+            }
+            ("revalidate", JsToken::Number(value)) => {
                 policy.revalidate_seconds = Some(
-                    rhs.parse::<u64>()
-                        .with_context(|| format!("invalid revalidate value: {rhs}"))?,
+                    value
+                        .parse::<u64>()
+                        .with_context(|| format!("invalid revalidate value: {value}"))?,
                 );
             }
+            ("revalidate", value) => bail!("invalid revalidate value: {value:?}"),
+            _ => {}
         }
     }
     if policy.dynamic == DynamicPolicy::ForceDynamic && policy.revalidate_seconds.is_some() {
@@ -1133,15 +1143,33 @@ fn parse_cache_policy(text: &str) -> Result<CachePolicy> {
     Ok(policy)
 }
 
-fn export_literal(value: &str) -> Option<&str> {
-    let (_, rhs) = value.split_once('=')?;
-    let rhs = rhs.trim().trim_end_matches(';').trim();
-    rhs.strip_prefix('\'')
-        .and_then(|value| value.strip_suffix('\''))
-        .or_else(|| {
-            rhs.strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-        })
+fn exported_const_values(text: &str) -> Vec<(String, JsToken)> {
+    let tokens = js_tokens(text);
+    let mut values = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        if !matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "export") {
+            index += 1;
+            continue;
+        }
+        if !matches!(tokens.get(index + 1), Some(JsToken::Ident(value)) if value == "const") {
+            index += 1;
+            continue;
+        }
+        let Some(JsToken::Ident(name)) = tokens.get(index + 2) else {
+            index += 1;
+            continue;
+        };
+        if !matches!(tokens.get(index + 3), Some(JsToken::Punct('='))) {
+            index += 1;
+            continue;
+        }
+        if let Some(value) = tokens.get(index + 4) {
+            values.push((name.clone(), value.clone()));
+        }
+        index += 5;
+    }
+    values
 }
 
 fn route_handler_methods(text: &str) -> Result<Vec<String>> {
@@ -1389,6 +1417,37 @@ export default function Page(){}
             error.contains("force-dynamic routes cannot declare revalidate"),
             "{error}"
         );
+
+        fs::write(
+            app.join("page.tsx"),
+            "export const dynamic =
+  'force-dynamic';
+export const revalidate =
+  60;
+export default function Page(){}
+",
+        )
+        .unwrap();
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("force-dynamic routes cannot declare revalidate"),
+            "{error}"
+        );
+
+        fs::write(
+            app.join("page.tsx"),
+            "export const revalidate =
+  seconds;
+export default function Page(){}
+",
+        )
+        .unwrap();
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("invalid revalidate value"), "{error}");
     }
 
     #[test]
