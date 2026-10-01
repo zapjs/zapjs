@@ -9,10 +9,10 @@ description = "Rust-owned React and TypeScript compilation for ZapJS"
 [dependencies]
 anyhow = "1"
 rolldown = "=1.2.12"
+serde_json = "1"
 zap-runtime = { path = "../runtime" }
 
 [dev-dependencies]
-serde_json = "1"
 http = "1"
 zap-render = { path = "../render" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

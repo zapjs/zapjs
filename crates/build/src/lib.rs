@@ -1002,6 +1002,10 @@ impl GraphOptions {
     pub fn manifest_path(&self) -> PathBuf {
         self.out_dir.join("manifest.json")
     }
+
+    pub fn deployment_path(&self) -> PathBuf {
+        self.out_dir.join("deployment.json")
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1046,6 +1050,7 @@ pub struct ApplicationBuildOutput {
     pub graph: ApplicationGraph,
     pub manifest: PathBuf,
     pub action_proxy: Option<PathBuf>,
+    pub deployment: PathBuf,
     pub bundles: Vec<BuiltBundle>,
 }
 
@@ -1162,10 +1167,13 @@ pub async fn build_application(
         .map(|_| options.graph.out_dir.join("browser/actions.js"));
     let manifest = absolute(&root, &options.graph.manifest_path());
     write_manifest_atomically(&graph, &manifest)?;
+    let deployment = absolute(&root, &options.graph.deployment_path());
+    write_deployment_manifest_atomically(&graph, &deployment, &options.graph.manifest_path())?;
     Ok(ApplicationBuildOutput {
         graph,
         manifest,
         action_proxy,
+        deployment,
         bundles,
     })
 }
@@ -1420,15 +1428,91 @@ fn js_string(value: &str) -> String {
 }
 
 pub fn write_manifest_atomically(graph: &ApplicationGraph, path: &Path) -> Result<()> {
+    write_json_atomically(path, &graph.to_manifest_json()?, "application manifest")
+}
+
+fn write_deployment_manifest_atomically(
+    graph: &ApplicationGraph,
+    path: &Path,
+    manifest_path: &Path,
+) -> Result<()> {
+    write_json_atomically(
+        path,
+        &deployment_manifest_json(graph, manifest_path)?,
+        "deployment manifest",
+    )
+}
+
+fn deployment_manifest_json(graph: &ApplicationGraph, manifest_path: &Path) -> Result<String> {
+    let server_bundles = graph
+        .modules
+        .iter()
+        .filter_map(|module| {
+            module.server_bundle.as_ref().map(|bundle| {
+                serde_json::json!({
+                    "module": module.id,
+                    "kind": module_kind_name(&module.kind),
+                    "path": bundle,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut browser_assets = graph
+        .modules
+        .iter()
+        .filter_map(|module| module.browser_chunk.clone())
+        .collect::<BTreeSet<_>>();
+    if let Some(action_proxy) = &graph.action_proxy {
+        browser_assets.insert(action_proxy.clone());
+    }
+    let browser_assets = browser_assets.into_iter().collect::<Vec<_>>();
+
+    let static_assets = graph
+        .assets
+        .iter()
+        .map(|asset| {
+            serde_json::json!({
+                "source": asset.source,
+                "url_path": asset.url_path,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let action_endpoint = (!graph.actions.is_empty()).then_some("/_zap/action");
+    let manifest = serde_json::json!({
+        "schema": "zap.deployment.v1",
+        "manifest": manifest_path,
+        "action_endpoint": action_endpoint,
+        "action_proxy": graph.action_proxy,
+        "server_bundles": server_bundles,
+        "browser_assets": browser_assets,
+        "static_assets": static_assets,
+        "routes": graph.routes.len(),
+        "actions": graph.actions.len(),
+        "client_references": graph.client_references.len(),
+    });
+    Ok(serde_json::to_string_pretty(&manifest)?)
+}
+
+fn module_kind_name(kind: &ModuleKind) -> &'static str {
+    match kind {
+        ModuleKind::Server => "server",
+        ModuleKind::Client => "client",
+        ModuleKind::ServerActions => "server-actions",
+    }
+}
+
+fn write_json_atomically(path: &Path, json: &str, label: &str) -> Result<()> {
     let parent = path
         .parent()
-        .context("application manifest needs a parent directory")?;
+        .with_context(|| format!("{label} needs a parent directory"))?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     let temporary = path.with_extension("json.tmp");
     {
         let mut file = fs::File::create(&temporary)
             .with_context(|| format!("create {}", temporary.display()))?;
-        file.write_all(graph.to_manifest_json()?.as_bytes())
+        file.write_all(json.as_bytes())
             .with_context(|| format!("write {}", temporary.display()))?;
         file.write_all(b"\n")
             .with_context(|| format!("finish {}", temporary.display()))?;
@@ -3074,7 +3158,10 @@ export type { IgnoredAction };
     async fn build_application_writes_manifest_and_bundles_graph_outputs() {
         let temp = tempfile::tempdir().unwrap();
         let app = temp.path().join("app");
+        let public = temp.path().join("public");
         fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&public).unwrap();
+        fs::write(public.join("logo.txt"), "zap").unwrap();
         fs::create_dir_all(app.join("api/echo")).unwrap();
         fs::create_dir_all(app.join("api/ping")).unwrap();
         fs::write(
@@ -3130,10 +3217,47 @@ export const Label = 'count';
 
         assert!(output.manifest.ends_with(Path::new(".zap/manifest.json")));
         assert!(output.manifest.is_file());
+        assert!(
+            output
+                .deployment
+                .ends_with(Path::new(".zap/deployment.json"))
+        );
+        assert!(output.deployment.is_file());
         let manifest = fs::read_to_string(&output.manifest).unwrap();
         assert!(manifest.contains("ForceDynamic"));
         assert!(manifest.contains(".zap/server/page.js"));
         assert!(manifest.contains(".zap/browser/actions.js"));
+        let deployment: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&output.deployment).unwrap()).unwrap();
+        assert_eq!(deployment["schema"], "zap.deployment.v1");
+        assert_eq!(deployment["manifest"], ".zap/manifest.json");
+        assert_eq!(deployment["action_endpoint"], "/_zap/action");
+        assert_eq!(deployment["action_proxy"], ".zap/browser/actions.js");
+        assert_eq!(deployment["routes"], 3);
+        assert_eq!(deployment["actions"], 1);
+        assert_eq!(deployment["client_references"], 2);
+        assert_eq!(deployment["server_bundles"].as_array().unwrap().len(), 4);
+        assert!(deployment["server_bundles"].as_array().unwrap().iter().any(
+            |entry| entry["module"] == "actions"
+                && entry["kind"] == "server-actions"
+                && entry["path"] == ".zap/server/actions.js"
+        ));
+        assert!(
+            deployment["browser_assets"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(".zap/browser/actions.js"))
+        );
+        assert!(
+            deployment["browser_assets"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(".zap/browser/client.js"))
+        );
+        assert_eq!(
+            deployment["static_assets"],
+            serde_json::json!([{ "source": "logo.txt", "url_path": "/logo.txt" }])
+        );
         let compiled = CompiledManifest::load(&output.manifest).unwrap();
         let matched = compiled.resolve("/").unwrap().unwrap();
         assert_eq!(matched.route.module, "page");

@@ -223,6 +223,7 @@ fn print_build_summary(output: &zap_build::ApplicationBuildOutput) {
         .sum::<usize>();
 
     println!("manifest={}", output.manifest.display());
+    println!("deployment={}", output.deployment.display());
     if let Some(action_proxy) = &output.action_proxy {
         println!("action_proxy={}", action_proxy.display());
     }
@@ -391,6 +392,7 @@ mod tests {
         .unwrap();
 
         assert!(temp.path().join(".zap/manifest.json").is_file());
+        assert!(temp.path().join(".zap/deployment.json").is_file());
         assert!(temp.path().join(".zap/server/api/echo/route.js").is_file());
     }
 
