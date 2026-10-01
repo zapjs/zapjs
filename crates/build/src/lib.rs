@@ -606,11 +606,14 @@ fn is_ambient_platform_global_reference(tokens: &[JsToken], index: usize) -> boo
 }
 
 fn is_non_reference_identifier(tokens: &[JsToken], index: usize) -> bool {
-    if matches!(tokens.get(index + 1), Some(JsToken::Punct(':'))) {
+    if matches!(tokens.get(index + 1), Some(JsToken::Punct(':')))
+        && is_object_member_prefix(tokens, index)
+    {
         return true;
     }
     if matches!(tokens.get(index + 1), Some(JsToken::Punct('?')))
         && matches!(tokens.get(index + 2), Some(JsToken::Punct(':')))
+        && is_object_member_prefix(tokens, index)
     {
         return true;
     }
@@ -2098,6 +2101,10 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
             (
                 "buffer_global.ts",
                 "export const value = Buffer.from('zap');",
+            ),
+            (
+                "ternary_process.ts",
+                "const enabled = true; export const value = enabled ? process : null;",
             ),
             (
                 "module_exports.ts",
