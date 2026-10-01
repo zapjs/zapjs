@@ -18,7 +18,7 @@ HTML SSR, React Server Components, Flight payloads, client references, action ID
 
 ## Route handlers and server actions
 
-Route handlers and server actions must pass through Rust-owned admission before dispatch. The current runtime proves method, origin/action, malformed-origin, body-size, request-context, auth-state, deadline and public-cache privacy checks and cache-control header decisions; application-specific authorization hooks remain a release gate before mutation paths can be called production-complete.
+Route handlers and server actions must pass through Rust-owned admission before dispatch. The current runtime proves method, origin/action, malformed-origin, body-size, request-context, auth-state, deadline, public-cache privacy checks, cache-control header decisions and application authorization hooks before mutation paths execute.
 
 Application capabilities are Rust functions or explicit React-host operations. Errors that cross a public boundary must preserve useful diagnostics for operators without leaking private values to the browser.
 
@@ -42,7 +42,7 @@ The current Rust crates prove foundation behavior and initial Rust request admis
 - bounded Splice transport behavior;
 - embedded JavaScript execution with page, route-handler and server-action entrypoints, route/action `Response` status/header validation and body adaptation, typed route/action error-boundary outcomes, streams, explicit host calls, absence of ambient platform capabilities, output limits and CPU interruption;
 - Rust artifact execution that loads the built manifest, admits requests/actions through `zap-runtime`, enforces execution context policy and application authorization hooks, serves static assets and runs page, route-handler and server-action bundles through `zap-render`;
-- Rust-only TSX bundling for browser and server outputs, including unsupported platform-module rejection, ambient platform-global rejection across direct, optional, literal and statically computed bracketed, probe and destructured references, static template module-specifier scanning, local type-only import/export elision, dependency-only helper/type module exclusion, non-static dynamic-import rejection and regex-literal/non-reference identifier false-positive protection;
+- Rust-only TSX bundling for browser and server outputs, manifest-owned browser action-proxy emission, including unsupported platform-module rejection, ambient platform-global rejection across direct, optional, literal and statically computed bracketed, probe and destructured references, static template module-specifier scanning, local type-only import/export elision, dependency-only helper/type module exclusion, non-static dynamic-import rejection and regex-literal/non-reference identifier false-positive protection;
 - native `zap check` and `zap build` commands, which validate the Rust application graph and drive the Rust build path that writes the runtime manifest and bundles.
 
-The full runtime still needs full SSR/RSC/hydration/navigation integration, React action wiring, managed native deployment verification and the remaining development/deploy workflow.
+The full runtime still needs full SSR/RSC/hydration/navigation integration, hydrated React action execution verified in-browser, managed native deployment verification and the remaining development/deploy workflow.

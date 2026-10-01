@@ -223,6 +223,9 @@ fn print_build_summary(output: &zap_build::ApplicationBuildOutput) {
         .sum::<usize>();
 
     println!("manifest={}", output.manifest.display());
+    if let Some(action_proxy) = &output.action_proxy {
+        println!("action_proxy={}", action_proxy.display());
+    }
     println!("routes={}", output.graph.routes.len());
     println!("modules={}", output.graph.modules.len());
     println!("server_bundles={server_bundles}");

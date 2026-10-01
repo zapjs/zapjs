@@ -114,6 +114,8 @@ pub struct ApplicationManifest {
     pub layouts: Vec<LayoutRef>,
     pub modules: Vec<ModuleRef>,
     pub actions: Vec<ActionRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_proxy: Option<PathBuf>,
     pub client_references: Vec<ClientReference>,
     pub assets: Vec<AssetRef>,
 }
@@ -173,6 +175,8 @@ pub enum ManifestError {
     InvalidActionExport { action: String, export: String },
     #[error("action {action} id does not match module/export identity")]
     InvalidActionId { action: String },
+    #[error("action proxy has an unsafe bundle path: {path}")]
+    InvalidActionProxyPath { path: PathBuf },
     #[error("client reference {reference} references missing module {module}")]
     MissingClientReferenceModule { reference: String, module: String },
     #[error("client reference {reference} references non-client module {module}")]
@@ -296,6 +300,14 @@ impl CompiledManifest {
                 return Err(ManifestError::InvalidActionExport {
                     action: action.id.clone(),
                     export: action.export.clone(),
+                });
+            }
+        }
+
+        if let Some(action_proxy) = &manifest.action_proxy {
+            if !is_safe_manifest_path(action_proxy) {
+                return Err(ManifestError::InvalidActionProxyPath {
+                    path: action_proxy.clone(),
                 });
             }
         }
@@ -590,6 +602,10 @@ impl CompiledManifest {
             .map(|index| &self.manifest.actions[*index])
     }
 
+    pub fn action_proxy(&self) -> Option<&Path> {
+        self.manifest.action_proxy.as_deref()
+    }
+
     pub fn client_reference(&self, id: &str) -> Option<&ClientReference> {
         self.client_reference_indexes
             .get(id)
@@ -613,6 +629,9 @@ impl CompiledManifest {
                 export: reference.export.clone(),
                 browser_chunk: reference.browser_chunk.clone(),
             });
+        }
+        if let Some(action_proxy) = &self.manifest.action_proxy {
+            browser_chunks.insert(action_proxy.clone());
         }
         Ok(RouteHydration {
             client_references,
@@ -760,6 +779,7 @@ mod tests {
                 export: "save".into(),
                 path: PathBuf::from("shop/[id]/actions.ts"),
             }],
+            action_proxy: Some(PathBuf::from(".zap/browser/actions.js")),
             client_references: vec![ClientReference {
                 id: "client:shop/_id_/counter#Counter".into(),
                 module: "shop/_id_/counter".into(),
@@ -794,10 +814,17 @@ mod tests {
                 .browser_chunk,
             PathBuf::from(".zap/browser/shop/_id_/counter.js")
         );
+        assert_eq!(
+            compiled.action_proxy().unwrap(),
+            Path::new(".zap/browser/actions.js")
+        );
         let hydration = compiled.route_hydration(matched.route).unwrap();
         assert_eq!(
             hydration.browser_chunks,
-            vec![PathBuf::from(".zap/browser/shop/_id_/counter.js")]
+            vec![
+                PathBuf::from(".zap/browser/actions.js"),
+                PathBuf::from(".zap/browser/shop/_id_/counter.js")
+            ]
         );
         assert_eq!(hydration.client_references[0].export, "Counter");
         let asset = compiled.asset("/images/logo.svg").unwrap();
@@ -950,6 +977,13 @@ mod tests {
         assert!(matches!(
             CompiledManifest::new(invalid_action_id).unwrap_err(),
             ManifestError::InvalidActionId { .. }
+        ));
+
+        let mut unsafe_action_proxy = manifest();
+        unsafe_action_proxy.action_proxy = Some(PathBuf::from("../actions.js"));
+        assert!(matches!(
+            CompiledManifest::new(unsafe_action_proxy).unwrap_err(),
+            ManifestError::InvalidActionProxyPath { .. }
         ));
 
         let mut duplicate_client_reference = manifest();

@@ -793,6 +793,7 @@ mod tests {
                 export: "save".into(),
                 path: PathBuf::from("actions.ts"),
             }],
+            action_proxy: None,
             client_references: Vec::new(),
             assets: vec![AssetRef {
                 source: PathBuf::from("images/logo.svg"),

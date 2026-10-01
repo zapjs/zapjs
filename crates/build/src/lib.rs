@@ -1045,13 +1045,14 @@ pub struct BuiltBundle {
 pub struct ApplicationBuildOutput {
     pub graph: ApplicationGraph,
     pub manifest: PathBuf,
+    pub action_proxy: Option<PathBuf>,
     pub bundles: Vec<BuiltBundle>,
 }
 
 pub async fn build_application(
     options: &ApplicationBuildOptions,
 ) -> Result<ApplicationBuildOutput> {
-    let graph = build_application_graph(&options.graph)?;
+    let mut graph = build_application_graph(&options.graph)?;
     let root = options
         .graph
         .root
@@ -1155,11 +1156,16 @@ pub async fn build_application(
         }
     }
 
+    let action_proxy = write_action_proxy(&root, &options.graph.out_dir, &graph.actions)?;
+    graph.action_proxy = action_proxy
+        .as_ref()
+        .map(|_| options.graph.out_dir.join("browser/actions.js"));
     let manifest = absolute(&root, &options.graph.manifest_path());
     write_manifest_atomically(&graph, &manifest)?;
     Ok(ApplicationBuildOutput {
         graph,
         manifest,
+        action_proxy,
         bundles,
     })
 }
@@ -1313,6 +1319,96 @@ export async function invoke(invocation) {{
     );
     fs::write(&entry, body).with_context(|| format!("write {}", entry.display()))?;
     Ok(entry)
+}
+
+fn write_action_proxy(
+    root: &Path,
+    out_dir: &Path,
+    actions: &[ActionRef],
+) -> Result<Option<PathBuf>> {
+    if actions.is_empty() {
+        return Ok(None);
+    }
+
+    let proxy = absolute(root, out_dir).join("browser/actions.js");
+    let parent = proxy
+        .parent()
+        .context("generated action proxy needs a parent directory")?;
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+
+    let mut entries = Vec::with_capacity(actions.len());
+    for action in actions {
+        entries.push(format!(
+            "  \"{}\": Object.freeze({{ id: \"{}\", module: \"{}\", export: \"{}\" }})",
+            js_string(&action.id),
+            js_string(&action.id),
+            js_string(&action.module),
+            js_string(&action.export),
+        ));
+    }
+    let entries = entries.join(",\n");
+    let body = format!(
+        r#"const actionRegistry = Object.freeze({{
+{entries}
+}});
+
+function hasOwn(value, key) {{
+  return Object.prototype.hasOwnProperty.call(value, key);
+}}
+
+function resolveAction(action) {{
+  const id = typeof action === "string" ? action : action && action.id;
+  if (typeof id !== "string" || id.length === 0) {{
+    throw new TypeError("Zap action calls require an action id");
+  }}
+  if (!hasOwn(actionRegistry, id)) {{
+    throw new TypeError(`Unknown Zap action: ${{id}}`);
+  }}
+  return actionRegistry[id];
+}}
+
+export const actions = actionRegistry;
+
+export function actionId(module, exportName) {{
+  for (const action of Object.values(actionRegistry)) {{
+    if (action.module === module && action.export === exportName) {{
+      return action.id;
+    }}
+  }}
+  throw new TypeError(`Unknown Zap action export: ${{module}}#${{exportName}}`);
+}}
+
+export function bindAction(action, options = {{}}) {{
+  const resolved = resolveAction(action);
+  return (...args) => invokeAction(resolved.id, args, options);
+}}
+
+export async function invokeAction(action, args = [], options = {{}}) {{
+  const resolved = resolveAction(action);
+  if (!Array.isArray(args)) {{
+    throw new TypeError("Zap action args must be an array");
+  }}
+
+  const endpoint = typeof options.endpoint === "string" && options.endpoint.length > 0
+    ? options.endpoint
+    : "/_zap/action";
+  const headers = Object.assign({{ "content-type": "application/json" }}, options.headers || {{}});
+  const response = await fetch(endpoint, {{
+    method: "POST",
+    credentials: options.credentials || "same-origin",
+    headers,
+    body: JSON.stringify({{ action_id: resolved.id, args }})
+  }});
+
+  if (!response.ok && options.throwOnError !== false) {{
+    throw new Error(`Zap action failed: ${{response.status}}`);
+  }}
+  return response;
+}}
+"#
+    );
+    fs::write(&proxy, body).with_context(|| format!("write {}", proxy.display()))?;
+    Ok(Some(proxy))
 }
 
 fn js_string(value: &str) -> String {
@@ -1607,6 +1703,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
         layouts,
         modules: module_refs,
         actions,
+        action_proxy: None,
         client_references,
         assets,
     };
@@ -3036,13 +3133,17 @@ export const Label = 'count';
         let manifest = fs::read_to_string(&output.manifest).unwrap();
         assert!(manifest.contains("ForceDynamic"));
         assert!(manifest.contains(".zap/server/page.js"));
+        assert!(manifest.contains(".zap/browser/actions.js"));
         let compiled = CompiledManifest::load(&output.manifest).unwrap();
         let matched = compiled.resolve("/").unwrap().unwrap();
         assert_eq!(matched.route.module, "page");
         let hydration = compiled.route_hydration(matched.route).unwrap();
         assert_eq!(
             hydration.browser_chunks,
-            vec![PathBuf::from(".zap/browser/client.js")]
+            vec![
+                PathBuf::from(".zap/browser/actions.js"),
+                PathBuf::from(".zap/browser/client.js")
+            ]
         );
         assert_eq!(
             hydration
@@ -3073,10 +3174,30 @@ export const Label = 'count';
         let route_bundle = temp.path().join(".zap/server/api/echo/route.js");
         let get_route_bundle = temp.path().join(".zap/server/api/ping/route.js");
         let action_bundle = temp.path().join(".zap/server/actions.js");
+        let action_proxy = temp.path().join(".zap/browser/actions.js");
+        let output_action_proxy = output.action_proxy.as_deref().unwrap();
+        assert!(output_action_proxy.ends_with(Path::new(".zap/browser/actions.js")));
+        assert_eq!(
+            output.graph.action_proxy.as_deref(),
+            Some(Path::new(".zap/browser/actions.js"))
+        );
+        assert_eq!(
+            compiled.action_proxy(),
+            Some(Path::new(".zap/browser/actions.js"))
+        );
         assert!(page_bundle.is_file());
         assert!(route_bundle.is_file());
         assert!(get_route_bundle.is_file());
         assert!(action_bundle.is_file());
+        assert!(action_proxy.is_file());
+        let action_proxy_source = fs::read_to_string(&action_proxy).unwrap();
+        assert!(action_proxy_source.contains("action:actions#save"));
+        assert!(action_proxy_source.contains("export async function invokeAction"));
+        assert!(action_proxy_source.contains("/_zap/action"));
+        assert!(action_proxy_source.contains("action_id: resolved.id"));
+        assert!(
+            action_proxy_source.contains("credentials: options.credentials || \"same-origin\"")
+        );
         assert!(!temp.path().join(".zap/server/client.js").exists());
         assert!(temp.path().join(".zap/browser/client.js").is_file());
         assert_eq!(compiled.manifest().client_references.len(), 2);
