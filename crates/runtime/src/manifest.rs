@@ -140,6 +140,10 @@ pub enum ManifestError {
     InvalidLayoutPath { layout: String, path: PathBuf },
     #[error("action {action} has an unsafe source path: {path}")]
     InvalidActionPath { action: String, path: PathBuf },
+    #[error("action {action} has an invalid export name: {export}")]
+    InvalidActionExport { action: String, export: String },
+    #[error("action {action} id does not match module/export identity")]
+    InvalidActionId { action: String },
     #[error("route {route} has an unsafe source path: {path}")]
     InvalidRouteSource { route: String, path: PathBuf },
     #[error("duplicate module identifier: {0}")]
@@ -234,6 +238,12 @@ impl CompiledManifest {
                 return Err(ManifestError::InvalidActionPath {
                     action: action.id.clone(),
                     path: action.path.clone(),
+                });
+            }
+            if !is_valid_action_export(&action.export) {
+                return Err(ManifestError::InvalidActionExport {
+                    action: action.id.clone(),
+                    export: action.export.clone(),
                 });
             }
         }
@@ -351,6 +361,11 @@ impl CompiledManifest {
                     module: module.id.clone(),
                 });
             }
+            if action.id != stable_action_id(&action.module, &action.export) {
+                return Err(ManifestError::InvalidActionId {
+                    action: action.id.clone(),
+                });
+            }
         }
 
         let runtime_routes = manifest
@@ -428,6 +443,16 @@ impl CompiledManifest {
             params: matched.params,
         }))
     }
+}
+
+fn is_valid_action_export(export: &str) -> bool {
+    let mut chars = export.chars();
+    matches!(chars.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
+}
+
+fn stable_action_id(module: &str, export: &str) -> String {
+    format!("action:{module}#{export}")
 }
 
 fn is_valid_route_methods(route: &RouteEntry) -> bool {
@@ -635,6 +660,21 @@ mod tests {
         assert!(matches!(
             CompiledManifest::new(invalid_action_module).unwrap_err(),
             ManifestError::InvalidActionModuleKind { .. }
+        ));
+
+        let mut invalid_action_export = manifest();
+        invalid_action_export.actions[0].export = "1save".into();
+        invalid_action_export.actions[0].id = "action:shop/_id_/actions#1save".into();
+        assert!(matches!(
+            CompiledManifest::new(invalid_action_export).unwrap_err(),
+            ManifestError::InvalidActionExport { .. }
+        ));
+
+        let mut invalid_action_id = manifest();
+        invalid_action_id.actions[0].id = "save".into();
+        assert!(matches!(
+            CompiledManifest::new(invalid_action_id).unwrap_err(),
+            ManifestError::InvalidActionId { .. }
         ));
 
         let mut invalid_route_module = manifest();
