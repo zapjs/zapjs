@@ -1,6 +1,6 @@
 # Implementation evidence
 
-Verified October 1, 2026 for the Rust-owned foundation. This page records what is currently proven and what remains open.
+Verified October 1, 2026 for the implemented React-plus-Rust framework surface. This page records what is currently proven and the evidence boundary for future claims.
 
 ## Corrective Rust layer
 

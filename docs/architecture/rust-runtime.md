@@ -27,7 +27,7 @@ Performance choices require measurements of the complete path: cold start, warm 
 
 ## Current implementation
 
-The first Rust-only foundation crates are now present under `crates/`:
+The Rust-only production-baseline crates are present under `crates/`:
 
 - `zap-runtime` owns the shared application manifest schema, graph validation, route parsing, trie lookup, request target planning, terminal HTTP response mapping, client-reference identity validation, static asset source-path validation and unsafe path rejection.
 - `zap-splice` restores Splice as a bounded Rust transport with tested deadlines, cancellation, frame limits, credit-based response streaming, crash cleanup and subprocess behavior.

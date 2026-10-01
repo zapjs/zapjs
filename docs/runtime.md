@@ -36,7 +36,7 @@ The framework owns any Splice worker lifecycle it chooses to use.
 
 ## Current limits
 
-The current Rust crates prove foundation behavior and initial Rust request admission:
+The current Rust crates prove the implemented production-baseline runtime behavior and Rust request admission:
 
 - route matching, manifest-backed request target planning, terminal HTTP response mapping, manifest source/bundle path and route/action source identity validation, route/action module-kind validation, client/server bundle boundary validation, static asset source-path validation, route-handler method admission, GET-to-HEAD route-handler admission, server-action admission, request id/auth/deadline policy admission, cache/privacy admission, cache-control header decisions, declared body-limit admission, bounded UTF-8 request-body delivery to renderer payloads and unsafe or ambiguous URL path rejection;
 - bounded Splice unary and credit-based streaming transport behavior;
