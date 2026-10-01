@@ -146,6 +146,10 @@ pub enum ManifestError {
     InvalidActionId { action: String },
     #[error("route {route} has an unsafe source path: {path}")]
     InvalidRouteSource { route: String, path: PathBuf },
+    #[error("route {route} source path does not match module {module}")]
+    RouteSourceMismatch { route: String, module: String },
+    #[error("action {action} source path does not match module {module}")]
+    ActionSourceMismatch { action: String, module: String },
     #[error("duplicate module identifier: {0}")]
     DuplicateModule(String),
     #[error("duplicate layout identifier: {0}")]
@@ -325,6 +329,12 @@ impl CompiledManifest {
                     module: module.id.clone(),
                 });
             }
+            if route.source != module.path {
+                return Err(ManifestError::RouteSourceMismatch {
+                    route: route.id.clone(),
+                    module: module.id.clone(),
+                });
+            }
             if module.server_bundle.is_none() {
                 return Err(ManifestError::MissingServerBundle {
                     module: module.id.clone(),
@@ -359,6 +369,12 @@ impl CompiledManifest {
             };
             if module.kind != ModuleKind::ServerActions {
                 return Err(ManifestError::InvalidActionModuleKind {
+                    action: action.id.clone(),
+                    module: module.id.clone(),
+                });
+            }
+            if action.path != module.path {
+                return Err(ManifestError::ActionSourceMismatch {
                     action: action.id.clone(),
                     module: module.id.clone(),
                 });
@@ -670,6 +686,13 @@ mod tests {
             ManifestError::InvalidRouteSource { .. }
         ));
 
+        let mut mismatched_route_source = manifest();
+        mismatched_route_source.routes[0].source = PathBuf::from("other/page.tsx");
+        assert!(matches!(
+            CompiledManifest::new(mismatched_route_source).unwrap_err(),
+            ManifestError::RouteSourceMismatch { .. }
+        ));
+
         let mut unsafe_layout_path = manifest();
         unsafe_layout_path.layouts[0].path = PathBuf::from("../layout.tsx");
         assert!(matches!(
@@ -682,6 +705,13 @@ mod tests {
         assert!(matches!(
             CompiledManifest::new(unsafe_action_path).unwrap_err(),
             ManifestError::InvalidActionPath { .. }
+        ));
+
+        let mut mismatched_action_path = manifest();
+        mismatched_action_path.actions[0].path = PathBuf::from("other/actions.ts");
+        assert!(matches!(
+            CompiledManifest::new(mismatched_action_path).unwrap_err(),
+            ManifestError::ActionSourceMismatch { .. }
         ));
 
         let mut client_server_bundle = manifest();

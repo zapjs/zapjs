@@ -534,7 +534,7 @@ mod tests {
                     kind: RouteKind::Page,
                     source: PathBuf::from("public/page.tsx"),
                     layouts: vec!["layout".into()],
-                    module: "page".into(),
+                    module: "static-page".into(),
                     methods: vec!["GET".into(), "HEAD".into()],
                     cache: CachePolicy {
                         dynamic: DynamicPolicy::ForceStatic,
@@ -547,7 +547,7 @@ mod tests {
                     kind: RouteKind::Page,
                     source: PathBuf::from("account/page.tsx"),
                     layouts: vec!["layout".into()],
-                    module: "page".into(),
+                    module: "dynamic-page".into(),
                     methods: vec!["GET".into(), "HEAD".into()],
                     cache: CachePolicy {
                         dynamic: DynamicPolicy::ForceDynamic,
@@ -570,7 +570,7 @@ mod tests {
                     kind: RouteKind::Handler,
                     source: PathBuf::from("api/ping/route.ts"),
                     layouts: Vec::new(),
-                    module: "handler".into(),
+                    module: "get-handler".into(),
                     methods: vec!["GET".into()],
                     cache: CachePolicy::default(),
                 },
@@ -589,11 +589,32 @@ mod tests {
                     server_bundle: Some(PathBuf::from(".zap/server/page.js")),
                 },
                 ModuleRef {
+                    id: "static-page".into(),
+                    path: PathBuf::from("public/page.tsx"),
+                    kind: ModuleKind::Server,
+                    browser_chunk: None,
+                    server_bundle: Some(PathBuf::from(".zap/server/static-page.js")),
+                },
+                ModuleRef {
+                    id: "dynamic-page".into(),
+                    path: PathBuf::from("account/page.tsx"),
+                    kind: ModuleKind::Server,
+                    browser_chunk: None,
+                    server_bundle: Some(PathBuf::from(".zap/server/dynamic-page.js")),
+                },
+                ModuleRef {
                     id: "handler".into(),
                     path: PathBuf::from("api/echo/route.ts"),
                     kind: ModuleKind::Server,
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/handler.js")),
+                },
+                ModuleRef {
+                    id: "get-handler".into(),
+                    path: PathBuf::from("api/ping/route.ts"),
+                    kind: ModuleKind::Server,
+                    browser_chunk: None,
+                    server_bundle: Some(PathBuf::from(".zap/server/get-handler.js")),
                 },
                 ModuleRef {
                     id: "actions".into(),
@@ -1169,7 +1190,7 @@ mod tests {
             target => panic!("unexpected target: {target:?}"),
         }
         match plan_request(&manifest, &Method::HEAD, "/api/ping").unwrap() {
-            RequestTarget::RouteHandler { route, .. } => assert_eq!(route.module, "handler"),
+            RequestTarget::RouteHandler { route, .. } => assert_eq!(route.module, "get-handler"),
             target => panic!("unexpected target: {target:?}"),
         }
         assert!(plan_request(&manifest, &Method::GET, "/shop/%").is_err());
