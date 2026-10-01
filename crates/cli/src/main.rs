@@ -24,6 +24,7 @@ enum Command {
     Build(BuildCommand),
     Check(GraphCommand),
     Package(PackageCommand),
+    Deploy(DeployCommand),
     Serve(ServeCommand),
     Help,
 }
@@ -56,6 +57,19 @@ struct PackageCommand {
     deployment: Option<PathBuf>,
     public_dir: PublicDir,
     out_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DeployCommand {
+    graph: GraphCommand,
+    target: DeployTarget,
+    out_dir: Option<PathBuf>,
+    minify: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DeployTarget {
+    LocalPackage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +121,17 @@ impl Default for PackageCommand {
     }
 }
 
+impl Default for DeployCommand {
+    fn default() -> Self {
+        Self {
+            graph: GraphCommand::default(),
+            target: DeployTarget::LocalPackage,
+            out_dir: None,
+            minify: true,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     match run(env::args_os()).await {
@@ -127,6 +152,7 @@ async fn run(args: impl IntoIterator<Item = OsString>) -> Result<()> {
         Command::Build(command) => run_build(command).await,
         Command::Check(command) => run_check(command),
         Command::Package(command) => run_package(command),
+        Command::Deploy(command) => run_deploy(command).await,
         Command::Serve(command) => run_serve(command),
     }
 }
@@ -178,6 +204,46 @@ fn run_serve(command: ServeCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn run_deploy(command: DeployCommand) -> Result<()> {
+    match command.target {
+        DeployTarget::LocalPackage => {
+            let mut options = ApplicationBuildOptions::new(&command.graph.root);
+            apply_graph_options(&mut options.graph, command.graph.clone());
+            options.minify = command.minify;
+            let output = zap_build::build_application(&options)
+                .await
+                .with_context(|| {
+                    format!(
+                        "build ZapJS deployment artifacts at {}",
+                        options.graph.root.display()
+                    )
+                })?;
+            print_build_summary(&output);
+
+            let package_dir = command
+                .out_dir
+                .clone()
+                .unwrap_or_else(|| command.graph.root.join(".zap/deploy/local-package"));
+            run_package(PackageCommand {
+                root: command.graph.root.clone(),
+                deployment: Some(output.deployment),
+                public_dir: command.graph.public_dir,
+                out_dir: Some(package_dir.clone()),
+            })?;
+            let manifest = package_dir.join(".zap/manifest.json");
+            ApplicationExecutor::load_from(&package_dir, &manifest).with_context(|| {
+                format!(
+                    "verify local-package deployment at {}",
+                    package_dir.display()
+                )
+            })?;
+            println!("deploy_target=local-package");
+            println!("deploy_root={}", package_dir.display());
+            Ok(())
+        }
+    }
 }
 
 fn run_package(command: PackageCommand) -> Result<()> {
@@ -432,6 +498,14 @@ fn parse_command(args: impl IntoIterator<Item = OsString>) -> Result<Command> {
                 parse_package(args).map(Command::Package)
             }
         }
+        "deploy" => {
+            let args = args.collect::<Vec<_>>();
+            if has_help(&args) {
+                Ok(Command::Help)
+            } else {
+                parse_deploy(args).map(Command::Deploy)
+            }
+        }
         "serve" => {
             let args = args.collect::<Vec<_>>();
             if has_help(&args) {
@@ -475,6 +549,32 @@ fn parse_serve(args: impl IntoIterator<Item = OsString>) -> Result<ServeCommand>
             "--no-public" => command.public_dir = PublicDir::Disabled,
             "--addr" => command.addr = next_value(&mut args, "--addr")?,
             other => bail!("unknown serve option `{other}`"),
+        }
+    }
+    Ok(command)
+}
+
+fn parse_deploy(args: impl IntoIterator<Item = OsString>) -> Result<DeployCommand> {
+    let mut command = DeployCommand::default();
+    let mut args = args.into_iter();
+    while let Some(flag) = args.next() {
+        match flag.to_string_lossy().as_ref() {
+            "--root" => command.graph.root = next_path(&mut args, "--root")?,
+            "--app" => command.graph.app_dir = Some(next_path(&mut args, "--app")?),
+            "--public" => {
+                command.graph.public_dir = PublicDir::Path(next_path(&mut args, "--public")?)
+            }
+            "--no-public" => command.graph.public_dir = PublicDir::Disabled,
+            "--out" => command.out_dir = Some(next_path(&mut args, "--out")?),
+            "--no-minify" => command.minify = false,
+            "--target" => {
+                let target = next_value(&mut args, "--target")?;
+                command.target = match target.as_str() {
+                    "local-package" => DeployTarget::LocalPackage,
+                    other => bail!("unsupported deploy target `{other}`"),
+                };
+            }
+            other => bail!("unknown deploy option `{other}`"),
         }
     }
     Ok(command)
@@ -836,6 +936,38 @@ mod tests {
     }
 
     #[test]
+    fn parses_explicit_deploy_paths() {
+        assert_eq!(
+            parse_command(os_args(&[
+                "zap",
+                "deploy",
+                "--target",
+                "local-package",
+                "--root",
+                "/tmp/app",
+                "--app",
+                "src/app",
+                "--public",
+                "static",
+                "--out",
+                "dist/deploy",
+                "--no-minify",
+            ]))
+            .unwrap(),
+            Command::Deploy(DeployCommand {
+                graph: GraphCommand {
+                    root: PathBuf::from("/tmp/app"),
+                    app_dir: Some(PathBuf::from("src/app")),
+                    public_dir: PublicDir::Path(PathBuf::from("static")),
+                },
+                target: DeployTarget::LocalPackage,
+                out_dir: Some(PathBuf::from("dist/deploy")),
+                minify: false,
+            })
+        );
+    }
+
+    #[test]
     fn parses_explicit_serve_paths() {
         assert_eq!(
             parse_command(os_args(&[
@@ -887,6 +1019,16 @@ mod tests {
             })
         );
         assert_eq!(
+            parse_command(os_args(&["zap", "deploy", "--no-public"])).unwrap(),
+            Command::Deploy(DeployCommand {
+                graph: GraphCommand {
+                    public_dir: PublicDir::Disabled,
+                    ..GraphCommand::default()
+                },
+                ..DeployCommand::default()
+            })
+        );
+        assert_eq!(
             parse_command(os_args(&["zap", "serve", "--no-public"])).unwrap(),
             Command::Serve(ServeCommand {
                 public_dir: PublicDir::Disabled,
@@ -907,6 +1049,10 @@ mod tests {
         );
         assert_eq!(
             parse_command(os_args(&["zap", "package", "--help"])).unwrap(),
+            Command::Help
+        );
+        assert_eq!(
+            parse_command(os_args(&["zap", "deploy", "--help"])).unwrap(),
             Command::Help
         );
         assert_eq!(
@@ -941,6 +1087,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("unknown package option"), "{error}");
+        let error = parse_command(os_args(&["zap", "deploy", "--target", "unknown"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unsupported deploy target"), "{error}");
         let error = parse_command(os_args(&["zap", "serve", "--watch"]))
             .unwrap_err()
             .to_string();
@@ -1015,6 +1165,49 @@ mod tests {
                 uses_private_request_state: false,
                 context: InvocationContext {
                     request_id: Some("package-test"),
+                    authenticated: true,
+                    deadline_ms: Some(30_000),
+                },
+            })
+            .unwrap();
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(
+            String::from_utf8(response.body).unwrap(),
+            "echo:POST:/api/echo"
+        );
+    }
+
+    #[tokio::test]
+    async fn deploy_command_builds_and_verifies_local_package_target() {
+        let temp = minimal_app();
+        let deploy_dir = temp.path().join("dist/deploy");
+
+        run_deploy(DeployCommand {
+            graph: GraphCommand {
+                root: temp.path().to_owned(),
+                public_dir: PublicDir::Disabled,
+                ..GraphCommand::default()
+            },
+            out_dir: Some(deploy_dir.clone()),
+            minify: false,
+            ..DeployCommand::default()
+        })
+        .await
+        .unwrap();
+
+        assert!(deploy_dir.join(".zap/package.json").is_file());
+        assert!(deploy_dir.join(".zap/manifest.json").is_file());
+        let executor = ApplicationExecutor::load(&deploy_dir).unwrap();
+        let response = executor
+            .execute_request(&RequestExecutionInput {
+                method: &Method::POST,
+                path: "/api/echo",
+                headers: Vec::new(),
+                body: Vec::new(),
+                declared_body_bytes: Some(0),
+                uses_private_request_state: false,
+                context: InvocationContext {
+                    request_id: Some("deploy-test"),
                     authenticated: true,
                     deadline_ms: Some(30_000),
                 },
