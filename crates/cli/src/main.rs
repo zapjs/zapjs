@@ -826,9 +826,23 @@ struct HttpRequest {
 
 fn handle_connection(executor: &ApplicationExecutor, mut stream: TcpStream) -> Result<()> {
     let request = read_http_request(&mut stream)?;
-    let response = execute_http_request(executor, &request)?;
+    let response = match execute_http_request(executor, &request) {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("request execution error: {error:#}");
+            internal_server_error()
+        }
+    };
     write_http_response(&mut stream, response)?;
     Ok(())
+}
+
+fn internal_server_error() -> ExecutionResponse {
+    ExecutionResponse {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
+        body: b"Internal Server Error".to_vec(),
+    }
 }
 
 fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
