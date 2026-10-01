@@ -249,15 +249,23 @@ fn validate_local_module(root: &Path, path: &Path, visited: &mut BTreeSet<PathBu
         );
     }
     for specifier in module_specifiers(&text) {
-        if is_unavailable_platform_specifier(&specifier) {
+        if is_unavailable_platform_specifier(&specifier.value) {
             bail!(
-                "bundle cannot depend on unavailable platform module {specifier:?} in {}",
+                "bundle cannot depend on unavailable platform module {:?} in {}",
+                specifier.value,
                 path.display()
             );
         }
-        if specifier.starts_with('.') || specifier.starts_with('/') {
-            let resolved = resolve_local_specifier(&path, &specifier).with_context(|| {
-                format!("resolve local module {specifier:?} from {}", path.display())
+        if specifier.type_only {
+            continue;
+        }
+        if specifier.value.starts_with('.') || specifier.value.starts_with('/') {
+            let resolved = resolve_local_specifier(&path, &specifier.value).with_context(|| {
+                format!(
+                    "resolve local module {:?} from {}",
+                    specifier.value,
+                    path.display()
+                )
             })?;
             validate_local_module(root, &resolved, visited)?;
         }
@@ -291,36 +299,156 @@ fn has_non_static_dynamic_import(text: &str) -> bool {
     })
 }
 
-fn module_specifiers(text: &str) -> Vec<String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ModuleSpecifier {
+    value: String,
+    type_only: bool,
+}
+
+fn module_specifiers(text: &str) -> Vec<ModuleSpecifier> {
     let tokens = js_tokens(text);
     let mut specifiers = Vec::new();
     for (index, token) in tokens.iter().enumerate() {
         match token {
             JsToken::Ident(value) if value == "import" => match tokens.get(index + 1) {
-                Some(JsToken::String(specifier)) => specifiers.push(specifier.clone()),
-                Some(JsToken::Punct('(')) => {
-                    if let Some(JsToken::String(specifier)) = tokens.get(index + 2) {
-                        specifiers.push(specifier.clone());
+                Some(JsToken::String(specifier)) => specifiers.push(ModuleSpecifier {
+                    value: specifier.clone(),
+                    type_only: false,
+                }),
+                Some(JsToken::Ident(kind)) if kind == "type" => {
+                    if let Some((specifier, _)) = following_from_specifier(&tokens, index + 2) {
+                        specifiers.push(ModuleSpecifier {
+                            value: specifier,
+                            type_only: true,
+                        });
                     }
                 }
-                _ => {}
+                Some(JsToken::Punct('(')) => {
+                    if let Some(JsToken::String(specifier)) = tokens.get(index + 2) {
+                        specifiers.push(ModuleSpecifier {
+                            value: specifier.clone(),
+                            type_only: false,
+                        });
+                    }
+                }
+                _ => {
+                    if let Some((specifier, _)) = following_from_specifier(&tokens, index + 1) {
+                        let type_only = named_list_is_type_only(&tokens, index + 1);
+                        specifiers.push(ModuleSpecifier {
+                            value: specifier,
+                            type_only,
+                        });
+                    }
+                }
             },
             JsToken::Ident(value) if value == "require" => {
                 if matches!(tokens.get(index + 1), Some(JsToken::Punct('('))) {
                     if let Some(JsToken::String(specifier)) = tokens.get(index + 2) {
-                        specifiers.push(specifier.clone());
+                        specifiers.push(ModuleSpecifier {
+                            value: specifier.clone(),
+                            type_only: false,
+                        });
                     }
                 }
             }
+            JsToken::Ident(value) if value == "export" => {
+                let type_only = matches!(tokens.get(index + 1), Some(JsToken::Ident(kind)) if kind == "type")
+                    || named_list_is_type_only(&tokens, index + 1);
+                if let Some((specifier, _)) = following_from_specifier(&tokens, index + 1) {
+                    specifiers.push(ModuleSpecifier {
+                        value: specifier,
+                        type_only,
+                    });
+                }
+            }
             JsToken::Ident(value) if value == "from" => {
-                if let Some(JsToken::String(specifier)) = tokens.get(index + 1) {
-                    specifiers.push(specifier.clone());
+                if !preceded_by_import_or_export(&tokens, index) {
+                    if let Some(JsToken::String(specifier)) = tokens.get(index + 1) {
+                        specifiers.push(ModuleSpecifier {
+                            value: specifier.clone(),
+                            type_only: false,
+                        });
+                    }
                 }
             }
             _ => {}
         }
     }
     specifiers
+}
+
+fn named_list_is_type_only(tokens: &[JsToken], start: usize) -> bool {
+    let Some(open) = (start..tokens.len())
+        .take_while(
+            |index| !matches!(tokens.get(*index), Some(JsToken::Ident(value)) if value == "from"),
+        )
+        .find(|index| matches!(tokens.get(*index), Some(JsToken::Punct('{'))))
+    else {
+        return false;
+    };
+    let mut saw_specifier = false;
+    let mut expect_specifier = true;
+    let mut depth = 0usize;
+    let mut index = open;
+    while index < tokens.len() {
+        match tokens.get(index) {
+            Some(JsToken::Punct('{')) => {
+                depth += 1;
+                index += 1;
+            }
+            Some(JsToken::Punct('}')) => {
+                depth = depth.saturating_sub(1);
+                return depth == 0 && saw_specifier;
+            }
+            Some(JsToken::Ident(value)) if depth == 1 && expect_specifier => {
+                if value != "type" {
+                    return false;
+                }
+                saw_specifier = true;
+                expect_specifier = false;
+                index += 1;
+            }
+            Some(JsToken::Punct(',')) if depth == 1 => {
+                expect_specifier = true;
+                index += 1;
+            }
+            Some(JsToken::Ident(value)) if depth == 1 && value == "from" => return false,
+            _ => index += 1,
+        }
+    }
+    false
+}
+
+fn following_from_specifier(tokens: &[JsToken], start: usize) -> Option<(String, usize)> {
+    let mut depth = 0usize;
+    for index in start..tokens.len() {
+        match tokens.get(index) {
+            Some(JsToken::Punct('{' | '(' | '[')) => depth += 1,
+            Some(JsToken::Punct('}' | ')' | ']')) => depth = depth.saturating_sub(1),
+            Some(JsToken::Ident(value)) if value == "from" && depth == 0 => {
+                if let Some(JsToken::String(specifier)) = tokens.get(index + 1) {
+                    return Some((specifier.clone(), index + 1));
+                }
+                return None;
+            }
+            Some(JsToken::Punct(';')) if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn preceded_by_import_or_export(tokens: &[JsToken], from_index: usize) -> bool {
+    let mut cursor = from_index;
+    while cursor > 0 {
+        cursor -= 1;
+        match tokens.get(cursor) {
+            Some(JsToken::Ident(value)) if value == "import" || value == "export" => return true,
+            Some(JsToken::Punct(';')) => return false,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn js_tokens(text: &str) -> Vec<JsToken> {
@@ -2493,6 +2621,10 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
                 "import fs from 'fs'; export const value = fs.readFileSync;",
             ),
             (
+                "type_only_node_builtin.ts",
+                "import type { Stats } from 'fs'; export const value = 1 as number;",
+            ),
+            (
                 "builtin_subpath.ts",
                 "import { readFile } from 'fs/promises'; export const value = readFile;",
             ),
@@ -2660,6 +2792,24 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
         fs::write(
             temp.path().join("entry.ts"),
             "// import fs from 'fs'; process.env.SECRET;\n/* const os = require('os'); Buffer.from('x'); */\nconst text = \"import path from 'path'; process.env.NODE_ENV\"; export const value = text;",
+        )
+        .unwrap();
+        let output = temp.path().join("dist/client.js");
+        let result = bundle(&BundleOptions::new(
+            temp.path(),
+            Path::new("entry.ts"),
+            &output,
+            Target::Browser,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(result.files, vec![output.clone()]);
+        assert!(output.is_file());
+
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("entry.ts"),
+            "import type { Thing } from './types'; import { type Other } from './more-types'; export { type Thing } from './types'; export const value: Thing & Other = 1;",
         )
         .unwrap();
         let output = temp.path().join("dist/client.js");
