@@ -1287,7 +1287,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             })?;
             if exports.is_empty() {
                 bail!(
-                    "server action module must export at least one function or const: {}",
+                    "server action module must export at least one callable action: {}",
                     relative_path.display()
                 );
             }
@@ -1595,7 +1595,7 @@ fn const_values(tokens: &[JsToken]) -> BTreeMap<String, JsToken> {
 fn route_handler_methods(text: &str) -> Result<Vec<String>> {
     const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
     let mut found = BTreeSet::new();
-    for name in exported_declaration_names(text) {
+    for name in exported_callable_names(text) {
         if METHODS.contains(&name.as_str()) {
             found.insert(name);
         }
@@ -1608,7 +1608,7 @@ fn route_handler_methods(text: &str) -> Result<Vec<String>> {
 
 fn server_action_exports(text: &str) -> Result<Vec<String>> {
     let mut names = BTreeSet::new();
-    for name in exported_declaration_names(text) {
+    for name in exported_callable_names(text) {
         if name.is_empty() || name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             bail!("invalid server action export name: {name}");
         }
@@ -1617,8 +1617,9 @@ fn server_action_exports(text: &str) -> Result<Vec<String>> {
     Ok(names.into_iter().collect())
 }
 
-fn exported_declaration_names(text: &str) -> Vec<String> {
+fn exported_callable_names(text: &str) -> Vec<String> {
     let tokens = js_tokens(text);
+    let local_callables = callable_values(&tokens);
     let mut names = Vec::new();
     let mut index = 0;
     while index < tokens.len() {
@@ -1642,16 +1643,95 @@ fn exported_declaration_names(text: &str) -> Vec<String> {
             }
             Some(JsToken::Ident(value)) if matches!(value.as_str(), "const" | "let" | "var") => {
                 if let Some(JsToken::Ident(name)) = tokens.get(index + 1) {
-                    names.push(name.clone());
+                    if is_callable_assignment(&tokens, index + 2) {
+                        names.push(name.clone());
+                    }
                 }
             }
             Some(JsToken::Punct('{')) if !export_list_has_from_clause(&tokens, index) => {
-                names.extend(exported_named_specifiers(&tokens, index));
+                for (local, exported) in exported_named_specifier_pairs(&tokens, index) {
+                    if local_callables.contains(&local) {
+                        names.push(exported);
+                    }
+                }
             }
             _ => {}
         }
+        index += 1;
     }
     names
+}
+
+fn callable_values(tokens: &[JsToken]) -> BTreeSet<String> {
+    let mut values = BTreeSet::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        if matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "async") {
+            if matches!(tokens.get(index + 1), Some(JsToken::Ident(value)) if value == "function") {
+                if let Some(JsToken::Ident(name)) = tokens.get(index + 2) {
+                    values.insert(name.clone());
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "function") {
+            if let Some(JsToken::Ident(name)) = tokens.get(index + 1) {
+                values.insert(name.clone());
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(tokens.get(index), Some(JsToken::Ident(value)) if matches!(value.as_str(), "const" | "let" | "var"))
+        {
+            if let Some(JsToken::Ident(name)) = tokens.get(index + 1) {
+                if is_callable_assignment(tokens, index + 2) {
+                    values.insert(name.clone());
+                }
+            }
+        }
+        index += 1;
+    }
+    values
+}
+
+fn is_callable_assignment(tokens: &[JsToken], index: usize) -> bool {
+    if !matches!(tokens.get(index), Some(JsToken::Punct('='))) {
+        return false;
+    }
+    let mut value_index = index + 1;
+    if matches!(tokens.get(value_index), Some(JsToken::Ident(value)) if value == "async") {
+        value_index += 1;
+    }
+    matches!(tokens.get(value_index), Some(JsToken::Ident(value)) if value == "function")
+        || is_arrow_function_assignment(tokens, value_index)
+}
+
+fn is_arrow_function_assignment(tokens: &[JsToken], index: usize) -> bool {
+    match tokens.get(index) {
+        Some(JsToken::Ident(_)) => {
+            matches!(tokens.get(index + 1), Some(JsToken::Punct('=')))
+                && matches!(tokens.get(index + 2), Some(JsToken::Punct('>')))
+        }
+        Some(JsToken::Punct('(')) => {
+            let mut depth = 0usize;
+            for cursor in index..tokens.len() {
+                match tokens.get(cursor) {
+                    Some(JsToken::Punct('(')) => depth += 1,
+                    Some(JsToken::Punct(')')) => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            return matches!(tokens.get(cursor + 1), Some(JsToken::Punct('=')))
+                                && matches!(tokens.get(cursor + 2), Some(JsToken::Punct('>')));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 fn export_list_has_from_clause(tokens: &[JsToken], open_brace: usize) -> bool {
@@ -1669,13 +1749,6 @@ fn export_list_has_from_clause(tokens: &[JsToken], open_brace: usize) -> bool {
         }
     }
     false
-}
-
-fn exported_named_specifiers(tokens: &[JsToken], open_brace: usize) -> Vec<String> {
-    exported_named_specifier_pairs(tokens, open_brace)
-        .into_iter()
-        .map(|(_, exported)| exported)
-        .collect()
 }
 
 fn exported_named_specifier_pairs(tokens: &[JsToken], open_brace: usize) -> Vec<(String, String)> {
@@ -2081,6 +2154,22 @@ export default function Page(){}
             error.contains("must export at least one HTTP method"),
             "{error}"
         );
+
+        fs::write(
+            app.join("route.ts"),
+            "export const GET = 1;
+export const POST = { handler: true };
+",
+        )
+        .unwrap();
+
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("must export at least one HTTP method"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -2142,7 +2231,28 @@ const hidden = 1;
         let error = build_application_graph(&GraphOptions::new(temp.path()))
             .unwrap_err()
             .to_string();
-        assert!(error.contains("must export at least one"), "{error}");
+        assert!(
+            error.contains("must export at least one callable action"),
+            "{error}"
+        );
+
+        fs::write(
+            app.join("actions.ts"),
+            "/* generated */
+'use server';
+export const meaning = 42;
+export const config = { mutate: true };
+",
+        )
+        .unwrap();
+
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("must export at least one callable action"),
+            "{error}"
+        );
 
         fs::write(
             app.join("actions.ts"),
@@ -2151,9 +2261,11 @@ const hidden = 1;
 export async
 function save(){}
 const destroy = async () => {};
+const archive = function() {};
 export const
 remove = async () => {};
-export { destroy as deleteItem };
+export let rename = input => input;
+export { destroy as deleteItem, archive };
 export type { IgnoredAction };
 ",
         )
@@ -2164,7 +2276,10 @@ export type { IgnoredAction };
             .iter()
             .map(|action| action.export.clone())
             .collect();
-        assert_eq!(exports, vec!["deleteItem", "remove", "save"]);
+        assert_eq!(
+            exports,
+            vec!["archive", "deleteItem", "remove", "rename", "save"]
+        );
     }
 
     #[tokio::test]
