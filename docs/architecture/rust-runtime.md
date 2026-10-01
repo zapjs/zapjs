@@ -34,7 +34,7 @@ The first Rust-only foundation crates are now present under `crates/`:
 - `zap-render` runs JavaScript bundles inside a Rust-owned QuickJS context with stream consumption, explicit host calls, output limits and CPU interruption.
 - `zap-build` compiles TSX through Rust Rolldown/Oxc APIs for server IIFE and browser module targets.
 
-These crates are foundation evidence only. They do not yet prove full React Server Components, hydration/navigation, server actions, managed deployment or the landing site. The exact test and Fozzy evidence is recorded in [`../implementation.md`](../implementation.md).
+These crates are foundation evidence only. The build crate now proves typed graph discovery, but the workspace does not yet prove full React Server Components, hydration/navigation, server-action execution, managed deployment or the landing site. The exact test and Fozzy evidence is recorded in [`../implementation.md`](../implementation.md).
 
 ## Splice history
 

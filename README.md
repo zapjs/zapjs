@@ -10,7 +10,7 @@ The final product model mirrors the core deployment shape developers expect from
 crates/runtime      route parsing, safe path decoding and compiled lookup
 crates/splice       bounded Rust worker transport
 crates/render       embedded JavaScript host for React bundles
-crates/build        Rust TSX/module bundling through Rolldown/Oxc
+crates/build        Rust application graph and TSX/module bundling through Rolldown/Oxc
 docs/               architecture, runtime and verification evidence
 ```
 
@@ -26,4 +26,4 @@ The recorded Fozzy scenarios in `artifacts/verification/rust-only-crates*.fozzy*
 
 ## Status
 
-The Rust foundation is in place and verified at the crate boundary. The remaining production work is to connect these crates into the full React framework vertical slice: production React SSR, Flight, hydration, navigation, server actions, route handlers, cache metadata and managed native deployment artifacts.
+The Rust foundation is in place and verified at the crate boundary. `zap-build` now emits the first typed application graph manifest for routes, layouts, server actions, client modules, cache metadata and static assets. The remaining production work is to connect that graph into the full React framework vertical slice: production React SSR, Flight, hydration, navigation, route handlers and managed Rust deployment artifacts.

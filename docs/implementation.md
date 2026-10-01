@@ -9,7 +9,7 @@ Verified September 30, 2026 for the Rust-owned foundation. This page records wha
 | `zap-runtime` | Parses route patterns, builds a compiled trie, enforces static/param/catch-all precedence and rejects malformed, unsafe or ambiguous URL paths. |
 | `zap-splice` | Implements bounded Rust-to-Rust unary invocation over Unix streams with version handshake, negotiated frame size, max in-flight admission, typed remote errors, cancellation, deadlines, disconnect cleanup and a real same-binary subprocess fixture. |
 | `zap-render` | Runs bundle-produced JavaScript in a Rust-owned QuickJS context with no process/filesystem/network APIs exposed by default. Tests cover string output, Web `ReadableStream` output, explicit Rust host calls, output limits and CPU interruption. |
-| `zap-build` | Bundles TypeScript/TSX through Rust libraries using Rolldown/Oxc. Tests cover server IIFE output and browser module output from TSX fixtures without invoking an external JavaScript runtime. |
+| `zap-build` | Builds the first Rust-owned application graph manifest and bundles TypeScript/TSX through Rust libraries using Rolldown/Oxc. Tests cover route/layout/action/client-module/asset/cache discovery, ambiguous route rejection, server IIFE output and browser module output from TSX fixtures without invoking an external JavaScript runtime. |
 
 ## Commands run
 
@@ -22,7 +22,7 @@ Results:
 - `zap-runtime`: 3 tests passed.
 - `zap-splice`: 7 tests passed, 1 ignored subprocess helper invoked by the parent test.
 - `zap-render`: 5 tests passed.
-- `zap-build`: 2 tests passed.
+- `zap-build`: 4 tests passed.
 
 ## Fozzy validation
 
@@ -39,7 +39,7 @@ Host-backed recorded validation:
 
 ```sh
 /Users/deepsaint/.cargo/bin/fozzy run artifacts/verification/rust-only-crates-host.fozzy.json --det --seed 42 --proc-backend host --fs-backend host --http-backend host --record artifacts/verification/rust-only-crates-host.trace.fozzy --json
-/Users/deepsaint/.cargo/bin/fozzy trace verify artifacts/verification/rust-only-crates-host.trace.fozzy --strict --json
+/Users/deepsaint/.cargo/bin/fozzy trace verify artifacts/verification/rust-only-crates-host.trace.fozzy --strict-verify --json
 /Users/deepsaint/.cargo/bin/fozzy replay artifacts/verification/rust-only-crates-host.trace.fozzy --json
 /Users/deepsaint/.cargo/bin/fozzy ci artifacts/verification/rust-only-crates-host.trace.fozzy --json
 ```
@@ -51,7 +51,7 @@ The host run, trace verification, replay and CI all passed. The recorded trace r
 The foundation still needs:
 
 1. real React HTML SSR and Flight through the Rust-owned renderer using production React bundles;
-2. one Rust graph that emits matching route manifests, client references, action IDs, browser chunks and server bundles;
+2. complete graph-to-bundle integration that turns the new Rust manifest into matching React server bundles, browser chunks, client references and action IDs;
 3. Aegis verification for initial render, hydration, nested/dynamic navigation, pending/error boundaries and server actions;
 4. Rust-owned route handlers/server functions with explicit input, context, authorization and error boundaries;
 5. optional Splice streaming with credit-based backpressure if a worker boundary needs streaming;

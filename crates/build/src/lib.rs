@@ -3,7 +3,11 @@
 //! React packages are source inputs. Compilation, resolution, tree shaking and
 //! minification run inside this Rust process through Rolldown and Oxc.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 use rolldown::{
@@ -173,6 +177,430 @@ fn absolute(root: &Path, path: &Path) -> PathBuf {
     }
 }
 
+use serde::{Deserialize, Serialize};
+use zap_runtime::routing::{Route, Router};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModuleKind {
+    Server,
+    Client,
+    ServerActions,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RouteKind {
+    Page,
+    Handler,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DynamicPolicy {
+    Auto,
+    ForceStatic,
+    ForceDynamic,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachePolicy {
+    pub dynamic: DynamicPolicy,
+    pub revalidate_seconds: Option<u64>,
+}
+
+impl Default for CachePolicy {
+    fn default() -> Self {
+        Self {
+            dynamic: DynamicPolicy::Auto,
+            revalidate_seconds: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleRef {
+    pub id: String,
+    pub path: PathBuf,
+    pub kind: ModuleKind,
+    pub browser_chunk: Option<PathBuf>,
+    pub server_bundle: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionRef {
+    pub id: String,
+    pub module: String,
+    pub path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayoutRef {
+    pub id: String,
+    pub path: PathBuf,
+    pub depth: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteEntry {
+    pub id: String,
+    pub pattern: String,
+    pub kind: RouteKind,
+    pub source: PathBuf,
+    pub layouts: Vec<String>,
+    pub module: String,
+    pub cache: CachePolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetRef {
+    pub source: PathBuf,
+    pub url_path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplicationGraph {
+    pub routes: Vec<RouteEntry>,
+    pub layouts: Vec<LayoutRef>,
+    pub modules: Vec<ModuleRef>,
+    pub actions: Vec<ActionRef>,
+    pub assets: Vec<AssetRef>,
+}
+
+impl ApplicationGraph {
+    pub fn to_manifest_json(&self) -> Result<String> {
+        Ok(serde_json::to_string_pretty(self)?)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GraphOptions {
+    pub root: PathBuf,
+    pub app_dir: PathBuf,
+    pub public_dir: Option<PathBuf>,
+    pub out_dir: PathBuf,
+}
+
+impl GraphOptions {
+    pub fn new(root: &Path) -> Self {
+        Self {
+            root: root.to_owned(),
+            app_dir: PathBuf::from("app"),
+            public_dir: Some(PathBuf::from("public")),
+            out_dir: PathBuf::from(".zap"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SourceModule {
+    id: String,
+    relative_path: PathBuf,
+    kind: ModuleKind,
+    cache: CachePolicy,
+}
+
+pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGraph> {
+    let root = options
+        .root
+        .canonicalize()
+        .context("resolve application root")?;
+    let app_root = absolute(&root, &options.app_dir);
+    if !app_root.is_dir() {
+        bail!(
+            "application graph requires an app directory: {}",
+            app_root.display()
+        );
+    }
+    let public_root = options
+        .public_dir
+        .as_ref()
+        .map(|path| absolute(&root, path));
+    let out_dir = options.out_dir.clone();
+
+    let mut files = Vec::new();
+    collect_files(&app_root, &mut files)?;
+    files.sort();
+
+    let mut modules = BTreeMap::<String, SourceModule>::new();
+    let mut route_sources = Vec::<(String, RouteKind)>::new();
+    let mut layouts_by_dir = BTreeMap::<PathBuf, LayoutRef>::new();
+    let mut action_ids = BTreeSet::<String>::new();
+    let mut actions = Vec::<ActionRef>::new();
+
+    for absolute_path in files {
+        let relative_path = absolute_path.strip_prefix(&app_root).unwrap().to_owned();
+        let Some(file_name) = relative_path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !is_source_file(file_name) {
+            continue;
+        }
+        let text = fs::read_to_string(&absolute_path)
+            .with_context(|| format!("read {}", absolute_path.display()))?;
+        let kind = classify_module(&text);
+        let id = module_id(&relative_path);
+        let cache = parse_cache_policy(&text)?;
+
+        if file_name == "layout.tsx" {
+            let directory = relative_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .to_owned();
+            let depth = relative_path.components().count().saturating_sub(1);
+            layouts_by_dir.insert(
+                directory,
+                LayoutRef {
+                    id: id.clone(),
+                    path: relative_path.clone(),
+                    depth,
+                },
+            );
+        }
+        if kind == ModuleKind::ServerActions {
+            let action_id = stable_action_id(&relative_path);
+            if !action_ids.insert(action_id.clone()) {
+                bail!("duplicate server action id: {action_id}");
+            }
+            actions.push(ActionRef {
+                id: action_id,
+                module: id.clone(),
+                path: relative_path.clone(),
+            });
+        }
+        let route_kind = match file_name {
+            "page.tsx" => Some(RouteKind::Page),
+            "route.ts" | "route.tsx" => Some(RouteKind::Handler),
+            _ => None,
+        };
+        if let Some(route_kind) = route_kind {
+            route_sources.push((id.clone(), route_kind));
+        }
+        modules.insert(
+            id.clone(),
+            SourceModule {
+                id,
+                relative_path,
+                kind,
+                cache,
+            },
+        );
+    }
+
+    let mut routes = Vec::new();
+    for (id, route_kind) in route_sources {
+        let module = modules
+            .get(&id)
+            .with_context(|| format!("missing module for route {id}"))?;
+        let pattern = route_pattern_for(&module.relative_path);
+        Route::parse(id.clone(), &pattern).map_err(|error| {
+            anyhow::anyhow!(
+                "invalid route pattern for {}: {error}",
+                module.relative_path.display()
+            )
+        })?;
+        let layouts = layout_chain(
+            module
+                .relative_path
+                .parent()
+                .unwrap_or_else(|| Path::new("")),
+            &layouts_by_dir,
+        );
+        routes.push(RouteEntry {
+            id: id.clone(),
+            pattern,
+            kind: route_kind,
+            source: module.relative_path.clone(),
+            layouts,
+            module: id,
+            cache: module.cache.clone(),
+        });
+    }
+
+    routes.sort_by(|a, b| a.pattern.cmp(&b.pattern).then(a.id.cmp(&b.id)));
+    let runtime_routes = routes
+        .iter()
+        .map(|entry| Route::parse(entry.id.clone(), &entry.pattern))
+        .collect::<Result<Vec<_>, _>>()?;
+    Router::new(runtime_routes)?;
+
+    let mut module_refs = Vec::new();
+    for module in modules.values() {
+        let server_bundle = out_dir.join("server").join(format!("{}.js", module.id));
+        let browser_chunk = (module.kind == ModuleKind::Client)
+            .then(|| out_dir.join("browser").join(format!("{}.js", module.id)));
+        module_refs.push(ModuleRef {
+            id: module.id.clone(),
+            path: module.relative_path.clone(),
+            kind: module.kind.clone(),
+            browser_chunk,
+            server_bundle,
+        });
+    }
+    module_refs.sort_by(|a, b| a.id.cmp(&b.id));
+    actions.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut layouts: Vec<_> = layouts_by_dir.into_values().collect();
+    layouts.sort_by(|a, b| a.depth.cmp(&b.depth).then(a.id.cmp(&b.id)));
+
+    let assets = if let Some(public_root) = public_root.filter(|path| path.is_dir()) {
+        discover_assets(&public_root)?
+    } else {
+        Vec::new()
+    };
+
+    Ok(ApplicationGraph {
+        routes,
+        layouts,
+        modules: module_refs,
+        actions,
+        assets,
+    })
+}
+
+fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir).with_context(|| format!("read directory {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            collect_files(&path, files)?;
+        } else if kind.is_file() {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn is_source_file(name: &str) -> bool {
+    matches!(name, "page.tsx" | "layout.tsx" | "route.ts" | "route.tsx")
+        || name.ends_with(".tsx")
+        || name.ends_with(".ts")
+}
+
+fn classify_module(text: &str) -> ModuleKind {
+    match first_directive(text).as_deref() {
+        Some("use client") => ModuleKind::Client,
+        Some("use server") => ModuleKind::ServerActions,
+        _ => ModuleKind::Server,
+    }
+}
+
+fn first_directive(text: &str) -> Option<String> {
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        let line = line.strip_suffix(';').unwrap_or(line).trim();
+        if let Some(value) = line.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
+            return Some(value.to_owned());
+        }
+        if let Some(value) = line.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+            return Some(value.to_owned());
+        }
+        return None;
+    }
+    None
+}
+
+fn module_id(path: &Path) -> String {
+    let mut id = String::new();
+    for component in path.components() {
+        if !id.is_empty() {
+            id.push('/');
+        }
+        id.push_str(&component.as_os_str().to_string_lossy());
+    }
+    id.trim_end_matches(".tsx")
+        .trim_end_matches(".ts")
+        .replace(['[', ']'], "_")
+        .replace("...", "all")
+}
+
+fn route_pattern_for(path: &Path) -> String {
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let mut parts = Vec::new();
+    for component in parent.components() {
+        let value = component.as_os_str().to_string_lossy();
+        if value.starts_with('(') && value.ends_with(')') {
+            continue;
+        }
+        parts.push(value.to_string());
+    }
+    if parts.is_empty() {
+        "/".into()
+    } else {
+        format!("/{}", parts.join("/"))
+    }
+}
+
+fn layout_chain(dir: &Path, layouts: &BTreeMap<PathBuf, LayoutRef>) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut cursor = PathBuf::new();
+    if let Some(layout) = layouts.get(Path::new("")) {
+        result.push(layout.id.clone());
+    }
+    for component in dir.components() {
+        cursor.push(component.as_os_str());
+        if let Some(layout) = layouts.get(&cursor) {
+            result.push(layout.id.clone());
+        }
+    }
+    result
+}
+
+fn parse_cache_policy(text: &str) -> Result<CachePolicy> {
+    let mut policy = CachePolicy::default();
+    for line in text.lines().map(str::trim) {
+        if let Some(value) = line.strip_prefix("export const dynamic") {
+            if value.contains("force-static") {
+                policy.dynamic = DynamicPolicy::ForceStatic;
+            } else if value.contains("force-dynamic") {
+                policy.dynamic = DynamicPolicy::ForceDynamic;
+            }
+        }
+        if let Some(value) = line.strip_prefix("export const revalidate") {
+            let Some((_, rhs)) = value.split_once('=') else {
+                continue;
+            };
+            let rhs = rhs.trim().trim_end_matches(';').trim();
+            if rhs == "false" {
+                policy.revalidate_seconds = None;
+            } else {
+                policy.revalidate_seconds = Some(
+                    rhs.parse::<u64>()
+                        .with_context(|| format!("invalid revalidate value: {rhs}"))?,
+                );
+            }
+        }
+    }
+    Ok(policy)
+}
+
+fn stable_action_id(path: &Path) -> String {
+    format!("action:{}", module_id(path))
+}
+
+fn discover_assets(public_root: &Path) -> Result<Vec<AssetRef>> {
+    let mut files = Vec::new();
+    collect_files(public_root, &mut files)?;
+    files.sort();
+    let mut assets = Vec::new();
+    for absolute_path in files {
+        let relative = absolute_path.strip_prefix(public_root).unwrap().to_owned();
+        let mut url_path = String::from("/");
+        url_path.push_str(
+            &relative
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/"),
+        );
+        assets.push(AssetRef {
+            source: relative,
+            url_path,
+        });
+    }
+    Ok(assets)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +629,104 @@ mod tests {
         )
         .unwrap();
         vec![("react".into(), runtime.to_string_lossy().into_owned())]
+    }
+
+    #[test]
+    fn application_graph_discovers_routes_modules_actions_layouts_and_assets() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(app.join("dashboard/[id]")).unwrap();
+        fs::create_dir_all(app.join("api/echo")).unwrap();
+        fs::create_dir_all(temp.path().join("public/images")).unwrap();
+        fs::write(
+            app.join("layout.tsx"),
+            "export default function Layout(){}\n",
+        )
+        .unwrap();
+        fs::write(
+            app.join("dashboard/layout.tsx"),
+            "export default function DashboardLayout(){}\n",
+        )
+        .unwrap();
+        fs::write(
+            app.join("dashboard/[id]/page.tsx"),
+            "export const dynamic = 'force-static';\nexport const revalidate = 60;\nexport default function Page(){}\n",
+        )
+        .unwrap();
+        fs::write(app.join("api/echo/route.ts"), "export function POST(){}\n").unwrap();
+        fs::write(
+            app.join("counter.tsx"),
+            "'use client';\nexport function Counter(){}\n",
+        )
+        .unwrap();
+        fs::write(
+            app.join("actions.ts"),
+            "'use server';\nexport async function save(){}\n",
+        )
+        .unwrap();
+        fs::write(temp.path().join("public/images/logo.svg"), "<svg/>\n").unwrap();
+
+        let graph = build_application_graph(&GraphOptions::new(temp.path())).unwrap();
+        assert_eq!(graph.routes.len(), 2);
+        let page = graph
+            .routes
+            .iter()
+            .find(|route| route.pattern == "/dashboard/[id]")
+            .unwrap();
+        assert_eq!(page.kind, RouteKind::Page);
+        assert_eq!(page.layouts, vec!["layout", "dashboard/layout"]);
+        assert_eq!(page.cache.dynamic, DynamicPolicy::ForceStatic);
+        assert_eq!(page.cache.revalidate_seconds, Some(60));
+
+        let handler = graph
+            .routes
+            .iter()
+            .find(|route| route.pattern == "/api/echo")
+            .unwrap();
+        assert_eq!(handler.kind, RouteKind::Handler);
+
+        let client = graph
+            .modules
+            .iter()
+            .find(|module| module.id == "counter")
+            .unwrap();
+        assert_eq!(client.kind, ModuleKind::Client);
+        assert_eq!(
+            client.browser_chunk.as_deref(),
+            Some(Path::new(".zap/browser/counter.js"))
+        );
+        assert_eq!(
+            client.server_bundle,
+            PathBuf::from(".zap/server/counter.js")
+        );
+
+        assert_eq!(graph.actions.len(), 1);
+        assert_eq!(graph.actions[0].id, "action:actions");
+        assert_eq!(graph.assets[0].url_path, "/images/logo.svg");
+        graph.to_manifest_json().unwrap();
+    }
+
+    #[test]
+    fn application_graph_rejects_ambiguous_route_groups() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(app.join("(public)/shop")).unwrap();
+        fs::create_dir_all(app.join("(admin)/shop")).unwrap();
+        fs::write(
+            app.join("(public)/shop/page.tsx"),
+            "export default function Page(){}\n",
+        )
+        .unwrap();
+        fs::write(
+            app.join("(admin)/shop/page.tsx"),
+            "export default function Page(){}\n",
+        )
+        .unwrap();
+
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("ambiguous route patterns"), "{error}");
     }
 
     #[tokio::test]
