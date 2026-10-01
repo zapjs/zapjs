@@ -6,7 +6,7 @@ use crate::{
     routing::Param,
 };
 use http::{Method, StatusCode, Uri};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,11 +22,18 @@ pub enum RequestTarget<'a> {
         route: &'a RouteEntry,
         params: BTreeMap<String, Param>,
         cache: RouteCacheDecision,
+        invocation: RouteHandlerInvocation,
     },
     NotFound,
     MethodNotAllowed {
         allowed: Vec<Method>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteHandlerInvocation {
+    pub method: Method,
+    pub server_bundle: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,18 +340,46 @@ pub fn plan_request<'a>(
             if !allowed.contains(method) {
                 return Ok(RequestTarget::MethodNotAllowed { allowed });
             }
+            let module =
+                manifest
+                    .module(&matched.route.module)
+                    .ok_or(RequestPlanError::Manifest(
+                        ManifestError::MissingRouteModule {
+                            route: matched.route.id.clone(),
+                            module: matched.route.module.clone(),
+                        },
+                    ))?;
+            let Some(server_bundle) = &module.server_bundle else {
+                return Err(RequestPlanError::Manifest(
+                    ManifestError::MissingServerBundle {
+                        module: module.id.clone(),
+                    },
+                ));
+            };
             Ok(RequestTarget::RouteHandler {
                 route: matched.route,
                 params: matched.params,
                 cache: route_cache_decision(&matched.route.cache),
+                invocation: RouteHandlerInvocation {
+                    method: method.clone(),
+                    server_bundle: server_bundle.clone(),
+                },
             })
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionInvocation {
+    pub action_id: String,
+    pub export: String,
+    pub server_bundle: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionTarget<'a> {
     pub action: &'a ActionRef,
+    pub invocation: ActionInvocation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -371,11 +406,18 @@ pub fn plan_action<'a>(
     let module = manifest
         .module(&action.module)
         .ok_or(RequestPlanError::ActionModule)?;
-    if module.server_bundle.is_none() {
+    let Some(server_bundle) = &module.server_bundle else {
         return Err(RequestPlanError::ActionModule);
-    }
+    };
     Ok(ActionAdmission {
-        target: ActionTarget { action },
+        target: ActionTarget {
+            action,
+            invocation: ActionInvocation {
+                action_id: action.id.clone(),
+                export: action.export.clone(),
+                server_bundle: server_bundle.clone(),
+            },
+        },
     })
 }
 
@@ -685,6 +727,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(admitted.target.action.export, "save");
+        assert_eq!(admitted.target.invocation.action_id, "action:actions#save");
+        assert_eq!(admitted.target.invocation.export, "save");
+        assert_eq!(
+            admitted.target.invocation.server_bundle,
+            PathBuf::from(".zap/server/actions.js")
+        );
 
         assert!(matches!(
             plan_action(&manifest, &Method::GET, "action:actions#save", None, None),
@@ -1167,7 +1215,16 @@ mod tests {
     fn admits_head_for_get_route_handlers_at_runtime() {
         let manifest = compiled();
         match plan_request(&manifest, &Method::HEAD, "/api/ping").unwrap() {
-            RequestTarget::RouteHandler { route, .. } => assert_eq!(route.id, "get-handler"),
+            RequestTarget::RouteHandler {
+                route, invocation, ..
+            } => {
+                assert_eq!(route.id, "get-handler");
+                assert_eq!(invocation.method, Method::HEAD);
+                assert_eq!(
+                    invocation.server_bundle,
+                    PathBuf::from(".zap/server/get-handler.js")
+                );
+            }
             target => panic!("unexpected target: {target:?}"),
         }
 
