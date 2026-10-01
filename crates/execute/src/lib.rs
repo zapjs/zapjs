@@ -606,6 +606,16 @@ mod tests {
                 .contains(&("content-type".into(), "text/html; charset=utf-8".into()))
         );
 
+        let query_page = executor
+            .execute_request(&RequestExecutionInput::new(&Method::GET, "/?q=rust+search"))
+            .unwrap();
+        assert_eq!(query_page.status, StatusCode::OK);
+        assert!(
+            String::from_utf8(query_page.body)
+                .unwrap()
+                .starts_with("<main>GET:/:rust search</main>"),
+        );
+
         let client_asset = executor
             .execute_request(&RequestExecutionInput::new(
                 &Method::GET,
@@ -933,7 +943,7 @@ mod tests {
         fs::write(root.join("public/logo.txt"), "zap").unwrap();
         fs::write(
             root.join(".zap/server/page.js"),
-            r#"globalThis.ZapRender = { render(request) { return `<main>${request.method}:${request.path}</main>`; } };"#,
+            r#"globalThis.ZapRender = { render(request) { const q = request.searchParams && request.searchParams.q ? `:${request.searchParams.q[0]}` : ""; return `<main>${request.method}:${request.path}${q}</main>`; } };"#,
         )
         .unwrap();
         fs::write(

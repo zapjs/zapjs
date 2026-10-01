@@ -1214,11 +1214,20 @@ async function normalizeZapOutput(value) {{
   throw new TypeError("Zap page output must be text, a Web ReadableStream, or a React render tree");
 }}
 
+function zapSearchParams(request) {{
+  const input = request && request.searchParams && typeof request.searchParams === "object" ? request.searchParams : {{}};
+  const output = {{}};
+  for (const [key, value] of Object.entries(input)) {{
+    output[key] = Array.isArray(value) && value.length === 1 ? value[0] : value;
+  }}
+  return output;
+}}
+
 function zapPageProps(request) {{
   const params = request && request.params && typeof request.params === "object" ? request.params : {{}};
   return {{
     params,
-    searchParams: {{}},
+    searchParams: zapSearchParams(request),
     request
   }};
 }}
@@ -3325,7 +3334,7 @@ export default function Page({ request }){ return <main data-path={request.path}
         .unwrap();
         fs::write(
             app.join("shop/[id]/page.tsx"),
-            "export default function ProductPage({ params }){ return <main data-id={params.id}>product:{params.id}</main>; }
+            "export default function ProductPage({ params, searchParams }){ return <main data-id={params.id} data-tags={searchParams.tag.join('|')}>product:{params.id}:{searchParams.color}:{searchParams.space}</main>; }
 ",
         )
         .unwrap();
@@ -3554,18 +3563,22 @@ export const Label = 'count';
             .module(&product_match.route.module)
             .and_then(|module| module.server_bundle.clone())
             .unwrap();
-        let product_request = plan_request(&compiled, &Method::GET, "/shop/caf%C3%A9")
-            .unwrap()
-            .renderer_request_json("/shop/caf%C3%A9")
-            .unwrap()
-            .unwrap();
+        let product_request = plan_request(
+            &compiled,
+            &Method::GET,
+            "/shop/caf%C3%A9?color=orange&tag=fast&tag=rust&space=zap+js",
+        )
+        .unwrap()
+        .renderer_request_json("/shop/caf%C3%A9?color=orange&tag=fast&tag=rust&space=zap+js")
+        .unwrap()
+        .unwrap();
         let product_rendered =
             Renderer::new(fs::read_to_string(temp.path().join(product_bundle)).unwrap())
                 .render(&product_request)
                 .unwrap();
         assert_eq!(
             product_rendered,
-            r#"<main data-id="café">product:café</main>"#
+            r#"<main data-id="café" data-tags="fast|rust">product:café:orange:zap js</main>"#
         );
         let route_request = plan_request(&compiled, &Method::POST, "/api/echo")
             .unwrap()

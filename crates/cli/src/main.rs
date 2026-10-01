@@ -566,9 +566,9 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
     }
     let method = Method::from_bytes(parts[0].as_bytes())
         .with_context(|| format!("unsupported HTTP method `{}`", parts[0]))?;
-    let path = parts[1].split_once('?').map_or(parts[1], |(path, _)| path);
-    if !path.starts_with('/') {
-        bail!("HTTP request target must be absolute-path");
+    let path = parts[1];
+    if !path.starts_with('/') || path.contains('#') {
+        bail!("HTTP request target must be absolute-path without a fragment");
     }
 
     let mut headers = BTreeMap::new();

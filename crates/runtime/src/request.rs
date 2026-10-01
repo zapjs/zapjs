@@ -6,6 +6,7 @@ use crate::{
     routing::Param,
 };
 use http::{Method, StatusCode, Uri};
+use percent_encoding::percent_decode_str;
 use serde::Serialize;
 use serde_json::Value;
 use std::{collections::BTreeMap, path::PathBuf};
@@ -316,9 +317,9 @@ pub fn plan_request<'a>(
     method: &Method,
     path: &str,
 ) -> Result<RequestTarget<'a>, RequestPlanError> {
-    let path = request_path(path).ok_or(RequestPlanError::Path)?;
+    let target = request_target(path).ok_or(RequestPlanError::Path)?;
 
-    if let Some(asset) = manifest.asset(path) {
+    if let Some(asset) = manifest.asset(target.path) {
         if !ASSET_METHODS.contains(method) {
             return Ok(RequestTarget::MethodNotAllowed {
                 allowed: ASSET_METHODS.to_vec(),
@@ -327,7 +328,7 @@ pub fn plan_request<'a>(
         return Ok(RequestTarget::StaticAsset(asset));
     }
 
-    let Some(matched) = manifest.resolve(path)? else {
+    let Some(matched) = manifest.resolve(target.path)? else {
         return Ok(RequestTarget::NotFound);
     };
 
@@ -423,14 +424,22 @@ pub struct RendererRequestPayload {
     pub method: String,
     pub path: String,
     pub params: BTreeMap<String, Param>,
+    #[serde(rename = "searchParams")]
+    pub search_params: BTreeMap<String, Vec<String>>,
 }
 
 impl RendererRequestPayload {
-    fn new(method: &Method, path: &str, params: &BTreeMap<String, Param>) -> Self {
+    fn new(
+        method: &Method,
+        path: &str,
+        params: &BTreeMap<String, Param>,
+        search_params: BTreeMap<String, Vec<String>>,
+    ) -> Self {
         Self {
             method: method.as_str().to_owned(),
             path: path.to_owned(),
             params: params.clone(),
+            search_params,
         }
     }
 
@@ -457,21 +466,24 @@ impl<'a> RequestTarget<'a> {
         &self,
         path: &str,
     ) -> Result<Option<RendererRequestPayload>, RequestPlanError> {
-        let path = request_path(path).ok_or(RequestPlanError::Path)?;
+        let target = request_target(path).ok_or(RequestPlanError::Path)?;
+        let search_params = parse_search_params(target.query).ok_or(RequestPlanError::Path)?;
         Ok(match self {
             RequestTarget::Page {
                 params, invocation, ..
             } => Some(RendererRequestPayload::new(
                 &invocation.method,
-                path,
+                target.path,
                 params,
+                search_params,
             )),
             RequestTarget::RouteHandler {
                 params, invocation, ..
             } => Some(RendererRequestPayload::new(
                 &invocation.method,
-                path,
+                target.path,
                 params,
+                search_params,
             )),
             RequestTarget::StaticAsset(_)
             | RequestTarget::NotFound
@@ -657,11 +669,53 @@ fn allowed_methods(route: &RouteEntry) -> Vec<Method> {
     methods
 }
 
-fn request_path(path: &str) -> Option<&str> {
-    if path.is_empty() || !path.starts_with('/') || path.contains(['?', '#', '\\']) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RequestTargetParts<'a> {
+    path: &'a str,
+    query: Option<&'a str>,
+}
+
+fn request_target(target: &str) -> Option<RequestTargetParts<'_>> {
+    if target.is_empty() || !target.starts_with('/') || target.contains(['#', '\\']) {
         return None;
     }
-    Some(path)
+    let (path, query) = target
+        .split_once('?')
+        .map_or((target, None), |(path, query)| (path, Some(query)));
+    if path.is_empty() || !path.starts_with('/') {
+        return None;
+    }
+    Some(RequestTargetParts { path, query })
+}
+
+fn parse_search_params(query: Option<&str>) -> Option<BTreeMap<String, Vec<String>>> {
+    let mut params = BTreeMap::<String, Vec<String>>::new();
+    let Some(query) = query else {
+        return Some(params);
+    };
+    if query.is_empty() {
+        return Some(params);
+    }
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, value) = pair
+            .split_once('=')
+            .map_or((pair, ""), |(key, value)| (key, value));
+        let key = decode_query_component(key)?;
+        let value = decode_query_component(value)?;
+        params.entry(key).or_default().push(value);
+    }
+    Some(params)
+}
+
+fn decode_query_component(value: &str) -> Option<String> {
+    let value = value.replace('+', " ");
+    percent_decode_str(&value)
+        .decode_utf8()
+        .ok()
+        .map(|value| value.into_owned())
 }
 
 #[cfg(test)]
@@ -835,7 +889,7 @@ mod tests {
             page_target
                 .renderer_request_json("/shop/caf%C3%A9")
                 .unwrap(),
-            Some(r#"{"method":"HEAD","path":"/shop/caf%C3%A9","params":{"id":"café"}}"#.into())
+            Some(r#"{"method":"HEAD","path":"/shop/caf%C3%A9","params":{"id":"café"},"searchParams":{}}"#.into())
         );
 
         let route_target = plan_request(&manifest, &Method::POST, "/api/echo").unwrap();
@@ -853,8 +907,13 @@ mod tests {
             target => panic!("unexpected target: {target:?}"),
         }
         assert_eq!(
-            route_target.renderer_request_json("/api/echo").unwrap(),
-            Some(r#"{"method":"POST","path":"/api/echo","params":{}}"#.into())
+            route_target
+                .renderer_request_json("/api/echo?tag=one&tag=two&space=a+b&empty")
+                .unwrap(),
+            Some(
+                r#"{"method":"POST","path":"/api/echo","params":{},"searchParams":{"empty":[""],"space":["a b"],"tag":["one","two"]}}"#
+                    .into()
+            )
         );
         assert!(matches!(
             plan_request(&manifest, &Method::GET, "/missing").unwrap(),
@@ -1151,7 +1210,7 @@ mod tests {
             .unwrap(),
             AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::NOT_FOUND))
         );
-        assert_eq!(
+        assert!(matches!(
             admit_request_input(
                 &manifest,
                 &RequestInput {
@@ -1163,8 +1222,8 @@ mod tests {
                 &limits,
             )
             .unwrap(),
-            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::BAD_REQUEST))
-        );
+            AdmissionOutcome::Dispatch(RequestTarget::Page { .. })
+        ));
         assert_eq!(
             admit_request_input(
                 &manifest,
@@ -1421,7 +1480,7 @@ mod tests {
             target => panic!("unexpected target: {target:?}"),
         }
         assert!(plan_request(&manifest, &Method::GET, "/shop/%").is_err());
-        assert!(plan_request(&manifest, &Method::GET, "/shop/1?x=1").is_err());
+        assert!(plan_request(&manifest, &Method::GET, "/shop/1#x=1").is_err());
         assert!(plan_request(&manifest, &Method::GET, "/shop//1").is_err());
         assert!(plan_request(&manifest, &Method::GET, "/shop/1/").is_err());
     }
