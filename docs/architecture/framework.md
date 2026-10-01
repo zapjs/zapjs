@@ -92,7 +92,7 @@ No isolated router timing, IPC round-trip, isolated SSR proof or local synthetic
 
 The current Rust layer includes:
 
-- `zap-runtime`: compiled route parsing and lookup with unsafe URL path rejection plus request id/auth/deadline policy admission.
+- `zap-runtime`: compiled route parsing and lookup with unsafe URL path rejection plus request id/auth/deadline and cache/privacy policy admission.
 - `zap-splice`: bounded Rust worker transport with cancellation, deadlines, crash cleanup and subprocess coverage.
 - `zap-render`: Rust-owned QuickJS execution with Web Stream, route/action `Response` support and typed execution failures, explicit host calls, output limits and CPU interruption.
 - `zap-build`: Rust-only TSX bundling through Rolldown/Oxc for server IIFE and browser module outputs.

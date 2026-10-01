@@ -18,7 +18,7 @@ HTML SSR, React Server Components, Flight payloads, client references, action ID
 
 ## Route handlers and server actions
 
-Route handlers and server actions must pass through Rust-owned admission before dispatch. The current runtime proves method, origin/action, body-size, request-context, auth-state and deadline checks; application-specific authorization hooks remain a release gate before mutation paths can be called production-complete.
+Route handlers and server actions must pass through Rust-owned admission before dispatch. The current runtime proves method, origin/action, body-size, request-context, auth-state, deadline and public-cache privacy checks; application-specific authorization hooks remain a release gate before mutation paths can be called production-complete.
 
 Application APIs are Rust functions or explicit React-host operations. Errors that cross a public boundary must preserve useful diagnostics for operators without leaking private values to the browser.
 
@@ -38,7 +38,7 @@ Normal application deployment must not require a user-operated Splice service. T
 
 The current Rust crates prove foundation behavior and initial Rust request admission:
 
-- route matching, manifest-backed request target planning, terminal HTTP response mapping, static asset source-path validation, route-handler method admission, server-action admission, request id/auth/deadline policy admission, declared body-limit admission and unsafe path rejection;
+- route matching, manifest-backed request target planning, terminal HTTP response mapping, static asset source-path validation, route-handler method admission, server-action admission, request id/auth/deadline policy admission, cache/privacy admission, declared body-limit admission and unsafe path rejection;
 - bounded Splice transport behavior;
 - embedded JavaScript execution with page, route-handler and server-action entrypoints, route/action `Response` status/header/body adaptation, typed route/action error-boundary outcomes, streams, host calls, output limits and CPU interruption;
 - Rust-only TSX bundling for browser and server outputs.

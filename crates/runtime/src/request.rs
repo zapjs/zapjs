@@ -1,5 +1,8 @@
 use crate::{
-    manifest::{ActionRef, AssetRef, CompiledManifest, ManifestError, RouteEntry, RouteKind},
+    manifest::{
+        ActionRef, AssetRef, CachePolicy, CompiledManifest, DynamicPolicy, ManifestError,
+        RouteEntry, RouteKind,
+    },
     routing::Param,
 };
 use http::{Method, StatusCode, Uri};
@@ -12,15 +15,29 @@ pub enum RequestTarget<'a> {
     Page {
         route: &'a RouteEntry,
         params: BTreeMap<String, Param>,
+        cache: RouteCacheDecision,
     },
     RouteHandler {
         route: &'a RouteEntry,
         params: BTreeMap<String, Param>,
+        cache: RouteCacheDecision,
     },
     NotFound,
     MethodNotAllowed {
         allowed: Vec<Method>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RouteCacheDecision {
+    Public { revalidate_seconds: Option<u64> },
+    PrivateNoStore,
+}
+
+impl RouteCacheDecision {
+    fn allows_private_request_state(&self) -> bool {
+        matches!(self, Self::PrivateNoStore)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +88,8 @@ pub enum RequestPlanError {
     MissingContext,
     #[error("request context is not authorized")]
     Unauthorized,
+    #[error("public cache policy cannot use private request state")]
+    PrivateCacheState,
     #[error("request deadline exceeds configured limit")]
     DeadlineTooLong,
 }
@@ -96,6 +115,7 @@ pub struct RequestInput<'a> {
     pub method: &'a Method,
     pub path: &'a str,
     pub declared_body_bytes: Option<u64>,
+    pub uses_private_request_state: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +182,9 @@ pub fn admit_request_input<'a>(
         ))),
         Err(RequestPlanError::BodyTooLarge) => Ok(AdmissionOutcome::Respond(
             ImmediateResponse::new(StatusCode::PAYLOAD_TOO_LARGE),
+        )),
+        Err(RequestPlanError::PrivateCacheState) => Ok(AdmissionOutcome::Respond(
+            ImmediateResponse::new(StatusCode::INTERNAL_SERVER_ERROR),
         )),
         Err(error) => Err(error),
     }
@@ -234,7 +257,9 @@ pub fn plan_request_input<'a>(
     limits: &AdmissionLimits,
 ) -> Result<RequestTarget<'a>, RequestPlanError> {
     enforce_body_limit(input.declared_body_bytes, limits)?;
-    plan_request(manifest, input.method, input.path)
+    let target = plan_request(manifest, input.method, input.path)?;
+    enforce_cache_privacy(&target, input.uses_private_request_state)?;
+    Ok(target)
 }
 
 pub fn plan_action_input<'a>(
@@ -282,6 +307,7 @@ pub fn plan_request<'a>(
             Ok(RequestTarget::Page {
                 route: matched.route,
                 params: matched.params,
+                cache: route_cache_decision(&matched.route.cache),
             })
         }
         RouteKind::Handler => {
@@ -292,6 +318,7 @@ pub fn plan_request<'a>(
             Ok(RequestTarget::RouteHandler {
                 route: matched.route,
                 params: matched.params,
+                cache: route_cache_decision(&matched.route.cache),
             })
         }
     }
@@ -332,6 +359,41 @@ pub fn plan_action<'a>(
     Ok(ActionAdmission {
         target: ActionTarget { action },
     })
+}
+
+fn route_cache_decision(policy: &CachePolicy) -> RouteCacheDecision {
+    match policy.dynamic {
+        DynamicPolicy::ForceStatic => RouteCacheDecision::Public {
+            revalidate_seconds: policy.revalidate_seconds,
+        },
+        DynamicPolicy::ForceDynamic => RouteCacheDecision::PrivateNoStore,
+        DynamicPolicy::Auto => match policy.revalidate_seconds {
+            Some(seconds) => RouteCacheDecision::Public {
+                revalidate_seconds: Some(seconds),
+            },
+            None => RouteCacheDecision::PrivateNoStore,
+        },
+    }
+}
+
+fn enforce_cache_privacy(
+    target: &RequestTarget<'_>,
+    uses_private_request_state: bool,
+) -> Result<(), RequestPlanError> {
+    if !uses_private_request_state {
+        return Ok(());
+    }
+    let cache = match target {
+        RequestTarget::Page { cache, .. } | RequestTarget::RouteHandler { cache, .. } => cache,
+        RequestTarget::StaticAsset(_)
+        | RequestTarget::NotFound
+        | RequestTarget::MethodNotAllowed { .. } => return Ok(()),
+    };
+    if cache.allows_private_request_state() {
+        Ok(())
+    } else {
+        Err(RequestPlanError::PrivateCacheState)
+    }
 }
 
 fn enforce_execution_context(
@@ -442,6 +504,32 @@ mod tests {
                     cache: CachePolicy::default(),
                 },
                 RouteEntry {
+                    id: "static-page".into(),
+                    pattern: "/public".into(),
+                    kind: RouteKind::Page,
+                    source: PathBuf::from("public/page.tsx"),
+                    layouts: vec!["layout".into()],
+                    module: "page".into(),
+                    methods: vec!["GET".into(), "HEAD".into()],
+                    cache: CachePolicy {
+                        dynamic: DynamicPolicy::ForceStatic,
+                        revalidate_seconds: Some(60),
+                    },
+                },
+                RouteEntry {
+                    id: "dynamic-page".into(),
+                    pattern: "/account".into(),
+                    kind: RouteKind::Page,
+                    source: PathBuf::from("account/page.tsx"),
+                    layouts: vec!["layout".into()],
+                    module: "page".into(),
+                    methods: vec!["GET".into(), "HEAD".into()],
+                    cache: CachePolicy {
+                        dynamic: DynamicPolicy::ForceDynamic,
+                        revalidate_seconds: None,
+                    },
+                },
+                RouteEntry {
                     id: "handler".into(),
                     pattern: "/api/echo".into(),
                     kind: RouteKind::Handler,
@@ -497,7 +585,7 @@ mod tests {
             target => panic!("unexpected target: {target:?}"),
         }
         match plan_request(&manifest, &Method::HEAD, "/shop/caf%C3%A9").unwrap() {
-            RequestTarget::Page { route, params } => {
+            RequestTarget::Page { route, params, .. } => {
                 assert_eq!(route.module, "page");
                 assert_eq!(params["id"], Param::One("café".into()));
             }
@@ -557,6 +645,7 @@ mod tests {
                     method: &Method::POST,
                     path: "/api/echo",
                     declared_body_bytes: Some(5),
+                    uses_private_request_state: false,
                 },
                 &limits,
             ),
@@ -583,12 +672,85 @@ mod tests {
                     method: &Method::POST,
                     path: "/api/echo",
                     declared_body_bytes: Some(4),
+                    uses_private_request_state: false,
                 },
                 &limits,
             )
             .unwrap(),
             RequestTarget::RouteHandler { .. }
         ));
+    }
+
+    #[test]
+    fn enforces_cache_policy_before_route_dispatch() {
+        let manifest = compiled();
+        let limits = AdmissionLimits { max_body_bytes: 16 };
+
+        match plan_request_input(
+            &manifest,
+            &RequestInput {
+                method: &Method::GET,
+                path: "/public",
+                declared_body_bytes: None,
+                uses_private_request_state: false,
+            },
+            &limits,
+        )
+        .unwrap()
+        {
+            RequestTarget::Page { cache, .. } => assert_eq!(
+                cache,
+                RouteCacheDecision::Public {
+                    revalidate_seconds: Some(60),
+                }
+            ),
+            target => panic!("unexpected target: {target:?}"),
+        }
+
+        assert!(matches!(
+            plan_request_input(
+                &manifest,
+                &RequestInput {
+                    method: &Method::GET,
+                    path: "/public",
+                    declared_body_bytes: None,
+                    uses_private_request_state: true,
+                },
+                &limits,
+            ),
+            Err(RequestPlanError::PrivateCacheState)
+        ));
+        assert_eq!(
+            admit_request_input(
+                &manifest,
+                &RequestInput {
+                    method: &Method::GET,
+                    path: "/public",
+                    declared_body_bytes: None,
+                    uses_private_request_state: true,
+                },
+                &limits,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::INTERNAL_SERVER_ERROR))
+        );
+        match plan_request_input(
+            &manifest,
+            &RequestInput {
+                method: &Method::GET,
+                path: "/account",
+                declared_body_bytes: None,
+                uses_private_request_state: true,
+            },
+            &limits,
+        )
+        .unwrap()
+        {
+            RequestTarget::Page { cache, .. } => {
+                assert_eq!(cache, RouteCacheDecision::PrivateNoStore)
+            }
+            target => panic!("unexpected target: {target:?}"),
+        }
     }
 
     #[test]
@@ -602,6 +764,7 @@ mod tests {
                 method: &Method::GET,
                 path: "/shop/1",
                 declared_body_bytes: None,
+                uses_private_request_state: false,
             },
             &limits,
         )
@@ -620,6 +783,7 @@ mod tests {
                     method: &Method::POST,
                     path: "/shop/1",
                     declared_body_bytes: None,
+                    uses_private_request_state: false,
                 },
                 &limits,
             )
@@ -636,6 +800,7 @@ mod tests {
                     method: &Method::GET,
                     path: "/missing",
                     declared_body_bytes: None,
+                    uses_private_request_state: false,
                 },
                 &limits,
             )
@@ -649,6 +814,7 @@ mod tests {
                     method: &Method::GET,
                     path: "/shop/1?x=1",
                     declared_body_bytes: None,
+                    uses_private_request_state: false,
                 },
                 &limits,
             )
@@ -662,6 +828,7 @@ mod tests {
                     method: &Method::POST,
                     path: "/api/echo",
                     declared_body_bytes: Some(5),
+                    uses_private_request_state: false,
                 },
                 &limits,
             )
@@ -780,6 +947,7 @@ mod tests {
                 method: &Method::POST,
                 path: "/api/echo",
                 declared_body_bytes: None,
+                uses_private_request_state: false,
             },
             &limits,
             &context,
@@ -803,6 +971,7 @@ mod tests {
                     method: &Method::POST,
                     path: "/api/echo",
                     declared_body_bytes: None,
+                    uses_private_request_state: false,
                 },
                 &limits,
                 &InvocationContext {
