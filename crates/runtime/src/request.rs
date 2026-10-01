@@ -464,14 +464,17 @@ fn origin_allowed(origin: Option<&str>, expected_origin: Option<&str>) -> bool {
 }
 
 fn normalize_origin(value: &str) -> Option<String> {
-    let uri = value.parse::<Uri>().ok()?;
-    let scheme = uri.scheme_str()?;
+    let (scheme, authority) = value.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https") {
+        return None;
+    }
+    if authority.is_empty() || authority.contains(['@', '/', '?', '#']) {
+        return None;
+    }
+    let uri = format!("{scheme}://{authority}").parse::<Uri>().ok()?;
     let authority = uri.authority()?.as_str();
-    Some(format!(
-        "{}://{}",
-        scheme.to_ascii_lowercase(),
-        authority.to_ascii_lowercase()
-    ))
+    Some(format!("{scheme}://{}", authority.to_ascii_lowercase()))
 }
 
 fn enforce_body_limit(
@@ -647,7 +650,7 @@ mod tests {
             &manifest,
             &Method::POST,
             "action:actions#save",
-            Some("https://example.com/form"),
+            Some("https://example.com"),
             Some("https://example.com"),
         )
         .unwrap();
@@ -691,6 +694,27 @@ mod tests {
             ),
             Err(RequestPlanError::ActionOrigin)
         ));
+        for malformed in [
+            "https://example.com/path",
+            "https://example.com?next=/",
+            "https://example.com#frag",
+            "ftp://example.com",
+            "https://user@example.com",
+        ] {
+            assert!(
+                matches!(
+                    plan_action(
+                        &manifest,
+                        &Method::POST,
+                        "action:actions#save",
+                        Some(malformed),
+                        Some("https://example.com"),
+                    ),
+                    Err(RequestPlanError::ActionOrigin)
+                ),
+                "origin should be rejected: {malformed}"
+            );
+        }
     }
 
     #[test]
@@ -928,7 +952,7 @@ mod tests {
             &ActionInput {
                 method: &Method::POST,
                 action_id: "action:actions#save",
-                origin: Some("https://example.com/form"),
+                origin: Some("https://example.com"),
                 expected_origin: Some("https://example.com"),
                 declared_body_bytes: Some(4),
             },
