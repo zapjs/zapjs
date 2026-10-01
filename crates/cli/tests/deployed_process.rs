@@ -76,25 +76,7 @@ fn managed_native_artifact_serves_from_real_zap_process() {
         .expect("serve printed listening address")
         .to_owned();
 
-    let mut stream = TcpStream::connect(&address).expect("connect to zap serve");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .expect("set read timeout");
-    stream
-        .write_all(
-            b"POST /api/echo HTTP/1.1\r\nhost: zap.local\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-        )
-        .expect("write request");
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-    assert!(
-        response.starts_with("HTTP/1.1 200 OK"),
-        "unexpected response:\n{response}"
-    );
-    assert!(
-        response.ends_with("echo:POST:/api/echo"),
-        "unexpected response body:\n{response}"
-    );
+    assert_served_framework_responses(&address);
 
     let _ = guard.0.kill();
     assert!(guard.0.wait().expect("wait for serve").success() == false);
@@ -130,10 +112,10 @@ fn provider_fs_upload_serves_from_real_zap_process() {
 
     assert!(provider_root.join("zap.provider-fs-upload.json").is_file());
     assert!(provider_root.join("function/.zap/manifest.json").is_file());
-    assert_served_echo(binary, &provider_root.join("function"));
+    assert_served_framework(binary, &provider_root.join("function"));
 }
 
-fn assert_served_echo(binary: &str, function_root: &Path) {
+fn assert_served_framework(binary: &str, function_root: &Path) {
     let mut child = Command::new(binary)
         .args([
             "serve",
@@ -162,28 +144,74 @@ fn assert_served_echo(binary: &str, function_root: &Path) {
         .expect("serve printed listening address")
         .to_owned();
 
-    let mut stream = TcpStream::connect(&address).expect("connect to zap serve");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .expect("set read timeout");
-    stream
-        .write_all(
-            b"POST /api/echo HTTP/1.1\r\nhost: zap.local\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-        )
-        .expect("write request");
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-    assert!(
-        response.starts_with("HTTP/1.1 200 OK"),
-        "unexpected response:\n{response}"
-    );
-    assert!(
-        response.ends_with("echo:POST:/api/echo"),
-        "unexpected response body:\n{response}"
-    );
+    assert_served_framework_responses(&address);
 
     let _ = guard.0.kill();
     assert!(guard.0.wait().expect("wait for serve").success() == false);
+}
+
+fn assert_served_framework_responses(address: &str) {
+    let route = http_exchange(
+        address,
+        b"POST /api/echo HTTP/1.1\r\nhost: zap.local\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        route.starts_with("HTTP/1.1 200 OK"),
+        "unexpected route response:\n{route}"
+    );
+    assert!(
+        route.ends_with("echo:POST:/api/echo"),
+        "unexpected route response body:\n{route}"
+    );
+
+    let page = http_exchange(
+        address,
+        b"GET / HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        page.starts_with("HTTP/1.1 200 OK"),
+        "unexpected page response:\n{page}"
+    );
+    assert!(
+        page.contains("content-type: text/html; charset=utf-8"),
+        "page response did not carry HTML content type:\n{page}"
+    );
+    assert!(
+        page.ends_with("home"),
+        "unexpected page response body:\n{page}"
+    );
+
+    let flight = http_exchange(
+        address,
+        b"GET / HTTP/1.1\r\nhost: zap.local\r\nrsc: 1\r\naccept: text/x-component\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        flight.starts_with("HTTP/1.1 200 OK"),
+        "unexpected Flight response:\n{flight}"
+    );
+    assert!(
+        flight.contains("content-type: text/x-component; charset=utf-8"),
+        "Flight response did not carry RSC content type:\n{flight}"
+    );
+    assert!(
+        flight.contains("ZAP_FLIGHT 1"),
+        "Flight response did not carry Zap Flight envelope:\n{flight}"
+    );
+    assert!(
+        flight.contains(r#""content":"home""#),
+        "Flight response did not carry page content:\n{flight}"
+    );
+}
+
+fn http_exchange(address: &str, request: &[u8]) -> String {
+    let mut stream = TcpStream::connect(address).expect("connect to zap serve");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("set read timeout");
+    stream.write_all(request).expect("write request");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+    response
 }
 
 fn write_minimal_app(root: &Path) {
