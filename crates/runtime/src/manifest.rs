@@ -68,7 +68,7 @@ pub struct ClientReference {
     pub browser_chunk: PathBuf,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ClientHydrationReference {
     pub id: String,
     pub module: String,
@@ -76,7 +76,7 @@ pub struct ClientHydrationReference {
     pub browser_chunk: PathBuf,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RouteHydration {
     pub client_references: Vec<ClientHydrationReference>,
     pub browser_chunks: Vec<PathBuf>,

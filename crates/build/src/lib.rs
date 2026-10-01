@@ -1252,6 +1252,46 @@ async function renderPageOutput(request) {{
   return await renderPage(zapPageProps(request));
 }}
 
+async function zapTextOutput(value) {{
+  value = await normalizeZapOutput(value);
+  if (typeof value === "string") return value;
+  if (value instanceof Uint8Array) return new TextDecoder().decode(value);
+  if (value && typeof value.getReader === "function") {{
+    const reader = value.getReader();
+    const decoder = new TextDecoder();
+    let output = "";
+    try {{
+      while (true) {{
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (!(chunk.value instanceof Uint8Array)) throw new TypeError("Zap Flight streams must contain Uint8Array chunks");
+        output += decoder.decode(chunk.value, {{ stream: true }});
+      }}
+      output += decoder.decode();
+      return output;
+    }} finally {{
+      reader.releaseLock();
+    }}
+  }}
+  return String(value);
+}}
+
+async function defaultZapFlight(request) {{
+  const content = await zapTextOutput(await renderPageOutput(request));
+  return "ZAP_FLIGHT 1\n" + JSON.stringify({{
+    type: "zap.flight.page",
+    path: request && request.path,
+    params: request && request.params || {{}},
+    searchParams: request && request.searchParams || {{}},
+    route: request && request.flight ? {{
+      id: request.flight.routeId,
+      pattern: request.flight.pattern
+    }} : undefined,
+    hydration: request && request.flight ? request.flight.hydration : {{ client_references: [], browser_chunks: [] }},
+    content
+  }});
+}}
+
 export async function render(request) {{
   return await normalizeZapOutput(await renderPageOutput(request));
 }}
@@ -1260,7 +1300,7 @@ export async function flight(request) {{
   if (typeof renderPage.flight === "function") {{
     return await normalizeZapOutput(await renderPage.flight(zapPageProps(request)));
   }}
-  return await normalizeZapOutput(await renderPageOutput(request));
+  return await defaultZapFlight(request);
 }}
 "#
     );
@@ -3695,6 +3735,8 @@ export const Label = 'count';
         let page_entry_source =
             fs::read_to_string(temp.path().join(".zap/entries/server/page.js")).unwrap();
         assert!(page_entry_source.contains("react-dom/server.browser"));
+        assert!(page_entry_source.contains("defaultZapFlight"));
+        assert!(page_entry_source.contains("ZAP_FLIGHT 1"));
         assert!(page_entry_source.contains("export async function flight"));
         let route_entry_source =
             fs::read_to_string(temp.path().join(".zap/entries/server/api/echo/route.js")).unwrap();
@@ -3744,7 +3786,19 @@ export const Label = 'count';
         let rendered = page_renderer.render(&page_request).unwrap();
         assert_eq!(rendered, r#"<main data-path="/">home:/</main>"#);
         let flight = page_renderer.flight(&page_request).unwrap();
-        assert_eq!(flight, r#"<main data-path="/">home:/</main>"#);
+        let flight = flight.strip_prefix("ZAP_FLIGHT 1\n").unwrap();
+        let flight: serde_json::Value = serde_json::from_str(flight).unwrap();
+        assert_eq!(flight["type"], "zap.flight.page");
+        assert_eq!(flight["path"], "/");
+        assert_eq!(flight["route"]["id"], "page");
+        assert_eq!(
+            flight["hydration"]["client_references"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(flight["content"], r#"<main data-path="/">home:/</main>"#);
         let product_match = compiled.resolve("/shop/caf%C3%A9").unwrap().unwrap();
         let product_bundle = compiled
             .module(&product_match.route.module)

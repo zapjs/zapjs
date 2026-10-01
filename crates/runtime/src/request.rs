@@ -435,6 +435,16 @@ pub struct RendererRequestPayload {
     pub params: BTreeMap<String, Param>,
     #[serde(rename = "searchParams")]
     pub search_params: BTreeMap<String, Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flight: Option<RendererFlightPayload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RendererFlightPayload {
+    #[serde(rename = "routeId")]
+    pub route_id: String,
+    pub pattern: String,
+    pub hydration: RouteHydration,
 }
 
 impl RendererRequestPayload {
@@ -445,6 +455,7 @@ impl RendererRequestPayload {
         search_params: BTreeMap<String, Vec<String>>,
         headers: BTreeMap<String, String>,
         body: String,
+        flight: Option<RendererFlightPayload>,
     ) -> Self {
         Self {
             method: method.as_str().to_owned(),
@@ -453,6 +464,7 @@ impl RendererRequestPayload {
             body,
             params: params.clone(),
             search_params,
+            flight,
         }
     }
 
@@ -487,7 +499,11 @@ impl<'a> RequestTarget<'a> {
         let body = request_body_text(body)?;
         Ok(match self {
             RequestTarget::Page {
-                params, invocation, ..
+                route,
+                params,
+                hydration,
+                invocation,
+                ..
             } => Some(RendererRequestPayload::new(
                 &invocation.method,
                 target.path,
@@ -495,6 +511,11 @@ impl<'a> RequestTarget<'a> {
                 search_params,
                 headers,
                 body,
+                Some(RendererFlightPayload {
+                    route_id: route.id.clone(),
+                    pattern: route.pattern.clone(),
+                    hydration: hydration.clone(),
+                }),
             )),
             RequestTarget::RouteHandler {
                 params, invocation, ..
@@ -505,6 +526,7 @@ impl<'a> RequestTarget<'a> {
                 search_params,
                 headers,
                 body,
+                None,
             )),
             RequestTarget::StaticAsset(_)
             | RequestTarget::NotFound
@@ -942,11 +964,20 @@ mod tests {
             }
             target => panic!("unexpected target: {target:?}"),
         }
+        let page_renderer_payload = page_target
+            .renderer_request_json("/shop/caf%C3%A9", &[], b"")
+            .unwrap()
+            .unwrap();
+        let page_renderer_payload: serde_json::Value =
+            serde_json::from_str(&page_renderer_payload).unwrap();
+        assert_eq!(page_renderer_payload["method"], "HEAD");
+        assert_eq!(page_renderer_payload["path"], "/shop/caf%C3%A9");
+        assert_eq!(page_renderer_payload["params"]["id"], "café");
+        assert_eq!(page_renderer_payload["flight"]["routeId"], "page");
+        assert_eq!(page_renderer_payload["flight"]["pattern"], "/shop/[id]");
         assert_eq!(
-            page_target
-                .renderer_request_json("/shop/caf%C3%A9", &[], b"")
-                .unwrap(),
-            Some(r#"{"method":"HEAD","path":"/shop/caf%C3%A9","headers":{},"body":"","params":{"id":"café"},"searchParams":{}}"#.into())
+            page_renderer_payload["flight"]["hydration"]["client_references"],
+            serde_json::json!([])
         );
 
         let route_target = plan_request(&manifest, &Method::POST, "/api/echo").unwrap();
