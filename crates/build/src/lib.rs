@@ -1494,6 +1494,13 @@ function navigationErrorMessage(error) {
   return error && error.message ? error.message : String(error || "unknown navigation error");
 }
 
+let zapNavigationSeq = 0;
+let zapNavigationAbort;
+
+function isAbortError(error) {
+  return error && (error.name === "AbortError" || error.code === 20);
+}
+
 function setZapNavigationState(state, detail = {}) {
   const payload = { state, detail };
   globalThis.__zap_navigation = payload;
@@ -1542,15 +1549,22 @@ async function hydrateZapDocument(targetDocument = document) {
 
 async function navigateZap(url, options = {}) {
   const nextUrl = new URL(url, globalThis.location && globalThis.location.href || zapBaseUrl());
+  const sequence = ++zapNavigationSeq;
+  if (zapNavigationAbort) zapNavigationAbort.abort();
+  const controller = typeof AbortController === "function" ? new AbortController() : undefined;
+  zapNavigationAbort = controller;
   setZapNavigationState("pending", { url: nextUrl.href });
   try {
     const response = await fetch(nextUrl.href, {
       method: "GET",
       credentials: "same-origin",
-      headers: { accept: "text/html" }
+      headers: { accept: "text/html" },
+      signal: controller && controller.signal
     });
+    if (sequence !== zapNavigationSeq) return undefined;
     if (!response.ok) throw new Error(`Zap navigation failed: ${response.status}`);
     const html = await response.text();
+    if (sequence !== zapNavigationSeq) return undefined;
     const nextDocument = new DOMParser().parseFromString(html, "text/html");
     if (!nextDocument.body) throw new Error("Zap navigation response did not include a body");
     document.title = nextDocument.title;
@@ -1561,14 +1575,18 @@ async function navigateZap(url, options = {}) {
       history.pushState({ __zap: true }, "", nextUrl.href);
     }
     const state = await hydrateZapDocument(document);
+    if (sequence !== zapNavigationSeq) return undefined;
     setZapNavigationState("idle", { url: nextUrl.href, hydration: state && state.hydration });
     document.dispatchEvent(new CustomEvent("zap:navigation-complete", { detail: globalThis.__zap_navigation }));
     return state;
   } catch (error) {
+    if (sequence !== zapNavigationSeq || isAbortError(error)) return undefined;
     globalThis.__zap_navigation_error = error;
     setZapNavigationState("error", { url: nextUrl.href, error });
     document.dispatchEvent(new CustomEvent("zap:navigation-error", { detail: error }));
     throw error;
+  } finally {
+    if (sequence === zapNavigationSeq) zapNavigationAbort = undefined;
   }
 }
 
@@ -3536,6 +3554,10 @@ export const Label = 'count';
         assert!(browser_bootstrap_source.contains("zapChunkUrl(reference.browser_chunk)"));
         assert!(browser_bootstrap_source.contains("actions: actionModule"));
         assert!(browser_bootstrap_source.contains("__zap_navigate"));
+        assert!(browser_bootstrap_source.contains("zapNavigationSeq"));
+        assert!(browser_bootstrap_source.contains("AbortController"));
+        assert!(browser_bootstrap_source.contains("signal: controller && controller.signal"));
+        assert!(browser_bootstrap_source.contains("sequence !== zapNavigationSeq"));
         assert!(browser_bootstrap_source.contains("setZapNavigationState(\"pending\""));
         assert!(browser_bootstrap_source.contains("setZapNavigationState(\"error\""));
         assert!(browser_bootstrap_source.contains("[data-zap-pending]"));
