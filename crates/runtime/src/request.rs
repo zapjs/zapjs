@@ -38,6 +38,21 @@ impl RouteCacheDecision {
     fn allows_private_request_state(&self) -> bool {
         matches!(self, Self::PrivateNoStore)
     }
+
+    pub fn response_headers(&self) -> Vec<(String, String)> {
+        match self {
+            Self::Public {
+                revalidate_seconds: Some(seconds),
+            } => vec![(
+                "cache-control".into(),
+                format!("public, max-age=0, s-maxage={seconds}, stale-while-revalidate"),
+            )],
+            Self::Public {
+                revalidate_seconds: None,
+            } => vec![("cache-control".into(), "public, immutable".into())],
+            Self::PrivateNoStore => vec![("cache-control".into(), "private, no-store".into())],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -698,12 +713,21 @@ mod tests {
         )
         .unwrap()
         {
-            RequestTarget::Page { cache, .. } => assert_eq!(
-                cache,
-                RouteCacheDecision::Public {
-                    revalidate_seconds: Some(60),
-                }
-            ),
+            RequestTarget::Page { cache, .. } => {
+                assert_eq!(
+                    cache,
+                    RouteCacheDecision::Public {
+                        revalidate_seconds: Some(60),
+                    }
+                );
+                assert_eq!(
+                    cache.response_headers(),
+                    vec![(
+                        "cache-control".to_owned(),
+                        "public, max-age=0, s-maxage=60, stale-while-revalidate".to_owned(),
+                    )]
+                );
+            }
             target => panic!("unexpected target: {target:?}"),
         }
 
@@ -747,16 +771,22 @@ mod tests {
         .unwrap()
         {
             RequestTarget::Page { cache, .. } => {
-                assert_eq!(cache, RouteCacheDecision::PrivateNoStore)
+                assert_eq!(cache, RouteCacheDecision::PrivateNoStore);
+                assert_eq!(
+                    cache.response_headers(),
+                    vec![("cache-control".into(), "private, no-store".into())]
+                );
             }
             target => panic!("unexpected target: {target:?}"),
         }
+        let zero_revalidate = route_cache_decision(&CachePolicy {
+            dynamic: DynamicPolicy::Auto,
+            revalidate_seconds: Some(0),
+        });
+        assert_eq!(zero_revalidate, RouteCacheDecision::PrivateNoStore);
         assert_eq!(
-            route_cache_decision(&CachePolicy {
-                dynamic: DynamicPolicy::Auto,
-                revalidate_seconds: Some(0),
-            }),
-            RouteCacheDecision::PrivateNoStore
+            zero_revalidate.response_headers(),
+            vec![("cache-control".into(), "private, no-store".into())]
         );
     }
 
