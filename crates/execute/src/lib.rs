@@ -1,0 +1,451 @@
+//! Executes built ZapJS artifacts through the Rust-owned runtime and renderer.
+
+use http::{Method, StatusCode};
+use serde_json::Value;
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
+use thiserror::Error;
+use zap_render::{RenderError, Renderer};
+use zap_runtime::{
+    manifest::{CompiledManifest, ManifestError},
+    request::{
+        ActionInput, AdmissionLimits, AdmissionOutcome, ImmediateResponse, RequestInput,
+        RequestPlanError, RequestTarget, admit_action_input, admit_request_input,
+    },
+};
+
+#[derive(Debug, Error)]
+pub enum ExecuteError {
+    #[error("manifest error: {0}")]
+    Manifest(#[from] ManifestError),
+    #[error("request plan error: {0}")]
+    RequestPlan(#[from] RequestPlanError),
+    #[error("read artifact {path}: {source}")]
+    ReadArtifact { path: PathBuf, source: io::Error },
+    #[error("render artifact {path}: {source}")]
+    RenderArtifact { path: PathBuf, source: RenderError },
+    #[error("invalid renderer status {0}")]
+    InvalidStatus(u16),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionResponse {
+    pub status: StatusCode,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl ExecutionResponse {
+    fn new(status: StatusCode) -> Self {
+        Self {
+            status,
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    fn with_headers(mut self, headers: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.headers.extend(headers);
+        self
+    }
+
+    fn with_body(mut self, body: impl Into<Vec<u8>>) -> Self {
+        self.body = body.into();
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestExecutionInput<'a> {
+    pub method: &'a Method,
+    pub path: &'a str,
+    pub declared_body_bytes: Option<u64>,
+    pub uses_private_request_state: bool,
+}
+
+impl<'a> RequestExecutionInput<'a> {
+    pub fn new(method: &'a Method, path: &'a str) -> Self {
+        Self {
+            method,
+            path,
+            declared_body_bytes: None,
+            uses_private_request_state: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ActionExecutionInput<'a> {
+    pub method: &'a Method,
+    pub action_id: &'a str,
+    pub origin: Option<&'a str>,
+    pub expected_origin: Option<&'a str>,
+    pub declared_body_bytes: Option<u64>,
+    pub args: Vec<Value>,
+}
+
+pub struct ApplicationExecutor {
+    root: PathBuf,
+    public_dir: PathBuf,
+    manifest: CompiledManifest,
+    limits: AdmissionLimits,
+}
+
+impl ApplicationExecutor {
+    pub fn load(root: impl AsRef<Path>) -> Result<Self, ExecuteError> {
+        Self::load_from(root.as_ref(), root.as_ref().join(".zap/manifest.json"))
+    }
+
+    pub fn load_from(
+        root: impl AsRef<Path>,
+        manifest_path: impl AsRef<Path>,
+    ) -> Result<Self, ExecuteError> {
+        let root = root.as_ref().to_owned();
+        let manifest = CompiledManifest::load(manifest_path.as_ref())?;
+        Ok(Self {
+            public_dir: root.join("public"),
+            root,
+            manifest,
+            limits: AdmissionLimits::default(),
+        })
+    }
+
+    pub fn with_public_dir(mut self, public_dir: impl AsRef<Path>) -> Self {
+        self.public_dir = public_dir.as_ref().to_owned();
+        self
+    }
+
+    pub fn with_limits(mut self, limits: AdmissionLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    pub fn execute_request(
+        &self,
+        input: &RequestExecutionInput<'_>,
+    ) -> Result<ExecutionResponse, ExecuteError> {
+        match admit_request_input(
+            &self.manifest,
+            &RequestInput {
+                method: input.method,
+                path: input.path,
+                declared_body_bytes: input.declared_body_bytes,
+                uses_private_request_state: input.uses_private_request_state,
+            },
+            &self.limits,
+        )? {
+            AdmissionOutcome::Respond(response) => Ok(immediate_response(response)),
+            AdmissionOutcome::Dispatch(target) => self.dispatch_request(input, target),
+        }
+    }
+
+    pub fn execute_action(
+        &self,
+        input: &ActionExecutionInput<'_>,
+    ) -> Result<ExecutionResponse, ExecuteError> {
+        match admit_action_input(
+            &self.manifest,
+            &ActionInput {
+                method: input.method,
+                action_id: input.action_id,
+                origin: input.origin,
+                expected_origin: input.expected_origin,
+                declared_body_bytes: input.declared_body_bytes,
+            },
+            &self.limits,
+        )? {
+            AdmissionOutcome::Respond(response) => Ok(immediate_response(response)),
+            AdmissionOutcome::Dispatch(admission) => {
+                let invocation = &admission.target.invocation;
+                let bundle_path = self.root.join(&invocation.server_bundle);
+                let bundle = read_artifact_string(&bundle_path)?;
+                let invocation_json = invocation.json(input.args.clone())?;
+                let rendered = Renderer::new(bundle)
+                    .invoke_action_response(&invocation_json)
+                    .map_err(|source| ExecuteError::RenderArtifact {
+                        path: bundle_path.clone(),
+                        source,
+                    })?;
+                route_response(rendered.status, rendered.headers, rendered.body)
+            }
+        }
+    }
+
+    fn dispatch_request(
+        &self,
+        input: &RequestExecutionInput<'_>,
+        target: RequestTarget<'_>,
+    ) -> Result<ExecutionResponse, ExecuteError> {
+        match &target {
+            RequestTarget::StaticAsset(asset) => {
+                let source = self.public_dir.join(&asset.source);
+                let body = if input.method == Method::HEAD {
+                    Vec::new()
+                } else {
+                    read_artifact_bytes(&source)?
+                };
+                Ok(ExecutionResponse::new(StatusCode::OK).with_body(body))
+            }
+            RequestTarget::Page {
+                cache, invocation, ..
+            } => {
+                let bundle_path = self.root.join(&invocation.server_bundle);
+                let bundle = read_artifact_string(&bundle_path)?;
+                let request_json = target
+                    .renderer_request_json(input.path)?
+                    .expect("page targets produce renderer payloads");
+                let body = if input.method == Method::HEAD {
+                    String::new()
+                } else {
+                    Renderer::new(bundle)
+                        .render(&request_json)
+                        .map_err(|source| ExecuteError::RenderArtifact {
+                            path: bundle_path.clone(),
+                            source,
+                        })?
+                };
+                Ok(ExecutionResponse::new(StatusCode::OK)
+                    .with_headers(cache.response_headers())
+                    .with_headers([("content-type".into(), "text/html; charset=utf-8".into())])
+                    .with_body(body.into_bytes()))
+            }
+            RequestTarget::RouteHandler {
+                cache, invocation, ..
+            } => {
+                let bundle_path = self.root.join(&invocation.server_bundle);
+                let bundle = read_artifact_string(&bundle_path)?;
+                let request_json = target
+                    .renderer_request_json(input.path)?
+                    .expect("route handler targets produce renderer payloads");
+                let rendered = Renderer::new(bundle)
+                    .handle_route_response(&request_json)
+                    .map_err(|source| ExecuteError::RenderArtifact {
+                        path: bundle_path.clone(),
+                        source,
+                    })?;
+                let mut response =
+                    route_response(rendered.status, rendered.headers, rendered.body)?;
+                if input.method == Method::HEAD {
+                    response.body.clear();
+                }
+                response.headers.extend(cache.response_headers());
+                Ok(response)
+            }
+            RequestTarget::NotFound | RequestTarget::MethodNotAllowed { .. } => {
+                unreachable!("terminal request targets are mapped before dispatch")
+            }
+        }
+    }
+}
+
+fn route_response(
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: String,
+) -> Result<ExecutionResponse, ExecuteError> {
+    let status = StatusCode::from_u16(status).map_err(|_| ExecuteError::InvalidStatus(status))?;
+    Ok(ExecutionResponse::new(status)
+        .with_headers(headers)
+        .with_body(body.into_bytes()))
+}
+
+fn immediate_response(response: ImmediateResponse) -> ExecutionResponse {
+    ExecutionResponse::new(response.status).with_headers(response.headers)
+}
+
+fn read_artifact_string(path: &Path) -> Result<String, ExecuteError> {
+    fs::read_to_string(path).map_err(|source| ExecuteError::ReadArtifact {
+        path: path.to_owned(),
+        source,
+    })
+}
+
+fn read_artifact_bytes(path: &Path) -> Result<Vec<u8>, ExecuteError> {
+    fs::read(path).map_err(|source| ExecuteError::ReadArtifact {
+        path: path.to_owned(),
+        source,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use zap_runtime::manifest::{
+        ActionRef, ApplicationManifest, AssetRef, CachePolicy, ModuleKind, ModuleRef, RouteEntry,
+        RouteKind,
+    };
+
+    #[test]
+    fn executes_pages_handlers_assets_and_actions_from_manifest() {
+        let temp = tempfile::tempdir().unwrap();
+        write_fixture(temp.path());
+        let executor =
+            ApplicationExecutor::load_from(temp.path(), temp.path().join(".zap/manifest.json"))
+                .unwrap();
+
+        let page = executor
+            .execute_request(&RequestExecutionInput::new(&Method::GET, "/"))
+            .unwrap();
+        assert_eq!(page.status, StatusCode::OK);
+        assert_eq!(String::from_utf8(page.body).unwrap(), "<main>GET:/</main>");
+        assert!(
+            page.headers
+                .contains(&("content-type".into(), "text/html; charset=utf-8".into()))
+        );
+
+        let head = executor
+            .execute_request(&RequestExecutionInput::new(&Method::HEAD, "/"))
+            .unwrap();
+        assert_eq!(head.status, StatusCode::OK);
+        assert!(head.body.is_empty());
+
+        let route = executor
+            .execute_request(&RequestExecutionInput::new(&Method::POST, "/api/echo"))
+            .unwrap();
+        assert_eq!(route.status, StatusCode::ACCEPTED);
+        assert_eq!(
+            route.headers,
+            vec![
+                ("x-zap-route".into(), "echo".into()),
+                ("cache-control".into(), "private, no-store".into())
+            ]
+        );
+        assert_eq!(
+            String::from_utf8(route.body).unwrap(),
+            "echo:POST:/api/echo"
+        );
+
+        let asset = executor
+            .execute_request(&RequestExecutionInput::new(&Method::GET, "/logo.txt"))
+            .unwrap();
+        assert_eq!(asset.status, StatusCode::OK);
+        assert_eq!(String::from_utf8(asset.body).unwrap(), "zap");
+
+        let action = executor
+            .execute_action(&ActionExecutionInput {
+                method: &Method::POST,
+                action_id: "action:actions#save",
+                origin: Some("https://example.com"),
+                expected_origin: Some("https://example.com"),
+                declared_body_bytes: None,
+                args: vec![serde_json::json!({"id": 7})],
+            })
+            .unwrap();
+        assert_eq!(action.status, StatusCode::CREATED);
+        assert_eq!(String::from_utf8(action.body).unwrap(), "saved:7");
+    }
+
+    #[test]
+    fn maps_terminal_admission_to_responses() {
+        let temp = tempfile::tempdir().unwrap();
+        write_fixture(temp.path());
+        let executor =
+            ApplicationExecutor::load_from(temp.path(), temp.path().join(".zap/manifest.json"))
+                .unwrap();
+
+        let missing = executor
+            .execute_request(&RequestExecutionInput::new(&Method::GET, "/missing"))
+            .unwrap();
+        assert_eq!(missing.status, StatusCode::NOT_FOUND);
+
+        let wrong_method = executor
+            .execute_request(&RequestExecutionInput::new(&Method::PUT, "/"))
+            .unwrap();
+        assert_eq!(wrong_method.status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            wrong_method.headers,
+            vec![("allow".into(), "GET, HEAD".into())]
+        );
+    }
+
+    fn write_fixture(root: &Path) {
+        fs::create_dir_all(root.join(".zap/server/api/echo")).unwrap();
+        fs::create_dir_all(root.join("public")).unwrap();
+        fs::write(root.join("public/logo.txt"), "zap").unwrap();
+        fs::write(
+            root.join(".zap/server/page.js"),
+            r#"globalThis.ZapRender = { render(request) { return `<main>${request.method}:${request.path}</main>`; } };"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join(".zap/server/api/echo/route.js"),
+            r#"globalThis.ZapRoute = { handle(request) { return new Response(`echo:${request.method}:${request.path}`, { status: 202, headers: { "x-zap-route": "echo" } }); } };"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join(".zap/server/actions.js"),
+            r#"globalThis.ZapAction = { invoke(invocation) { return new Response(`saved:${invocation.args[0].id}`, { status: 201 }); } };"#,
+        )
+        .unwrap();
+        let manifest = ApplicationManifest {
+            routes: vec![
+                RouteEntry {
+                    id: "page".into(),
+                    pattern: "/".into(),
+                    kind: RouteKind::Page,
+                    source: PathBuf::from("page.tsx"),
+                    layouts: Vec::new(),
+                    module: "page".into(),
+                    methods: vec!["GET".into(), "HEAD".into()],
+                    cache: CachePolicy::default(),
+                    client_references: Vec::new(),
+                },
+                RouteEntry {
+                    id: "echo".into(),
+                    pattern: "/api/echo".into(),
+                    kind: RouteKind::Handler,
+                    source: PathBuf::from("api/echo/route.ts"),
+                    layouts: Vec::new(),
+                    module: "echo".into(),
+                    methods: vec!["POST".into()],
+                    cache: CachePolicy::default(),
+                    client_references: Vec::new(),
+                },
+            ],
+            layouts: Vec::new(),
+            modules: vec![
+                ModuleRef {
+                    id: "page".into(),
+                    path: PathBuf::from("page.tsx"),
+                    kind: ModuleKind::Server,
+                    browser_chunk: None,
+                    server_bundle: Some(PathBuf::from(".zap/server/page.js")),
+                },
+                ModuleRef {
+                    id: "echo".into(),
+                    path: PathBuf::from("api/echo/route.ts"),
+                    kind: ModuleKind::Server,
+                    browser_chunk: None,
+                    server_bundle: Some(PathBuf::from(".zap/server/api/echo/route.js")),
+                },
+                ModuleRef {
+                    id: "actions".into(),
+                    path: PathBuf::from("actions.ts"),
+                    kind: ModuleKind::ServerActions,
+                    browser_chunk: None,
+                    server_bundle: Some(PathBuf::from(".zap/server/actions.js")),
+                },
+            ],
+            actions: vec![ActionRef {
+                id: "action:actions#save".into(),
+                module: "actions".into(),
+                export: "save".into(),
+                path: PathBuf::from("actions.ts"),
+            }],
+            client_references: Vec::new(),
+            assets: vec![AssetRef {
+                source: PathBuf::from("logo.txt"),
+                url_path: "/logo.txt".into(),
+            }],
+        };
+        fs::create_dir_all(root.join(".zap")).unwrap();
+        fs::write(
+            root.join(".zap/manifest.json"),
+            manifest.to_manifest_json().unwrap(),
+        )
+        .unwrap();
+    }
+}

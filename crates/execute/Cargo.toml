@@ -1,0 +1,16 @@
+[package]
+name = "zap-execute"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+
+[dependencies]
+http = "1"
+serde_json = "1"
+thiserror = "2"
+zap-render = { path = "../render" }
+zap-runtime = { path = "../runtime" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -2,6 +2,7 @@
 members = [
   "crates/build",
   "crates/cli",
+  "crates/execute",
   "crates/render",
   "crates/runtime",
   "crates/splice",
