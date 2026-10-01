@@ -5,7 +5,7 @@ use std::{
     collections::BTreeMap,
     env,
     ffi::OsString,
-    fs,
+    fmt, fs,
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     path::{Component, Path, PathBuf},
@@ -17,7 +17,7 @@ use zap_build::{
 use zap_execute::{
     ActionEndpointInput, ApplicationExecutor, ExecutionResponse, RequestExecutionInput,
 };
-use zap_runtime::request::InvocationContext;
+use zap_runtime::request::{AdmissionLimits, InvocationContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
@@ -825,11 +825,16 @@ struct HttpRequest {
 }
 
 fn handle_connection(executor: &ApplicationExecutor, mut stream: TcpStream) -> Result<()> {
-    let request = match read_http_request(&mut stream) {
+    let request = match read_http_request(&mut stream, AdmissionLimits::default().max_body_bytes) {
         Ok(request) => request,
         Err(error) => {
-            eprintln!("bad request: {error:#}");
-            write_http_response(&mut stream, bad_request())?;
+            if error.downcast_ref::<HttpBodyTooLarge>().is_some() {
+                eprintln!("payload too large: {error:#}");
+                write_http_response(&mut stream, payload_too_large())?;
+            } else {
+                eprintln!("bad request: {error:#}");
+                write_http_response(&mut stream, bad_request())?;
+            }
             return Ok(());
         }
     };
@@ -852,6 +857,14 @@ fn bad_request() -> ExecutionResponse {
     }
 }
 
+fn payload_too_large() -> ExecutionResponse {
+    ExecutionResponse {
+        status: StatusCode::PAYLOAD_TOO_LARGE,
+        headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
+        body: b"Payload Too Large".to_vec(),
+    }
+}
+
 fn internal_server_error() -> ExecutionResponse {
     ExecutionResponse {
         status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -860,7 +873,25 @@ fn internal_server_error() -> ExecutionResponse {
     }
 }
 
-fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
+#[derive(Debug)]
+struct HttpBodyTooLarge {
+    declared: u64,
+    max: u64,
+}
+
+impl fmt::Display for HttpBodyTooLarge {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "HTTP request body declares {} bytes, above the configured {} byte limit",
+            self.declared, self.max
+        )
+    }
+}
+
+impl std::error::Error for HttpBodyTooLarge {}
+
+fn read_http_request(stream: &mut TcpStream, max_body_bytes: u64) -> Result<HttpRequest> {
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
     reader
@@ -897,6 +928,12 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         .transpose()
         .context("parse content-length")?
         .unwrap_or(0);
+    if content_length as u64 > max_body_bytes {
+        bail!(HttpBodyTooLarge {
+            declared: content_length as u64,
+            max: max_body_bytes,
+        });
+    }
     let mut body = vec![0; content_length];
     if content_length > 0 {
         reader.read_exact(&mut body).context("read request body")?;

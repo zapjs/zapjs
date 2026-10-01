@@ -240,6 +240,19 @@ fn assert_served_framework_responses(address: &str) {
         invalid_target.ends_with("Bad Request"),
         "400 target response must not leak parser internals:\n{invalid_target}"
     );
+
+    let oversized_body = http_exchange(
+        address,
+        b"POST /api/echo HTTP/1.1\r\nhost: zap.local\r\ncontent-length: 1048577\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        oversized_body.starts_with("HTTP/1.1 413 Payload Too Large"),
+        "oversized requests must return a bounded 413 response before body allocation:\n{oversized_body}"
+    );
+    assert!(
+        oversized_body.ends_with("Payload Too Large"),
+        "413 response must not leak admission internals:\n{oversized_body}"
+    );
 }
 
 fn http_exchange(address: &str, request: &[u8]) -> String {
