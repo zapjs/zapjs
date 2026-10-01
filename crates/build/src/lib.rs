@@ -1141,8 +1141,14 @@ pub async fn build_application(
         }
 
         if let Some(flight_bundle) = &module.flight_bundle {
-            let flight_entry =
-                write_page_flight_entry(&root, &options.graph.out_dir, module, &source_entry)?;
+            let flight_entry = write_page_flight_entry(
+                &root,
+                &options.graph.out_dir,
+                &app_root,
+                module,
+                &source_entry,
+                &graph.client_references,
+            )?;
             let output = absolute(&root, flight_bundle);
             let mut bundle_options = BundleOptions::new(
                 &root,
@@ -1211,6 +1217,103 @@ pub async fn build_application(
     })
 }
 
+fn write_flight_shadow_source(
+    root: &Path,
+    out_dir: &Path,
+    app_root: &Path,
+    client_references: &[ClientReference],
+) -> Result<PathBuf> {
+    let shadow_root = absolute(root, out_dir).join("entries/flight-app");
+    if shadow_root.exists() {
+        fs::remove_dir_all(&shadow_root).with_context(|| {
+            format!("remove stale Flight shadow graph {}", shadow_root.display())
+        })?;
+    }
+    fs::create_dir_all(&shadow_root)
+        .with_context(|| format!("create {}", shadow_root.display()))?;
+
+    let mut files = Vec::new();
+    collect_files(app_root, &mut files)?;
+    files.sort();
+    let references_by_path = client_references.iter().fold(
+        BTreeMap::<PathBuf, Vec<&ClientReference>>::new(),
+        |mut by_path, reference| {
+            by_path
+                .entry(reference.path.clone())
+                .or_default()
+                .push(reference);
+            by_path
+        },
+    );
+
+    for source in files {
+        let relative = source.strip_prefix(app_root).with_context(|| {
+            format!(
+                "shadow source {} outside {}",
+                source.display(),
+                app_root.display()
+            )
+        })?;
+        let destination = shadow_root.join(relative);
+        let parent = destination
+            .parent()
+            .context("Flight shadow source needs a parent directory")?;
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        let Some(file_name) = relative.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !is_source_file(file_name) {
+            fs::copy(&source, &destination).with_context(|| {
+                format!(
+                    "copy Flight shadow asset {} to {}",
+                    source.display(),
+                    destination.display()
+                )
+            })?;
+            continue;
+        }
+        let text =
+            fs::read_to_string(&source).with_context(|| format!("read {}", source.display()))?;
+        if classify_module(&text) == ModuleKind::Client {
+            let references = references_by_path.get(relative).with_context(|| {
+                format!(
+                    "client module {} has no client-reference metadata",
+                    relative.display()
+                )
+            })?;
+            fs::write(&destination, client_reference_shim(relative, references))
+                .with_context(|| format!("write {}", destination.display()))?;
+        } else {
+            fs::write(&destination, text)
+                .with_context(|| format!("write {}", destination.display()))?;
+        }
+    }
+
+    Ok(shadow_root)
+}
+
+fn client_reference_shim(path: &Path, references: &[&ClientReference]) -> String {
+    let module_id = js_string(&module_id(path));
+    let mut body = String::from(
+        "import { createClientModuleProxy } from \"react-server-dom-webpack/server.edge\";\n\n",
+    );
+    body.push_str(&format!(
+        "const zapClientModule = createClientModuleProxy(\"{module_id}\");\n"
+    ));
+    for reference in references {
+        if reference.export == "default" {
+            body.push_str("export default zapClientModule.default;\n");
+        } else {
+            let export = js_string(&reference.export);
+            body.push_str(&format!(
+                "export const {} = zapClientModule[\"{}\"];\n",
+                reference.export, export
+            ));
+        }
+    }
+    body
+}
+
 fn write_page_server_entry(
     root: &Path,
     out_dir: &Path,
@@ -1266,8 +1369,10 @@ export async function render(request) {{
 fn write_page_flight_entry(
     root: &Path,
     out_dir: &Path,
+    app_root: &Path,
     module: &ModuleRef,
     source_entry: &Path,
+    client_references: &[ClientReference],
 ) -> Result<PathBuf> {
     let entry = absolute(root, out_dir)
         .join("entries/server")
@@ -1276,7 +1381,16 @@ fn write_page_flight_entry(
         .parent()
         .context("generated page Flight entry needs a parent directory")?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let source = js_string(&source_entry.to_string_lossy());
+    let flight_source = write_flight_shadow_source(root, out_dir, app_root, client_references)?;
+    let shadow_entry =
+        flight_source.join(source_entry.strip_prefix(app_root).with_context(|| {
+            format!(
+                "page source {} outside app root {}",
+                source_entry.display(),
+                app_root.display()
+            )
+        })?);
+    let source = js_string(&shadow_entry.to_string_lossy());
     let uses_jsx = page_source_uses_jsx(source_entry)?;
     let flight_import = if uses_jsx {
         "import { renderToReadableStream as renderToFlightReadableStream } from \"react-server-dom-webpack/server.edge\";\n"
@@ -1988,6 +2102,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
     let mut actions = Vec::<ActionRef>::new();
     let mut client_reference_ids = BTreeSet::<String>::new();
     let mut client_references = Vec::<ClientReference>::new();
+    let mut graph_module_ids = BTreeSet::<String>::new();
 
     for absolute_path in files {
         let relative_path = absolute_path
@@ -2017,13 +2132,13 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
         let graph_entry = file_name == "layout.tsx"
             || route_kind.is_some()
             || matches!(kind, ModuleKind::Client | ModuleKind::ServerActions);
-        if !graph_entry {
-            continue;
-        }
         let id = module_id(&relative_path);
+        if graph_entry {
+            graph_module_ids.insert(id.clone());
+        }
         let cache = parse_cache_policy(&text)?;
 
-        if file_name == "layout.tsx" {
+        if graph_entry && file_name == "layout.tsx" {
             let directory = relative_path
                 .parent()
                 .unwrap_or_else(|| Path::new(""))
@@ -2038,7 +2153,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
                 },
             );
         }
-        if kind == ModuleKind::ServerActions {
+        if graph_entry && kind == ModuleKind::ServerActions {
             let exports = server_action_exports(&text).with_context(|| {
                 format!("discover server actions in {}", relative_path.display())
             })?;
@@ -2061,7 +2176,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
                 });
             }
         }
-        if kind == ModuleKind::Client {
+        if graph_entry && kind == ModuleKind::Client {
             let exports = client_reference_exports(&text).with_context(|| {
                 format!("discover client references in {}", relative_path.display())
             })?;
@@ -2086,23 +2201,25 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
                 });
             }
         }
-        if let Some(route_kind) = route_kind {
-            let methods = match route_kind {
-                RouteKind::Page => vec!["GET".into(), "HEAD".into()],
-                RouteKind::Handler => route_handler_methods(&text).with_context(|| {
-                    format!(
-                        "discover route handler methods in {}",
+        if graph_entry {
+            if let Some(route_kind) = route_kind {
+                let methods = match route_kind {
+                    RouteKind::Page => vec!["GET".into(), "HEAD".into()],
+                    RouteKind::Handler => route_handler_methods(&text).with_context(|| {
+                        format!(
+                            "discover route handler methods in {}",
+                            relative_path.display()
+                        )
+                    })?,
+                };
+                if methods.is_empty() {
+                    bail!(
+                        "route handler must export at least one HTTP method: {}",
                         relative_path.display()
-                    )
-                })?,
-            };
-            if methods.is_empty() {
-                bail!(
-                    "route handler must export at least one HTTP method: {}",
-                    relative_path.display()
-                );
+                    );
+                }
+                route_sources.push((id.clone(), route_kind, methods));
             }
-            route_sources.push((id.clone(), route_kind, methods));
         }
         if let Some(existing) = modules.insert(
             id.clone(),
@@ -2189,7 +2306,10 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
 
     routes.sort_by(|a, b| a.pattern.cmp(&b.pattern).then(a.id.cmp(&b.id)));
     let mut module_refs = Vec::new();
-    for module in modules.values() {
+    for module in modules
+        .values()
+        .filter(|module| graph_module_ids.contains(&module.id))
+    {
         let server_bundle = (module.kind != ModuleKind::Client)
             .then(|| out_dir.join("server").join(format!("{}.js", module.id)));
         let flight_bundle = page_route_modules.contains(&module.id).then(|| {
@@ -2327,6 +2447,7 @@ fn route_client_references(
     app_root: &Path,
 ) -> Result<Vec<String>> {
     let mut references = BTreeSet::new();
+    let mut visited = BTreeSet::new();
     for layout_id in layout_ids {
         let layout = layout_by_id
             .get(layout_id)
@@ -2338,6 +2459,7 @@ fn route_client_references(
                 client_reference_ids_by_module,
                 app_root,
                 &mut references,
+                &mut visited,
             )?;
         }
     }
@@ -2347,6 +2469,7 @@ fn route_client_references(
         client_reference_ids_by_module,
         app_root,
         &mut references,
+        &mut visited,
     )?;
     Ok(references.into_iter().collect())
 }
@@ -2357,7 +2480,11 @@ fn collect_imported_client_references(
     client_reference_ids_by_module: &BTreeMap<String, BTreeMap<String, String>>,
     app_root: &Path,
     references: &mut BTreeSet<String>,
+    visited: &mut BTreeSet<String>,
 ) -> Result<()> {
+    if !visited.insert(module.id.clone()) {
+        return Ok(());
+    }
     for import in static_imports(&module.text) {
         if !(import.specifier.starts_with('.') || import.specifier.starts_with('/')) {
             continue;
@@ -2385,6 +2512,14 @@ fn collect_imported_client_references(
             continue;
         };
         if imported_module.kind != ModuleKind::Client {
+            collect_imported_client_references(
+                imported_module,
+                modules_by_path,
+                client_reference_ids_by_module,
+                app_root,
+                references,
+                visited,
+            )?;
             continue;
         }
         let Some(exports) = client_reference_ids_by_module.get(&imported_module.id) else {
@@ -3053,13 +3188,27 @@ mod tests {
         fs::write(
             rsc.join("server.edge.js"),
             r#"
+            const CLIENT_REFERENCE = Symbol.for("react.client.reference");
+            function isClientReference(value) {
+                return value && value.$$typeof === CLIENT_REFERENCE;
+            }
             function renderTree(tree) {
                 if (tree == null || tree === false || tree === true) return "";
                 if (typeof tree === "string" || typeof tree === "number" || typeof tree === "bigint") return String(tree);
                 if (Array.isArray(tree)) return tree.map(renderTree).join("");
+                if (isClientReference(tree.type)) return `<client-reference id="${tree.type.$$id}">${renderTree((tree.props || {}).children)}</client-reference>`;
                 if (typeof tree.type === "function") return renderTree(tree.type(tree.props || {}));
                 const props = tree.props || {};
                 return `<${tree.type}>${renderTree(props.children)}</${tree.type}>`;
+            }
+            export function createClientModuleProxy(moduleId) {
+                const base = { $$typeof: CLIENT_REFERENCE, $$id: moduleId, $$async: false };
+                return new Proxy(base, {
+                    get(target, name) {
+                        if (typeof name === "symbol" || name in target) return target[name];
+                        return { $$typeof: CLIENT_REFERENCE, $$id: `${moduleId}#${name}`, $$async: false };
+                    }
+                });
             }
             export function renderToReadableStream(tree, manifest) {
                 return new ReadableStream({
@@ -3192,14 +3341,28 @@ mod tests {
         fs::write(
             rsc.join("server.edge.js"),
             r#"
+            const CLIENT_REFERENCE = Symbol.for("react.client.reference");
+            function isClientReference(value) {
+                return value && value.$$typeof === CLIENT_REFERENCE;
+            }
             function renderTree(tree) {
                 if (tree == null || tree === false || tree === true) return "";
                 if (typeof tree === "string" || typeof tree === "number" || typeof tree === "bigint") return String(tree);
                 if (Array.isArray(tree)) return tree.map(renderTree).join("");
+                if (isClientReference(tree.type)) return `<client-reference id="${tree.type.$$id}">${renderTree((tree.props || {}).children)}</client-reference>`;
                 if (typeof tree.type === "function") return renderTree(tree.type(tree.props || {}));
                 const props = tree.props || {};
                 const marker = tree.packageExport ? ` data-react-export="${tree.packageExport}"` : "";
                 return `<${tree.type}${marker}>${renderTree(props.children)}</${tree.type}>`;
+            }
+            export function createClientModuleProxy(moduleId) {
+                const base = { $$typeof: CLIENT_REFERENCE, $$id: moduleId, $$async: false };
+                return new Proxy(base, {
+                    get(target, name) {
+                        if (typeof name === "symbol" || name in target) return target[name];
+                        return { $$typeof: CLIENT_REFERENCE, $$id: `${moduleId}#${name}`, $$async: false };
+                    }
+                });
             }
             export function renderToReadableStream(tree, manifest) {
                 return new ReadableStream({
@@ -3288,13 +3451,13 @@ const lazy = import('./lazy');
         fs::write(
             app.join("dashboard/[id]/page.tsx"),
             concat!(
-                "import { Renamed } from '../../counter';
+                "import { helper } from '../../helper';
 ",
                 "export const dynamic = 'force-static';
 ",
                 "export const revalidate = 60;
 ",
-                "export default function Page(){ return Renamed; }
+                "export default function Page(){ return helper(); }
 ",
             ),
         )
@@ -3331,7 +3494,7 @@ const lazy = import('./lazy');
         .unwrap();
         fs::write(
             app.join("helper.ts"),
-            "export function helper() { return 'helper'; }\n",
+            "import { Renamed } from './counter';\nexport function helper() { return Renamed; }\n",
         )
         .unwrap();
         fs::write(temp.path().join("public/images/logo.svg"), "<svg/>\n").unwrap();
@@ -3828,7 +3991,7 @@ export default function Page(){ return 'Zap'; }"
             app.join("page.tsx"),
             "import { Counter } from './client';
 export const dynamic = 'force-dynamic';
-export default function Page({ request }){ return <main data-path={request.path}>home:{request.path}</main>; }
+export default function Page({ request }){ return <main data-path={request.path}>home:{request.path}<Counter /></main>; }
 ",
         )
         .unwrap();
@@ -4087,7 +4250,7 @@ export const Label = 'count';
             .unwrap();
         let page_renderer = Renderer::new(fs::read_to_string(page_bundle).unwrap());
         let rendered = page_renderer.render(&page_request).unwrap();
-        assert_eq!(rendered, r#"<main data-path="/">home:/</main>"#);
+        assert_eq!(rendered, r#"<main data-path="/">home:/1</main>"#);
         let page_flight_bundle = compiled
             .module("page")
             .and_then(|module| module.flight_bundle.clone())
@@ -4096,7 +4259,10 @@ export const Label = 'count';
             Renderer::new(fs::read_to_string(temp.path().join(page_flight_bundle)).unwrap())
                 .flight(&page_request)
                 .unwrap();
-        assert_eq!(flight, "RSC:client#Counter:<main>home:/</main>");
+        assert_eq!(
+            flight,
+            r#"RSC:client#Counter:<main>home:/<client-reference id="client#Counter"></client-reference></main>"#
+        );
         let product_match = compiled.resolve("/shop/caf%C3%A9").unwrap().unwrap();
         let product_bundle = compiled
             .module(&product_match.route.module)
@@ -4177,7 +4343,12 @@ export const Label = 'count';
         fs::create_dir_all(&app).unwrap();
         fs::write(
             app.join("page.tsx"),
-            "export default function Page({ searchParams }){ return <main data-color={searchParams.color}>package:{searchParams.color}</main>; }\n",
+            "import { Counter } from './client';\nexport default function Page({ searchParams }){ return <main data-color={searchParams.color}>package:{searchParams.color}<Counter /></main>; }\n",
+        )
+        .unwrap();
+        fs::write(
+            app.join("client.tsx"),
+            "'use client';\nexport function Counter(){ return 'client-implementation-must-not-render-in-flight'; }\n",
         )
         .unwrap();
 
@@ -4224,7 +4395,15 @@ export const Label = 'count';
             flight.contains(r#"data-react-export="react-server""#),
             "package react-server export was not selected for Flight: {flight}"
         );
-        assert!(flight.starts_with("RSC::"), "{flight}");
+        assert!(flight.starts_with("RSC:client#Counter:"), "{flight}");
+        assert!(
+            flight.contains(r#"<client-reference id="client#Counter">"#),
+            "{flight}"
+        );
+        assert!(
+            !flight.contains("client-implementation-must-not-render-in-flight"),
+            "client implementation leaked into Flight render: {flight}"
+        );
     }
 
     #[tokio::test]
