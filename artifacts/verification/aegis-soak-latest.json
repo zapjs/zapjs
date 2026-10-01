@@ -3,16 +3,16 @@
   "ok": true,
   "date": "2026-10-01",
   "profile": "soak",
-  "fixture_root": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-matrix-ev9si6vw",
-  "serve_url": "http://127.0.0.1:59910",
+  "fixture_root": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-matrix-e3nwcbi8",
+  "serve_url": "http://127.0.0.1:61347",
   "cycles": 50,
-  "elapsed_seconds": 32.868,
-  "cycles_per_second": 1.521,
+  "elapsed_seconds": 33.981,
+  "cycles_per_second": 1.471,
   "aegis": {
-    "addr": "127.0.0.1:59911",
-    "log_path": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-59911.log",
+    "addr": "127.0.0.1:61348",
+    "log_path": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-61348.log",
     "mode": "detached_serve",
-    "pid": 59065,
+    "pid": 60434,
     "profile": "default",
     "runtime_executable": "/Users/deepsaint/Applications/Aegis.app/Contents/MacOS/aegis_cli"
   },
@@ -28,7 +28,7 @@
   ],
   "page_snapshot": {
     "title": null,
-    "url": "http://127.0.0.1:59910/docs/a/b/c?view=full",
+    "url": "http://127.0.0.1:61347/docs/a/b/c?view=full",
     "canonical_url": null,
     "visible_text": "<[object Object]>rootshopdocsbrokenZap navigation failed: 500 docs:a/b/c:view:full",
     "content_scopes": {
@@ -43,19 +43,19 @@
       {
         "index": 0,
         "text": "shop",
-        "href": "http://127.0.0.1:59910/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:61347/shop/cafe?color=blue",
         "title": null
       },
       {
         "index": 1,
         "text": "docs",
-        "href": "http://127.0.0.1:59910/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:61347/docs/a/b/c?view=full",
         "title": null
       },
       {
         "index": 2,
         "text": "broken",
-        "href": "http://127.0.0.1:59910/broken",
+        "href": "http://127.0.0.1:61347/broken",
         "title": null
       }
     ],
@@ -63,19 +63,19 @@
       {
         "index": 2,
         "text": "broken",
-        "href": "http://127.0.0.1:59910/broken",
+        "href": "http://127.0.0.1:61347/broken",
         "title": null
       },
       {
         "index": 0,
         "text": "shop",
-        "href": "http://127.0.0.1:59910/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:61347/shop/cafe?color=blue",
         "title": null
       },
       {
         "index": 1,
         "text": "docs",
-        "href": "http://127.0.0.1:59910/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:61347/docs/a/b/c?view=full",
         "title": null
       }
     ],
@@ -106,7 +106,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:59910/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:61347/shop/cafe?color=blue",
         "actions": [
           "click",
           "open",
@@ -125,7 +125,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:59910/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:61347/docs/a/b/c?view=full",
         "actions": [
           "click",
           "open",
@@ -144,7 +144,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:59910/broken",
+        "href": "http://127.0.0.1:61347/broken",
         "actions": [
           "click",
           "open",
@@ -183,7 +183,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:59910/broken",
+        "href": "http://127.0.0.1:61347/broken",
         "actions": [
           "click",
           "open",
@@ -202,7 +202,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:59910/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:61347/shop/cafe?color=blue",
         "actions": [
           "click",
           "open",
@@ -221,7 +221,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:59910/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:61347/docs/a/b/c?view=full",
         "actions": [
           "click",
           "open",

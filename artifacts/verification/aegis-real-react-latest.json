@@ -1,0 +1,167 @@
+{
+  "schema": "zap.aegis_matrix.v1",
+  "ok": true,
+  "date": "2026-10-01",
+  "profile": "real-react",
+  "fixture_root": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-matrix-1cmj8cvj",
+  "serve_url": "http://127.0.0.1:62346",
+  "cycles": 3,
+  "elapsed_seconds": 7.776,
+  "cycles_per_second": 0.386,
+  "aegis": {
+    "addr": "127.0.0.1:62347",
+    "log_path": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-62347.log",
+    "mode": "detached_serve",
+    "pid": 61061,
+    "profile": "default",
+    "runtime_executable": "/Users/deepsaint/Applications/Aegis.app/Contents/MacOS/aegis_cli"
+  },
+  "validated": [
+    "Rust zap build emitted a real React package fixture without invoking a JavaScript runtime or package manager",
+    "Aegis loaded the real React app through zap serve",
+    "React 19.3.0, React DOM 19.3.0 and React Server DOM Webpack 19.3.0 package sources bundled through the Rust build path",
+    "real React hydrateRoot and Flight model creation ran across 3 cycle(s)",
+    "browser action proxy invoked a server action from a real React hydrated document across 3 cycle(s)",
+    "same-origin navigation and history traversal rehydrated pages backed by real React package sources",
+    "browser fetch reached a route handler and public static asset through Rust execution"
+  ],
+  "page_snapshot": {
+    "title": null,
+    "url": "http://127.0.0.1:62346/",
+    "canonical_url": null,
+    "visible_text": "real-actionabout real-react-home /",
+    "content_scopes": {
+      "main_text": "real-react-home /",
+      "article_text": "",
+      "controls_text": "button: real-action link: about",
+      "overlay_text": ""
+    },
+    "main_content_selector": "main",
+    "headings": [
+      {
+        "level": 1,
+        "text": "real-react-home",
+        "id": null
+      }
+    ],
+    "links": [
+      {
+        "index": 0,
+        "text": "about",
+        "href": "http://127.0.0.1:62346/about?from=real",
+        "title": null
+      }
+    ],
+    "primary_links": [
+      {
+        "index": 0,
+        "text": "about",
+        "href": "http://127.0.0.1:62346/about?from=real",
+        "title": null
+      }
+    ],
+    "controls": [
+      {
+        "index": 0,
+        "kind": "button",
+        "role": "button",
+        "text": "real-action",
+        "label": null,
+        "placeholder": null,
+        "control_type": "button",
+        "href": null,
+        "actions": [
+          "click",
+          "hover",
+          "press_key"
+        ],
+        "disabled": false,
+        "in_main_content": false,
+        "in_viewport": true
+      },
+      {
+        "index": 1,
+        "kind": "link",
+        "role": "link",
+        "text": "about",
+        "label": null,
+        "placeholder": null,
+        "control_type": "link",
+        "href": "http://127.0.0.1:62346/about?from=real",
+        "actions": [
+          "click",
+          "open",
+          "hover",
+          "press_key"
+        ],
+        "disabled": false,
+        "in_main_content": false,
+        "in_viewport": true
+      }
+    ],
+    "primary_controls": [
+      {
+        "index": 0,
+        "kind": "button",
+        "role": "button",
+        "text": "real-action",
+        "label": null,
+        "placeholder": null,
+        "control_type": "button",
+        "href": null,
+        "actions": [
+          "click",
+          "hover",
+          "press_key"
+        ],
+        "disabled": false,
+        "in_main_content": false,
+        "in_viewport": true
+      },
+      {
+        "index": 1,
+        "kind": "link",
+        "role": "link",
+        "text": "about",
+        "label": null,
+        "placeholder": null,
+        "control_type": "link",
+        "href": "http://127.0.0.1:62346/about?from=real",
+        "actions": [
+          "click",
+          "open",
+          "hover",
+          "press_key"
+        ],
+        "disabled": false,
+        "in_main_content": false,
+        "in_viewport": true
+      }
+    ],
+    "forms": [],
+    "overlays": [],
+    "semantic_summary": {
+      "link_count": 1,
+      "control_count": 2,
+      "form_count": 0,
+      "overlay_count": 0,
+      "dialog_count": 0,
+      "alert_count": 0,
+      "code_block_count": 0,
+      "table_count": 0
+    },
+    "page_type": "content",
+    "useful_text_available": false,
+    "interactive_elements_available": true,
+    "auth_wall_likely": false,
+    "blocked_by_overlay": false,
+    "blocker_signals": [],
+    "suggested_next_actions": [
+      "Open the primary link \"about\""
+    ],
+    "likely_not_found": false,
+    "not_found_signals": [],
+    "suggested_search_query": null
+  },
+  "events_count": null
+}

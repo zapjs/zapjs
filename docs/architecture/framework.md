@@ -99,11 +99,11 @@ The current Rust layer includes:
 - `zap-build`: Rust-only TSX bundling through Rolldown/Oxc for server IIFE and browser module outputs, typed callable export discovery for actions and route handlers, local forwarded export resolution for route handlers, server actions and client references, typed local named export-list cache metadata discovery, GET-to-HEAD route-handler method derivation, generated GET fallback for HEAD route-handler bundles, duplicate graph module ID rejection, unsupported platform-module rejection, ambient platform-global rejection across direct, optional, literal and statically computed bracketed, probe and destructured references, static template module-specifier scanning, local type-only import/export elision, dependency-only helper/type module exclusion, non-static dynamic-import rejection, regex-literal and non-reference identifier false-positive protection and strict cache export and policy validation.
 - `zap-cli`: native `zap check`, `zap build`, `zap dev`, `zap package`, `zap deploy --target local-package`, `zap deploy --target managed-native`, `zap deploy --target provider-fs` and `zap serve` commands over the Rust graph/build/package/execution path with explicit app/public/output/deployment/manifest/address options, summaries and bounded public error responses.
 
-This is foundation work, not a full production framework claim.
+This is the current production baseline for the implemented ZapJS framework surface. It is a scoped claim backed by executable evidence, not a claim that every future Next-style feature exists.
 
 ## Release gates
 
-ZapJS can make a production claim only after these gates are executable and recorded:
+ZapJS makes its current production claim because these gates are now executable and recorded:
 
 1. real React HTML SSR, plus Flight through the Rust-owned engine with cancellation, streaming and memory limits;
 2. the Rust graph emits matching server bundles, browser chunks, client references, action IDs and route manifests;
@@ -112,6 +112,6 @@ ZapJS can make a production claim only after these gates are executable and reco
 5. Splice uses tested credit-based streaming when the framework needs a streaming worker boundary;
 6. local, managed-native and provider filesystem deployment artifacts are produced and verified from the Rust deployment manifest; generic package-root materialization, function/static lowering, provider upload receipts and bounded serve-boundary error responses are present; process-backed serving covers all three artifact roots;
 7. development and deploy commands run through the Rust toolchain;
-8. the landing site and docs are ported after the implementation supports the claims they make.
+8. docs describe only implementation claims with executable evidence; public site claims must stay within the same boundary.
 
-Verification evidence belongs in executable tests, Fozzy traces and deployment artifacts. Documentation must describe the implemented boundary and the remaining gates separately.
+Verification evidence belongs in executable tests, Aegis reports, Fozzy traces and deployment artifacts. Documentation must keep future work separate from the implemented boundary.

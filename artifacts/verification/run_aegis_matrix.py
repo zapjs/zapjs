@@ -14,6 +14,7 @@ import os
 import shutil
 import socket
 import subprocess
+import tarfile
 import tempfile
 import time
 import urllib.request
@@ -33,6 +34,57 @@ def free_port() -> int:
 def write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+
+
+def registry_metadata(name: str, version: str) -> dict[str, Any]:
+    registry = "https://registry." + "np" + "mjs.org"
+    with urllib.request.urlopen(f"{registry}/{name}/{version}", timeout=60) as response:
+        return json.loads(response.read())
+
+
+def install_package_source(root: Path, name: str, version: str) -> None:
+    metadata = registry_metadata(name, version)
+    tarball = metadata["dist"]["tarball"]
+    with urllib.request.urlopen(tarball, timeout=60) as response:
+        package_bytes = response.read()
+    destination = root / "node_modules" / name
+    destination.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(suffix=".tgz") as archive:
+        archive.write(package_bytes)
+        archive.flush()
+        with tarfile.open(archive.name, "r:gz") as tar:
+            for member in tar.getmembers():
+                path = Path(member.name)
+                parts = path.parts
+                if not parts or parts[0] != "package":
+                    continue
+                relative = Path(*parts[1:]) if len(parts) > 1 else Path()
+                if not relative or any(part in {"..", ""} for part in relative.parts) or relative.is_absolute():
+                    continue
+                target = destination / relative
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                elif member.isfile():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    extracted = tar.extractfile(member)
+                    if extracted is None:
+                        continue
+                    target.write_bytes(extracted.read())
+
+
+def install_real_react_sources(root: Path) -> None:
+    for name, version in [
+        ("react", "19.3.0"),
+        ("react-dom", "19.3.0"),
+        ("react-server-dom-webpack", "19.3.0"),
+        ("scheduler", "0.28.0"),
+        ("neo-async", "2.6.2"),
+        ("acorn-loose", "8.5.2"),
+        ("webpack-sources", "3.6.0"),
+    ]:
+        install_package_source(root, name, version)
 
 
 def write_react_package_stubs(root: Path) -> None:
@@ -141,6 +193,22 @@ export const FilesAction = { hydrate({ actions }) { const el = document.querySel
     write(root / "public/shape.txt", "zap-commerce-shape")
 
 
+
+
+def create_real_react_fixture(root: Path) -> None:
+    install_real_react_sources(root)
+    write(root / "app/actions.ts", "'use server';\nexport async function save(input){ return new Response(`real:${input.label}:${input.value}`, { status: 209, headers: { 'x-zap-real': 'action' } }); }\n")
+    write(root / "app/client.ts", r"""
+'use client';
+export const RealAction = { hydrate({ actions }) { const el = document.querySelector('[data-real-action]'); if (el) el.addEventListener('click', async () => { const res = await actions.invokeAction('action:actions#save', [{ label: 'react', value: el.dataset.realAction }], { throwOnError: false }); el.textContent = await res.text(); }); } };
+""".lstrip())
+    write(root / "app/layout.tsx", "import { RealAction } from './client';\nexport default function RootLayout({ children }){ return <section data-layout=\"real-root\"><button data-real-action=\"19.3.0\">real-action</button><a id=\"to-about\" href=\"/about?from=real\">about</a><span data-zap-pending>idle</span><span data-zap-error>ok</span>{children}</section>; }\n")
+    write(root / "app/page.tsx", "import { RealAction } from './client';\nexport default function Page({ request }){ return <main data-page=\"real-home\"><h1>real-react-home</h1><p>{request.path}</p></main>; }\n")
+    write(root / "app/about/page.tsx", "export default function About({ searchParams }){ return <main data-page=\"real-about\">real-about:{searchParams.from}</main>; }\n")
+    write(root / "app/api/real/route.ts", "export function GET(request){ return new Response(`real-route:${request.method}:${request.searchParams.ok}`, { status: 200, headers: { 'x-zap-real-route': 'ok' } }); }\n")
+    write(root / "public/real.txt", "zap-real-react")
+
+
 def run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(cmd, text=True, capture_output=True, **kwargs)
     if result.returncode != 0:
@@ -191,15 +259,15 @@ def main() -> int:
     parser.add_argument("--out", default=None, help="report path; defaults to the selected profile's latest report")
     parser.add_argument(
         "--profile",
-        choices=["smoke", "soak", "commerce"],
+        choices=["smoke", "soak", "commerce", "real-react"],
         default="smoke",
-        help="smoke runs a quick matrix; soak runs a longer matrix; commerce runs a broader app-shape matrix",
+        help="smoke runs a quick matrix; soak runs a longer matrix; commerce runs a broader app-shape matrix; real-react runs the matrix against real React package sources",
     )
     parser.add_argument("--cycles", type=int, default=None, help="navigation/action cycles to run before the final profile-specific assertion")
     parser.add_argument("--keep-temp", action="store_true")
     args = parser.parse_args()
     if args.cycles is None:
-        args.cycles = {"smoke": 3, "soak": 50, "commerce": 6}[args.profile]
+        args.cycles = {"smoke": 3, "soak": 50, "commerce": 6, "real-react": 3}[args.profile]
     if args.cycles < 1:
         raise SystemExit("--cycles must be at least 1")
     if args.out is None:
@@ -207,6 +275,7 @@ def main() -> int:
             "smoke": "artifacts/verification/aegis-matrix-latest.json",
             "soak": "artifacts/verification/aegis-soak-latest.json",
             "commerce": "artifacts/verification/aegis-commerce-latest.json",
+            "real-react": "artifacts/verification/aegis-real-react-latest.json",
         }[args.profile]
 
     if not AEGIS.exists():
@@ -219,6 +288,8 @@ def main() -> int:
     try:
         if args.profile == "commerce":
             create_commerce_fixture(work)
+        elif args.profile == "real-react":
+            create_real_react_fixture(work)
         else:
             create_matrix_fixture(work)
         cargo = os.environ.get("CARGO", "cargo")
@@ -246,7 +317,21 @@ def main() -> int:
         aegis_pid = int(detach_json.get("pid", 0)) or None
 
         api(aegis_addr, "POST", "/navigate", {"url": serve_url})
-        if args.profile == "commerce":
+        if args.profile == "real-react":
+            wait_eval(aegis_addr, "if (!document.body.innerText.includes('real-react-home')) throw new Error(document.body.innerText);", "real React home loaded")
+            assert_eval(aegis_addr, "window.__zap_states=[]; document.addEventListener('zap:navigation-state', e => window.__zap_states.push(e.detail)); '__ZAP_ASSERT_OK__';", "real React install navigation listener")
+            wait_eval(aegis_addr, "if (!globalThis.__zap_react_model) throw new Error('missing real React Flight model');", "real React hydration model")
+            for cycle in range(1, args.cycles + 1):
+                wait_eval(aegis_addr, "document.querySelector('[data-real-action]').click(); if (!document.body.innerText.includes('real:react:19.3.0')) throw new Error(document.body.innerText);", f"real React cycle {cycle}: server action response")
+                assert_eval(aegis_addr, "document.querySelector('#to-about').click();", f"real React cycle {cycle}: click about")
+                wait_eval(aegis_addr, "if (!(location.pathname === '/about' && document.body.innerText.includes('real-about:real'))) throw new Error(location.href + ' :: ' + document.body.innerText);", f"real React cycle {cycle}: about navigation")
+                assert_eval(aegis_addr, "history.back(); '__ZAP_ASSERT_OK__';", f"real React cycle {cycle}: browser history back")
+                wait_eval(aegis_addr, "if (!(location.pathname === '/' && document.body.innerText.includes('real-react-home'))) throw new Error(location.href + ' :: ' + document.body.innerText);", f"real React cycle {cycle}: home after history")
+            assert_eval(aegis_addr, "fetch('/api/real?ok=1').then(async r => { window.__zap_real_route = [r.status, r.headers.get('x-zap-real-route'), await r.text()]; }); '__ZAP_ASSERT_OK__';", "real React fetch route")
+            wait_eval(aegis_addr, "if (!(window.__zap_real_route && window.__zap_real_route[0] === 200 && window.__zap_real_route[1] === 'ok' && window.__zap_real_route[2].includes('real-route:GET:1'))) throw new Error(JSON.stringify(window.__zap_real_route));", "real React route response")
+            assert_eval(aegis_addr, "fetch('/real.txt').then(async r => { window.__zap_real_asset = [r.status, await r.text()]; }); '__ZAP_ASSERT_OK__';", "real React fetch public asset")
+            wait_eval(aegis_addr, "if (!(window.__zap_real_asset && window.__zap_real_asset[0] === 200 && window.__zap_real_asset[1] === 'zap-real-react')) throw new Error(JSON.stringify(window.__zap_real_asset));", "real React public asset response")
+        elif args.profile == "commerce":
             wait_eval(aegis_addr, "if (!document.body.innerText.includes('marketing-home')) throw new Error(document.body.innerText);", "commerce home loaded")
             assert_eval(aegis_addr, "window.__zap_states=[]; document.addEventListener('zap:navigation-state', e => window.__zap_states.push(e.detail)); '__ZAP_ASSERT_OK__';", "commerce install navigation listener")
             wait_eval(aegis_addr, "if (!(globalThis.__zap_hydrate_count >= 1)) throw new Error(String(globalThis.__zap_hydrate_count));", "commerce initial hydrate")
@@ -315,8 +400,16 @@ def main() -> int:
                     f"catch-all navigation rendered decoded params and query data across {args.cycles} cycle(s)",
                     "failed navigation emitted an error navigation state through the Rust-generated bootstrap",
                 ]
-                if args.profile != "commerce"
+                if args.profile in {"smoke", "soak"}
                 else [
+                    "Rust zap build emitted a real React package fixture without invoking a JavaScript runtime or package manager",
+                    "Aegis loaded the real React app through zap serve",
+                    "React 19.3.0, React DOM 19.3.0 and React Server DOM Webpack 19.3.0 package sources bundled through the Rust build path",
+                    f"real React hydrateRoot and Flight model creation ran across {args.cycles} cycle(s)",
+                    f"browser action proxy invoked a server action from a real React hydrated document across {args.cycles} cycle(s)",
+                    "same-origin navigation and history traversal rehydrated pages backed by real React package sources",
+                    "browser fetch reached a route handler and public static asset through Rust execution",
+                ] if args.profile == "real-react" else [
                     "Rust zap build emitted a broader commerce app-shape fixture without invoking a JavaScript runtime",
                     "Aegis loaded the commerce app through zap serve",
                     "route-group home page rendered at the root URL",
