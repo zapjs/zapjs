@@ -107,8 +107,8 @@ ZapJS can make a production claim only after these gates are executable and reco
 
 1. real React HTML SSR and Flight run through the Rust-owned engine with cancellation, streaming and memory limits;
 2. the Rust graph emits matching server bundles, browser chunks, client references, action IDs and route manifests;
-3. hydration metadata/bootstrap injection, initial browser hydrate-hook execution, same-origin client navigation and browser-to-Rust server actions are verified in Aegis;
-4. pending/error boundaries are verified in Aegis;
+3. hydration metadata/bootstrap injection, initial browser hydrate-hook execution, same-origin client navigation, pending/error navigation boundaries and browser-to-Rust server actions are verified in Aegis;
+4. broader nested/dynamic navigation cases are verified in Aegis;
 5. Splice adds tested streaming only if the framework needs a streaming worker boundary;
 6. target-platform native deployment artifacts are produced and verified from the Rust deployment manifest;
 7. the remaining development and deploy commands run through the Rust toolchain;
