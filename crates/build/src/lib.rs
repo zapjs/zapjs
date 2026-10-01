@@ -576,6 +576,9 @@ fn is_ident_continue(ch: char) -> bool {
 fn unavailable_platform_global(text: &str) -> Option<String> {
     let tokens = js_tokens(text);
     tokens.iter().enumerate().find_map(|(index, token)| {
+        if let Some(value) = ambient_platform_global_string_member(&tokens, index) {
+            return Some(value);
+        }
         let JsToken::Ident(value) = token else {
             return None;
         };
@@ -583,14 +586,31 @@ fn unavailable_platform_global(text: &str) -> Option<String> {
     })
 }
 
+fn ambient_platform_global_string_member(tokens: &[JsToken], index: usize) -> Option<String> {
+    let Some(JsToken::Ident(root)) = tokens.get(index) else {
+        return None;
+    };
+    if !matches!(root.as_str(), "globalThis" | "global" | "window" | "self")
+        || !matches!(tokens.get(index + 1), Some(JsToken::Punct('[')))
+    {
+        return None;
+    }
+    let Some(JsToken::String(value)) = tokens.get(index + 2) else {
+        return None;
+    };
+    if !is_unavailable_platform_global_name(value)
+        || !matches!(tokens.get(index + 3), Some(JsToken::Punct(']')))
+    {
+        return None;
+    }
+    Some(value.clone())
+}
+
 fn is_ambient_platform_global_reference(tokens: &[JsToken], index: usize) -> bool {
     let Some(JsToken::Ident(value)) = tokens.get(index) else {
         return false;
     };
-    if !matches!(
-        value.as_str(),
-        "process" | "Buffer" | "require" | "module" | "exports" | "__dirname" | "__filename"
-    ) {
+    if !is_unavailable_platform_global_name(value) {
         return false;
     }
     if is_non_reference_identifier(tokens, index) {
@@ -603,6 +623,13 @@ fn is_ambient_platform_global_reference(tokens: &[JsToken], index: usize) -> boo
         );
     }
     true
+}
+
+fn is_unavailable_platform_global_name(value: &str) -> bool {
+    matches!(
+        value,
+        "process" | "Buffer" | "require" | "module" | "exports" | "__dirname" | "__filename"
+    )
 }
 
 fn is_non_reference_identifier(tokens: &[JsToken], index: usize) -> bool {
@@ -2105,6 +2132,10 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
             (
                 "ternary_process.ts",
                 "const enabled = true; export const value = enabled ? process : null;",
+            ),
+            (
+                "global_bracket_process.ts",
+                "export const value = globalThis['process'];",
             ),
             (
                 "module_exports.ts",
