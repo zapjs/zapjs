@@ -1438,31 +1438,89 @@ fn write_browser_bootstrap(
         .parent()
         .context("generated browser bootstrap needs a parent directory")?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let body = r#"const hydrationElement = document.getElementById("__zap_hydration");
-if (hydrationElement) {
+    let body = r#"const zapBaseUrl = () => globalThis.location && globalThis.location.href || "http://zap.local/";
+const zapCurrentUrl = () => new URL(import.meta.url, zapBaseUrl()).href;
+const zapChunkUrl = (chunk) => new URL(chunk, zapBaseUrl()).href;
+
+async function hydrateZapDocument(targetDocument = document) {
+  const hydrationElement = targetDocument.getElementById("__zap_hydration");
+  if (!hydrationElement) return undefined;
   const hydration = JSON.parse(hydrationElement.textContent || "{}");
   const chunks = Array.isArray(hydration.browser_chunks) ? hydration.browser_chunks : [];
   const references = Array.isArray(hydration.client_references) ? hydration.client_references : [];
-  const baseUrl = globalThis.location && globalThis.location.href || "http://zap.local/";
-  const currentUrl = new URL(import.meta.url, baseUrl).href;
-  const chunkUrl = (chunk) => new URL(chunk, baseUrl).href;
-  const importChunks = chunks.filter((chunk) => chunkUrl(chunk) !== currentUrl);
+  const currentUrl = zapCurrentUrl();
+  const importChunks = chunks.filter((chunk) => zapChunkUrl(chunk) !== currentUrl);
   const imported = await Promise.all(importChunks.map((chunk) => import(chunk)));
-  const modulesByChunk = new Map(importChunks.map((chunk, index) => [chunkUrl(chunk), imported[index]]));
-  const actionModule = typeof hydration.action_proxy === "string" ? modulesByChunk.get(chunkUrl(hydration.action_proxy)) : undefined;
+  const modulesByChunk = new Map(importChunks.map((chunk, index) => [zapChunkUrl(chunk), imported[index]]));
+  const actionModule = typeof hydration.action_proxy === "string" ? modulesByChunk.get(zapChunkUrl(hydration.action_proxy)) : undefined;
   const hooks = [];
   for (const reference of references) {
-    const module = modulesByChunk.get(chunkUrl(reference.browser_chunk));
+    const module = modulesByChunk.get(zapChunkUrl(reference.browser_chunk));
     const exported = module && module[reference.export];
     if (exported && typeof exported.hydrate === "function") {
-      hooks.push(exported.hydrate({ hydration, reference, module, actions: actionModule }));
+      hooks.push(exported.hydrate({ hydration, reference, module, actions: actionModule, navigate: navigateZap }));
     } else if (module && typeof module.hydrate === "function") {
-      hooks.push(module.hydrate({ hydration, reference, module, actions: actionModule }));
+      hooks.push(module.hydrate({ hydration, reference, module, actions: actionModule, navigate: navigateZap }));
     }
   }
   await Promise.all(hooks);
-  globalThis.__zap_hydrated = { hydration, chunks, importChunks, references, actions: actionModule };
+  const state = { hydration, chunks, importChunks, references, actions: actionModule, navigate: navigateZap };
+  globalThis.__zap_hydrated = state;
+  return state;
 }
+
+async function navigateZap(url, options = {}) {
+  const nextUrl = new URL(url, globalThis.location && globalThis.location.href || zapBaseUrl());
+  const response = await fetch(nextUrl.href, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: { accept: "text/html" }
+  });
+  if (!response.ok) throw new Error(`Zap navigation failed: ${response.status}`);
+  const html = await response.text();
+  const nextDocument = new DOMParser().parseFromString(html, "text/html");
+  if (!nextDocument.body) throw new Error("Zap navigation response did not include a body");
+  document.title = nextDocument.title;
+  document.body.replaceWith(nextDocument.body);
+  if (options.replace) {
+    history.replaceState({ __zap: true }, "", nextUrl.href);
+  } else {
+    history.pushState({ __zap: true }, "", nextUrl.href);
+  }
+  return hydrateZapDocument(document);
+}
+
+function shouldHandleZapClick(event, anchor) {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return false;
+  if (anchor.target && anchor.target !== "_self") return false;
+  if (anchor.hasAttribute("download")) return false;
+  const url = new URL(anchor.href, globalThis.location && globalThis.location.href || zapBaseUrl());
+  if (url.origin !== globalThis.location.origin) return false;
+  if (url.pathname === globalThis.location.pathname && url.search === globalThis.location.search && url.hash) return false;
+  return true;
+}
+
+if (!globalThis.__zap_navigation_installed) {
+  globalThis.__zap_navigation_installed = true;
+  document.addEventListener("click", (event) => {
+    const anchor = event.target && event.target.closest && event.target.closest("a[href]");
+    if (!anchor || !shouldHandleZapClick(event, anchor)) return;
+    event.preventDefault();
+    navigateZap(anchor.href).catch((error) => {
+      globalThis.__zap_navigation_error = error;
+      document.dispatchEvent(new CustomEvent("zap:navigation-error", { detail: error }));
+    });
+  });
+  addEventListener("popstate", () => {
+    navigateZap(globalThis.location.href, { replace: true }).catch((error) => {
+      globalThis.__zap_navigation_error = error;
+      document.dispatchEvent(new CustomEvent("zap:navigation-error", { detail: error }));
+    });
+  });
+}
+
+globalThis.__zap_navigate = navigateZap;
+await hydrateZapDocument(document);
 "#;
     fs::write(&bootstrap, body).with_context(|| format!("write {}", bootstrap.display()))?;
     Ok(Some(bootstrap))
@@ -3391,8 +3449,11 @@ export const Label = 'count';
         assert!(browser_bootstrap_source.contains("import(chunk)"));
         assert!(browser_bootstrap_source.contains("importChunks"));
         assert!(browser_bootstrap_source.contains("import.meta.url"));
-        assert!(browser_bootstrap_source.contains("chunkUrl(reference.browser_chunk)"));
+        assert!(browser_bootstrap_source.contains("zapChunkUrl(reference.browser_chunk)"));
         assert!(browser_bootstrap_source.contains("actions: actionModule"));
+        assert!(browser_bootstrap_source.contains("__zap_navigate"));
+        assert!(browser_bootstrap_source.contains("addEventListener(\"popstate\""));
+        assert!(browser_bootstrap_source.contains("document.addEventListener(\"click\""));
         assert!(browser_bootstrap_source.contains("__zap_hydrated"));
         let action_proxy_source = fs::read_to_string(&action_proxy).unwrap();
         assert!(action_proxy_source.contains("action:actions#save"));
