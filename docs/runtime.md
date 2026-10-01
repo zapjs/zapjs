@@ -18,7 +18,7 @@ HTML SSR, React Server Components, Flight payloads, client references, action ID
 
 ## Route handlers and server actions
 
-Route handlers and server actions must pass through Rust-owned admission before dispatch. The current runtime proves method, origin/action, body-size, request-context, auth-state, deadline and public-cache privacy checks and cache-control header decisions; application-specific authorization hooks remain a release gate before mutation paths can be called production-complete.
+Route handlers and server actions must pass through Rust-owned admission before dispatch. The current runtime proves method, origin/action, malformed-origin, body-size, request-context, auth-state, deadline and public-cache privacy checks and cache-control header decisions; application-specific authorization hooks remain a release gate before mutation paths can be called production-complete.
 
 Application APIs are Rust functions or explicit React-host operations. Errors that cross a public boundary must preserve useful diagnostics for operators without leaking private values to the browser.
 

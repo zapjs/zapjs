@@ -457,7 +457,10 @@ fn origin_allowed(origin: Option<&str>, expected_origin: Option<&str>) -> bool {
     let Some(origin) = origin else {
         return false;
     };
-    normalize_origin(origin).as_deref() == normalize_origin(expected_origin).as_deref()
+    match (normalize_origin(origin), normalize_origin(expected_origin)) {
+        (Some(origin), Some(expected_origin)) => origin == expected_origin,
+        _ => false,
+    }
 }
 
 fn normalize_origin(value: &str) -> Option<String> {
@@ -654,6 +657,26 @@ mod tests {
                 "action:page#save",
                 Some("https://evil.example"),
                 Some("https://example.com"),
+            ),
+            Err(RequestPlanError::ActionOrigin)
+        ));
+        assert!(matches!(
+            plan_action(
+                &manifest,
+                &Method::POST,
+                "action:page#save",
+                Some("not an origin"),
+                Some("https://example.com"),
+            ),
+            Err(RequestPlanError::ActionOrigin)
+        ));
+        assert!(matches!(
+            plan_action(
+                &manifest,
+                &Method::POST,
+                "action:page#save",
+                Some("not an origin"),
+                Some("also not an origin"),
             ),
             Err(RequestPlanError::ActionOrigin)
         ));
