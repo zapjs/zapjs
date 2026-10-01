@@ -125,6 +125,8 @@ pub enum RequestPlanError {
     PrivateCacheState,
     #[error("renderer invocation payload could not be serialized: {0}")]
     InvocationPayload(#[from] serde_json::Error),
+    #[error("request header is invalid")]
+    Header,
     #[error("request deadline exceeds configured limit")]
     DeadlineTooLong,
 }
@@ -213,6 +215,9 @@ pub fn admit_request_input<'a>(
         )),
         Ok(target) => Ok(AdmissionOutcome::Dispatch(target)),
         Err(RequestPlanError::Path) => Ok(AdmissionOutcome::Respond(ImmediateResponse::new(
+            StatusCode::BAD_REQUEST,
+        ))),
+        Err(RequestPlanError::Header) => Ok(AdmissionOutcome::Respond(ImmediateResponse::new(
             StatusCode::BAD_REQUEST,
         ))),
         Err(RequestPlanError::BodyTooLarge) => Ok(AdmissionOutcome::Respond(
@@ -423,6 +428,7 @@ pub struct ActionAdmission<'a> {
 pub struct RendererRequestPayload {
     pub method: String,
     pub path: String,
+    pub headers: BTreeMap<String, String>,
     pub params: BTreeMap<String, Param>,
     #[serde(rename = "searchParams")]
     pub search_params: BTreeMap<String, Vec<String>>,
@@ -434,10 +440,12 @@ impl RendererRequestPayload {
         path: &str,
         params: &BTreeMap<String, Param>,
         search_params: BTreeMap<String, Vec<String>>,
+        headers: BTreeMap<String, String>,
     ) -> Self {
         Self {
             method: method.as_str().to_owned(),
             path: path.to_owned(),
+            headers,
             params: params.clone(),
             search_params,
         }
@@ -465,9 +473,11 @@ impl<'a> RequestTarget<'a> {
     pub fn renderer_request_payload(
         &self,
         path: &str,
+        headers: &[(String, String)],
     ) -> Result<Option<RendererRequestPayload>, RequestPlanError> {
         let target = request_target(path).ok_or(RequestPlanError::Path)?;
         let search_params = parse_search_params(target.query).ok_or(RequestPlanError::Path)?;
+        let headers = normalize_headers(headers)?;
         Ok(match self {
             RequestTarget::Page {
                 params, invocation, ..
@@ -476,6 +486,7 @@ impl<'a> RequestTarget<'a> {
                 target.path,
                 params,
                 search_params,
+                headers,
             )),
             RequestTarget::RouteHandler {
                 params, invocation, ..
@@ -484,6 +495,7 @@ impl<'a> RequestTarget<'a> {
                 target.path,
                 params,
                 search_params,
+                headers,
             )),
             RequestTarget::StaticAsset(_)
             | RequestTarget::NotFound
@@ -491,8 +503,12 @@ impl<'a> RequestTarget<'a> {
         })
     }
 
-    pub fn renderer_request_json(&self, path: &str) -> Result<Option<String>, RequestPlanError> {
-        self.renderer_request_payload(path)?
+    pub fn renderer_request_json(
+        &self,
+        path: &str,
+        headers: &[(String, String)],
+    ) -> Result<Option<String>, RequestPlanError> {
+        self.renderer_request_payload(path, headers)?
             .map(|payload| payload.to_json())
             .transpose()
     }
@@ -718,6 +734,33 @@ fn decode_query_component(value: &str) -> Option<String> {
         .map(|value| value.into_owned())
 }
 
+fn normalize_headers(
+    headers: &[(String, String)],
+) -> Result<BTreeMap<String, String>, RequestPlanError> {
+    let mut normalized = BTreeMap::<String, String>::new();
+    for (name, value) in headers {
+        if !is_valid_header_name(name) || value.contains(['\r', '\n']) {
+            return Err(RequestPlanError::Header);
+        }
+        let name = name.to_ascii_lowercase();
+        normalized
+            .entry(name)
+            .and_modify(|existing| {
+                existing.push_str(", ");
+                existing.push_str(value.trim());
+            })
+            .or_insert_with(|| value.trim().to_owned());
+    }
+    Ok(normalized)
+}
+
+fn is_valid_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| matches!(byte, b'!' | b'#'..=b'\'' | b'*' | b'+' | b'-' | b'.' | b'0'..=b'9' | b'A'..=b'Z' | b'^' | b'_' | b'`' | b'a'..=b'z' | b'|' | b'~'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,9 +930,9 @@ mod tests {
         }
         assert_eq!(
             page_target
-                .renderer_request_json("/shop/caf%C3%A9")
+                .renderer_request_json("/shop/caf%C3%A9", &[])
                 .unwrap(),
-            Some(r#"{"method":"HEAD","path":"/shop/caf%C3%A9","params":{"id":"café"},"searchParams":{}}"#.into())
+            Some(r#"{"method":"HEAD","path":"/shop/caf%C3%A9","headers":{},"params":{"id":"café"},"searchParams":{}}"#.into())
         );
 
         let route_target = plan_request(&manifest, &Method::POST, "/api/echo").unwrap();
@@ -908,10 +951,10 @@ mod tests {
         }
         assert_eq!(
             route_target
-                .renderer_request_json("/api/echo?tag=one&tag=two&space=a+b&empty")
+                .renderer_request_json("/api/echo?tag=one&tag=two&space=a+b&empty", &[("x-zap".into(), "one".into()), ("x-zap".into(), "two".into())])
                 .unwrap(),
             Some(
-                r#"{"method":"POST","path":"/api/echo","params":{},"searchParams":{"empty":[""],"space":["a b"],"tag":["one","two"]}}"#
+                r#"{"method":"POST","path":"/api/echo","headers":{"x-zap":"one, two"},"params":{},"searchParams":{"empty":[""],"space":["a b"],"tag":["one","two"]}}"#
                     .into()
             )
         );

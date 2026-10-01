@@ -634,6 +634,11 @@ fn execute_http_request(
             .execute_request(&RequestExecutionInput {
                 method: &request.method,
                 path: &request.path,
+                headers: request
+                    .headers
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect(),
                 declared_body_bytes: Some(request.body.len() as u64),
                 uses_private_request_state: false,
                 context,
@@ -1003,6 +1008,7 @@ mod tests {
             .execute_request(&RequestExecutionInput {
                 method: &Method::POST,
                 path: "/api/echo",
+                headers: Vec::new(),
                 declared_body_bytes: Some(0),
                 uses_private_request_state: false,
                 context: InvocationContext {

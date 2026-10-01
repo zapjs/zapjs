@@ -88,6 +88,7 @@ impl ExecutionAuthorizer for AllowAllAuthorizer {}
 pub struct RequestExecutionInput<'a> {
     pub method: &'a Method,
     pub path: &'a str,
+    pub headers: Vec<(String, String)>,
     pub declared_body_bytes: Option<u64>,
     pub uses_private_request_state: bool,
     pub context: InvocationContext<'a>,
@@ -98,6 +99,7 @@ impl<'a> RequestExecutionInput<'a> {
         Self {
             method,
             path,
+            headers: Vec::new(),
             declared_body_bytes: None,
             uses_private_request_state: false,
             context: InvocationContext {
@@ -194,7 +196,8 @@ impl ApplicationExecutor {
                 method: input.method,
                 path: input.path,
                 declared_body_bytes: input.declared_body_bytes,
-                uses_private_request_state: input.uses_private_request_state,
+                uses_private_request_state: input.uses_private_request_state
+                    || has_sensitive_headers(&input.headers),
             },
             &self.limits,
             &input.context,
@@ -355,7 +358,7 @@ impl ApplicationExecutor {
                 let bundle_path = self.root.join(&invocation.server_bundle);
                 let bundle = read_artifact_string(&bundle_path)?;
                 let request_json = target
-                    .renderer_request_json(input.path)?
+                    .renderer_request_json(input.path, &input.headers)?
                     .expect("page targets produce renderer payloads");
                 let body = if input.method == Method::HEAD {
                     String::new()
@@ -386,7 +389,7 @@ impl ApplicationExecutor {
                 let bundle_path = self.root.join(&invocation.server_bundle);
                 let bundle = read_artifact_string(&bundle_path)?;
                 let request_json = target
-                    .renderer_request_json(input.path)?
+                    .renderer_request_json(input.path, &input.headers)?
                     .expect("route handler targets produce renderer payloads");
                 let rendered = Renderer::new(bundle)
                     .handle_route_response(&request_json)
@@ -511,6 +514,12 @@ fn escape_json_for_html_script(value: &str) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
+fn has_sensitive_headers(headers: &[(String, String)]) -> bool {
+    headers.iter().any(|(name, _)| {
+        name.eq_ignore_ascii_case("cookie") || name.eq_ignore_ascii_case("authorization")
+    })
+}
+
 fn parse_action_endpoint_payload(body: &[u8]) -> Option<(String, Vec<Value>)> {
     let payload = serde_json::from_slice::<Value>(body).ok()?;
     let object = payload.as_object()?;
@@ -607,13 +616,16 @@ mod tests {
         );
 
         let query_page = executor
-            .execute_request(&RequestExecutionInput::new(&Method::GET, "/?q=rust+search"))
+            .execute_request(&RequestExecutionInput {
+                headers: vec![("accept-language".into(), "en-US".into())],
+                ..RequestExecutionInput::new(&Method::GET, "/?q=rust+search")
+            })
             .unwrap();
         assert_eq!(query_page.status, StatusCode::OK);
         assert!(
             String::from_utf8(query_page.body)
                 .unwrap()
-                .starts_with("<main>GET:/:rust search</main>"),
+                .starts_with("<main>GET:/:rust search:en-US</main>"),
         );
 
         let client_asset = executor
@@ -943,7 +955,7 @@ mod tests {
         fs::write(root.join("public/logo.txt"), "zap").unwrap();
         fs::write(
             root.join(".zap/server/page.js"),
-            r#"globalThis.ZapRender = { render(request) { const q = request.searchParams && request.searchParams.q ? `:${request.searchParams.q[0]}` : ""; return `<main>${request.method}:${request.path}${q}</main>`; } };"#,
+            r#"globalThis.ZapRender = { render(request) { const q = request.searchParams && request.searchParams.q ? `:${request.searchParams.q[0]}` : ""; const lang = request.headers && request.headers["accept-language"] ? `:${request.headers["accept-language"]}` : ""; return `<main>${request.method}:${request.path}${q}${lang}</main>`; } };"#,
         )
         .unwrap();
         fs::write(

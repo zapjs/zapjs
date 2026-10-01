@@ -3551,7 +3551,7 @@ export const Label = 'count';
         assert!(!temp.path().join(".zap/entries/server/helper.js").exists());
         let page_request = plan_request(&compiled, &Method::GET, "/")
             .unwrap()
-            .renderer_request_json("/")
+            .renderer_request_json("/", &[])
             .unwrap()
             .unwrap();
         let rendered = Renderer::new(fs::read_to_string(page_bundle).unwrap())
@@ -3569,7 +3569,10 @@ export const Label = 'count';
             "/shop/caf%C3%A9?color=orange&tag=fast&tag=rust&space=zap+js",
         )
         .unwrap()
-        .renderer_request_json("/shop/caf%C3%A9?color=orange&tag=fast&tag=rust&space=zap+js")
+        .renderer_request_json(
+            "/shop/caf%C3%A9?color=orange&tag=fast&tag=rust&space=zap+js",
+            &[],
+        )
         .unwrap()
         .unwrap();
         let product_rendered =
@@ -3582,7 +3585,7 @@ export const Label = 'count';
         );
         let route_request = plan_request(&compiled, &Method::POST, "/api/echo")
             .unwrap()
-            .renderer_request_json("/api/echo")
+            .renderer_request_json("/api/echo", &[])
             .unwrap()
             .unwrap();
         let handled = Renderer::new(fs::read_to_string(route_bundle).unwrap())
@@ -3593,7 +3596,7 @@ export const Label = 'count';
         assert_eq!(handled.body, "echo:POST:/api/echo");
         let head_request = plan_request(&compiled, &Method::HEAD, "/api/ping")
             .unwrap()
-            .renderer_request_json("/api/ping")
+            .renderer_request_json("/api/ping", &[])
             .unwrap()
             .unwrap();
         let head = Renderer::new(fs::read_to_string(get_route_bundle).unwrap())
