@@ -776,6 +776,33 @@ mod tests {
     }
 
     #[test]
+    fn exposes_inert_console_for_react_packages() {
+        let output = renderer(
+            r#"
+            console.log('hidden');
+            console.warn('hidden');
+            console.error('hidden');
+            console.assert(false, 'hidden');
+            return JSON.stringify({
+                console: typeof console,
+                log: typeof console.log,
+                warn: typeof console.warn,
+                error: typeof console.error,
+                assert: typeof console.assert
+            });
+            "#,
+        )
+        .render("{}")
+        .unwrap();
+
+        let exposed: HashMap<String, String> = serde_json::from_str(&output).unwrap();
+        assert_eq!(exposed.get("console").map(String::as_str), Some("object"));
+        for method in ["log", "warn", "error", "assert"] {
+            assert_eq!(exposed.get(method).map(String::as_str), Some("function"));
+        }
+    }
+
+    #[test]
     fn omits_ambient_platform_apis() {
         let output = renderer(
             r#"

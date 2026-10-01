@@ -2934,6 +2934,91 @@ mod tests {
         ]
     }
 
+    fn write_react_package_exports(root: &Path) {
+        let packages = root.join("node_modules");
+        let react = packages.join("react");
+        let react_dom = packages.join("react-dom");
+        fs::create_dir_all(&react).unwrap();
+        fs::create_dir_all(&react_dom).unwrap();
+        fs::write(
+            react.join("package.json"),
+            r#"{
+              "name": "react",
+              "exports": {
+                "./jsx-runtime": {
+                  "browser": "./jsx-runtime.browser.js",
+                  "default": "./jsx-runtime.default.js"
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            react.join("jsx-runtime.default.js"),
+            "throw new Error('default jsx-runtime export should not be selected');\n",
+        )
+        .unwrap();
+        fs::write(
+            react.join("jsx-runtime.browser.js"),
+            r#"
+            export function jsx(type, props) {
+                return { type, props: props || {}, packageExport: 'browser' };
+            }
+            export const jsxs = jsx;
+            export const Fragment = Symbol.for("react.fragment");
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            react_dom.join("package.json"),
+            r#"{
+              "name": "react-dom",
+              "exports": {
+                "./server.browser": {
+                  "browser": "./server.browser.js",
+                  "default": "./server.default.js"
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            react_dom.join("server.default.js"),
+            "throw new Error('default server export should not be selected');\n",
+        )
+        .unwrap();
+        fs::write(
+            react_dom.join("server.browser.js"),
+            r#"
+            function escapeText(value) {
+                return String(value).replace(/[&<>"]/g, (match) => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;'}[match]));
+            }
+            function renderTree(tree) {
+                if (tree == null || tree === false || tree === true) return "";
+                if (typeof tree === "string" || typeof tree === "number" || typeof tree === "bigint") return escapeText(tree);
+                if (Array.isArray(tree)) return tree.map(renderTree).join("");
+                if (typeof tree.type === "function") return renderTree(tree.type(tree.props || {}));
+                const props = tree.props || {};
+                const attrs = Object.keys(props)
+                    .filter((key) => key !== "children" && key !== "packageExport" && props[key] != null && props[key] !== false)
+                    .map((key) => props[key] === true ? ` ${key}` : ` ${key}="${escapeText(props[key])}"`)
+                    .join("");
+                const marker = tree.packageExport ? ` data-react-export="${tree.packageExport}"` : "";
+                return `<${tree.type}${marker}${attrs}>${renderTree(props.children)}</${tree.type}>`;
+            }
+            export function renderToReadableStream(tree) {
+                return new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode(renderTree(tree)));
+                        controller.close();
+                    }
+                });
+            }
+            "#,
+        )
+        .unwrap();
+    }
+
     fn write_fixture(root: &Path) -> Vec<(String, String)> {
         let aliases = write_react_runtime(root);
         fs::write(
@@ -3882,6 +3967,52 @@ export const Label = 'count';
         assert_eq!(action.status, 203);
         assert_eq!(action.headers, vec![("x-zap-action".into(), "save".into())]);
         assert_eq!(action.body, "saved:7");
+    }
+
+    #[tokio::test]
+    async fn build_application_resolves_react_package_exports_without_aliases() {
+        let temp = tempfile::tempdir().unwrap();
+        write_react_package_exports(temp.path());
+        let app = temp.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            app.join("page.tsx"),
+            "export default function Page({ searchParams }){ return <main data-color={searchParams.color}>package:{searchParams.color}</main>; }\n",
+        )
+        .unwrap();
+
+        let mut options = ApplicationBuildOptions::new(temp.path());
+        options.minify = false;
+        let output = build_application(&options).await.unwrap();
+        assert!(
+            output
+                .bundles
+                .iter()
+                .any(|bundle| bundle.target == BuiltBundleTarget::Server)
+        );
+        let page_entry_source =
+            fs::read_to_string(temp.path().join(".zap/entries/server/page.js")).unwrap();
+        assert!(page_entry_source.contains("react-dom/server.browser"));
+        let compiled = CompiledManifest::load(&output.manifest).unwrap();
+        let page_bundle = temp.path().join(
+            compiled
+                .module("page")
+                .and_then(|module| module.server_bundle.clone())
+                .unwrap(),
+        );
+        let page_request = plan_request(&compiled, &Method::GET, "/?color=orange")
+            .unwrap()
+            .renderer_request_json("/?color=orange", &[], b"")
+            .unwrap()
+            .unwrap();
+        let rendered = Renderer::new(fs::read_to_string(&page_bundle).unwrap())
+            .render(&page_request)
+            .unwrap();
+        assert!(
+            rendered.contains("data-react-export=\"browser\""),
+            "package browser export was not selected: {rendered}"
+        );
+        assert!(rendered.contains("package:orange"), "{rendered}");
     }
 
     #[tokio::test]

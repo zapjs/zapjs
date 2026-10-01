@@ -1,4 +1,14 @@
 globalThis.self = globalThis;
+const zapConsole = Object.freeze({
+  log() {},
+  info() {},
+  warn() {},
+  error() {},
+  debug() {},
+  trace() {},
+  assert(condition, ...args) { if (!condition) this.error(...args); }
+});
+globalThis.console = zapConsole;
 globalThis.queueMicrotask = fn => Promise.resolve().then(fn);
 let nextTimer = 1;
 const timers = new Map();
