@@ -1,0 +1,10 @@
+[package]
+name = "zap-render"
+version = "0.4.0"
+edition = "2021"
+license = "MIT"
+description = "Rust-owned isolated React JavaScript execution"
+
+[dependencies]
+rquickjs = "0.14.0"
+encoding_rs = "0.8.35"

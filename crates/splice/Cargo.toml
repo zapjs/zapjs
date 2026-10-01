@@ -1,0 +1,18 @@
+[package]
+name = "zap-splice"
+version = "0.4.0"
+edition = "2021"
+description = "Bounded Rust-to-Rust request transport for ZapJS workers"
+license = "MIT"
+
+[dependencies]
+bytes = { version = "1", features = ["serde"] }
+futures-util = { version = "0.3", features = ["sink"] }
+rmp-serde = "1.3"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["net", "sync", "time", "rt", "macros"] }
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }

@@ -1,9 +1,17 @@
 [workspace]
-members = ["packages/native", "packages/native/fixtures/addon/native"]
+members = [
+  "crates/build",
+  "crates/render",
+  "crates/runtime",
+  "crates/splice",
+]
 resolver = "2"
+
+[profile.dev]
+debug = 0
+incremental = false
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
-# Unwind is required to report panics from bounded native work as rejected promises.
 panic = "unwind"

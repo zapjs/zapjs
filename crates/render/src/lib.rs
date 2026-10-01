@@ -1,0 +1,326 @@
+//! Runs compiler-produced React bundles inside a Rust-owned QuickJS context.
+//! Every invocation gets an isolated heap; no process, filesystem or network APIs
+//! are exposed to JavaScript. Explicit host operations provide application data.
+
+use rquickjs::{Context, Ctx, Exception, Function, Promise, Runtime, TypedArray};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    fmt,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
+
+pub type Host = Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
+
+#[derive(Debug)]
+pub struct RenderError(pub String);
+impl fmt::Display for RenderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl std::error::Error for RenderError {}
+
+#[derive(Clone)]
+pub struct Limits {
+    pub memory_bytes: usize,
+    pub output_bytes: usize,
+    pub timeout: Duration,
+}
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            memory_bytes: 128 * 1024 * 1024,
+            output_bytes: 16 * 1024 * 1024,
+            timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Renderer {
+    bundle: Arc<str>,
+    host: Host,
+    limits: Limits,
+}
+
+impl Renderer {
+    /// The IIFE must define `ZapRender.render(request)`, returning a string,
+    /// Promise<string>, or a byte ReadableStream (possibly inside a Promise).
+    pub fn new(bundle: impl Into<String>) -> Self {
+        Self {
+            bundle: Arc::from(bundle.into()),
+            host: Arc::new(|name, _| Err(format!("Unknown Rust host operation: {name}"))),
+            limits: Limits::default(),
+        }
+    }
+    pub fn with_host(mut self, host: Host) -> Self {
+        self.host = host;
+        self
+    }
+    pub fn with_limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self
+    }
+    pub fn render(&self, request_json: &str) -> Result<String, RenderError> {
+        let bytes = Rc::new(RefCell::new(Vec::new()));
+        let sink = bytes.clone();
+        self.render_stream(
+            request_json,
+            Arc::new(AtomicBool::new(false)),
+            move |chunk| {
+                sink.borrow_mut().extend(chunk);
+                Ok(())
+            },
+        )?;
+        let bytes = std::mem::take(&mut *bytes.borrow_mut());
+        String::from_utf8(bytes)
+            .map_err(|error| RenderError(format!("Render output is not UTF-8: {error}")))
+    }
+    /// Streams actual React chunks as they are produced. The sink owns transport
+    /// backpressure and must return an error on disconnect. A sink that blocks
+    /// must enforce its own deadline; engine interrupts cannot interrupt Rust.
+    pub fn render_stream<F>(
+        &self,
+        request_json: &str,
+        cancelled: Arc<AtomicBool>,
+        mut sink: F,
+    ) -> Result<(), RenderError>
+    where
+        F: FnMut(Vec<u8>) -> Result<(), String> + 'static,
+    {
+        let start = Instant::now();
+        let deadline = start + self.limits.timeout;
+        let runtime = Runtime::new().map_err(engine_error)?;
+        runtime.set_memory_limit(self.limits.memory_bytes);
+        runtime.set_max_stack_size(2 * 1024 * 1024);
+        let interrupt = cancelled.clone();
+        runtime.set_interrupt_handler(Some(Box::new(move || {
+            interrupt.load(Ordering::Relaxed) || Instant::now() >= deadline
+        })));
+        let context = Context::full(&runtime).map_err(engine_error)?;
+        context.with(|ctx| {
+            let execute = || -> rquickjs::Result<()> {
+                ctx.globals().set(
+                    "__zap_now",
+                    Function::new(ctx.clone(), move || start.elapsed().as_secs_f64() * 1000.0)?,
+                )?;
+                ctx.globals()
+                    .set("__zap_encode", Function::new(ctx.clone(), encode)?)?;
+                install_decoder(&ctx)?;
+                let host = self.host.clone();
+                ctx.globals().set(
+                    "__zap_call",
+                    Function::new(ctx.clone(), move |ctx: Ctx, name: String, input: String| {
+                        host(&name, &input)
+                            .map_err(|message| Exception::throw_message(&ctx, &message))
+                    })?,
+                )?;
+                let mut total = 0usize;
+                let maximum = self.limits.output_bytes;
+                ctx.globals().set(
+                    "__zap_emit",
+                    Function::new(
+                        ctx.clone(),
+                        rquickjs::function::MutFn::new(move |ctx: Ctx, bytes: TypedArray<u8>| {
+                            // rquickjs typed-array slices are valid only until JavaScript runs again.
+                            let bytes = unsafe { bytes.as_bytes() }.ok_or_else(|| {
+                                Exception::throw_message(&ctx, "Detached stream chunk")
+                            })?;
+                            total = total.checked_add(bytes.len()).ok_or_else(|| {
+                                Exception::throw_message(&ctx, "Render output limit exceeded")
+                            })?;
+                            if total > maximum {
+                                return Err(Exception::throw_message(
+                                    &ctx,
+                                    "Render output limit exceeded",
+                                ));
+                            }
+                            sink(bytes.to_vec())
+                                .map_err(|message| Exception::throw_message(&ctx, &message))
+                        }),
+                    )?,
+                )?;
+                ctx.eval::<(), _>(include_str!("host.js"))?;
+                ctx.eval::<(), _>(include_str!("../vendor/abort.js"))?;
+                ctx.eval::<(), _>(include_str!("../vendor/streams.js"))?;
+                ctx.eval::<(), _>(self.bundle.as_bytes())?;
+                ctx.globals().set("__zap_input", request_json)?;
+                let promise: Promise =
+                    ctx.eval("__zap_consume(ZapRender.render(JSON.parse(__zap_input)))")?;
+                let pump: Function = ctx.globals().get("__zap_pump")?;
+                loop {
+                    if cancelled.load(Ordering::Relaxed) {
+                        return Err(Exception::throw_message(&ctx, "Render cancelled"));
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(Exception::throw_message(&ctx, "Render deadline exceeded"));
+                    }
+                    if let Some(result) = promise.result::<()>() {
+                        return result;
+                    }
+                    // Bound each microtask batch so a self-replenishing queue cannot
+                    // starve cancellation checks or timer callbacks.
+                    let mut ran_job = false;
+                    for _ in 0..256 {
+                        if !ctx.execute_pending_job() {
+                            break;
+                        }
+                        ran_job = true;
+                    }
+                    pump.call::<_, ()>(())?;
+                    if !ran_job {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            };
+            execute().map_err(|error| {
+                if error.is_exception() {
+                    RenderError(format!("JavaScript render failed: {:?}", ctx.catch()))
+                } else {
+                    engine_error(error)
+                }
+            })
+        })
+    }
+}
+
+fn engine_error(error: rquickjs::Error) -> RenderError {
+    RenderError(error.to_string())
+}
+fn encode<'js>(ctx: Ctx<'js>, text: String) -> rquickjs::Result<TypedArray<'js, u8>> {
+    TypedArray::new(ctx, text.into_bytes())
+}
+
+fn install_decoder(ctx: &Ctx) -> rquickjs::Result<()> {
+    let decoders = Rc::new(RefCell::new(HashMap::<u32, encoding_rs::Decoder>::new()));
+    let created = decoders.clone();
+    ctx.globals().set(
+        "__zap_decoder",
+        Function::new(ctx.clone(), move |ignore_bom: bool| {
+            let mut values = created.borrow_mut();
+            let id = values.len() as u32;
+            values.insert(
+                id,
+                if ignore_bom {
+                    encoding_rs::UTF_8.new_decoder_without_bom_handling()
+                } else {
+                    encoding_rs::UTF_8.new_decoder_with_bom_removal()
+                },
+            );
+            id
+        })?,
+    )?;
+    ctx.globals().set(
+        "__zap_decode",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx, id: u32, bytes: TypedArray<u8>, stream: bool, fatal: bool| {
+                let mut values = decoders.borrow_mut();
+                let decoder = values
+                    .get_mut(&id)
+                    .ok_or_else(|| Exception::throw_message(&ctx, "Invalid decoder"))?;
+                // Copy immediately; JavaScript may detach or move the backing store on the next turn.
+                let bytes = unsafe { bytes.as_bytes() }
+                    .ok_or_else(|| Exception::throw_message(&ctx, "Detached decoder input"))?;
+                let mut output = String::with_capacity(bytes.len().saturating_mul(3) + 16);
+                let (_, read, malformed) = decoder.decode_to_string(bytes, &mut output, !stream);
+                if read != bytes.len() {
+                    return Err(Exception::throw_message(
+                        &ctx,
+                        "Decoder output capacity exceeded",
+                    ));
+                }
+                if fatal && malformed {
+                    return Err(Exception::throw_type(&ctx, "Invalid UTF-8"));
+                }
+                Ok(output)
+            },
+        )?,
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn renderer(body: &str) -> Renderer {
+        Renderer::new(format!(
+            "globalThis.ZapRender={{render(request){{{body}}}}};"
+        ))
+    }
+
+    #[test]
+    fn renders_text_from_bundle() {
+        let output = renderer("return `<h1>${request.title}</h1>`;")
+            .render(r#"{"title":"Zap"}"#)
+            .unwrap();
+        assert_eq!(output, "<h1>Zap</h1>");
+    }
+
+    #[test]
+    fn streams_readable_stream_chunks() {
+        let output = renderer(
+            r#"
+            return new ReadableStream({
+                start(controller) {
+                    const encoder = new TextEncoder();
+                    controller.enqueue(encoder.encode("hello "));
+                    controller.enqueue(encoder.encode(request.name));
+                    controller.close();
+                }
+            });
+            "#,
+        )
+        .render(r#"{"name":"React"}"#)
+        .unwrap();
+        assert_eq!(output, "hello React");
+    }
+
+    #[test]
+    fn exposes_explicit_rust_host_calls_only() {
+        let output = renderer(r#"return __zap_call("load", JSON.stringify(request));"#)
+            .with_host(Arc::new(|name, input| {
+                assert_eq!(name, "load");
+                Ok(format!("host:{input}"))
+            }))
+            .render(r#"{"id":42}"#)
+            .unwrap();
+        assert_eq!(output, r#"host:{"id":42}"#);
+
+        let error = renderer(r#"return __zap_call("missing", "{}");"#)
+            .render("{}")
+            .unwrap_err();
+        assert!(error.to_string().contains("Unknown Rust host operation"));
+    }
+
+    #[test]
+    fn enforces_output_limits() {
+        let error = renderer(r#"return "0123456789";"#)
+            .with_limits(Limits {
+                output_bytes: 4,
+                ..Limits::default()
+            })
+            .render("{}")
+            .unwrap_err();
+        assert!(error.to_string().contains("Render output limit exceeded"));
+    }
+
+    #[test]
+    fn interrupts_cpu_bound_rendering() {
+        let error = renderer("while (true) {}")
+            .with_limits(Limits {
+                timeout: Duration::from_millis(20),
+                ..Limits::default()
+            })
+            .render("{}")
+            .unwrap_err();
+        assert!(!error.to_string().is_empty());
+    }
+}

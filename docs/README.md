@@ -1,8 +1,8 @@
 # ZapJS documentation
 
-- [Architecture](architecture/framework.md): application, compiler, rendering, native and deployment contracts.
-- [Runtime](runtime.md): routes, request context, actions, caching and native modules.
-- [Implementation evidence](implementation.md): verified behavior, reproduction commands and supported limits.
-- [Performance measurements](../benchmarks/README.md): reproducible comparisons and their limits.
+- [Architecture](architecture/framework.md): corrected Rust-owned React framework contract.
+- [Runtime](runtime.md): request, rendering, action, cache and Splice runtime boundaries.
+- [Implementation evidence](implementation.md): verified Rust foundation behavior, commands and remaining gates.
+- [Rust runtime notes](architecture/rust-runtime.md): runtime gates and Splice context.
 
-These documents describe the integrated React framework. The retired standalone backend and IPC APIs are not supported.
+These documents describe the Rust-owned framework target and the implementation evidence currently present in this repository.

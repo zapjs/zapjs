@@ -1,5 +1,0 @@
-{
-  "version": 1,
-  "name": "zap-framework-production-host",
-  "steps": [{ "type": "proc_spawn", "cmd": "node", "args": ["scripts/verify.mjs"], "expect_exit": 0 }]
-}

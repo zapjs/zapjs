@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "rust-only-crates-host",
+  "steps": [
+    {
+      "type": "proc_spawn",
+      "cmd": "/bin/zsh",
+      "args": [
+        "-lc",
+        "cd /Users/deepsaint/Desktop/zapjs && CARGO_TARGET_DIR=/Users/deepsaint/Desktop/zapjs/artifacts/verification/rust-target cargo +1.96.0 test --workspace"
+      ],
+      "expect_exit": 0
+    }
+  ]
+}
