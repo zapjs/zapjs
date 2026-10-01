@@ -447,9 +447,13 @@ export async function handle(request) {{
   if (!allowedMethods.includes(method)) {{
     throw new TypeError(`Zap route handler does not export ${{method || "a request method"}}`);
   }}
-  const handler = routeModule[method];
+  const routeExport = (name) => routeModule[name];
+  const explicitHead = routeExport("HEAD");
+  const getHandler = routeExport("GET");
+  const exportName = method === "HEAD" && typeof explicitHead !== "function" && typeof getHandler === "function" ? "GET" : method;
+  const handler = routeExport(exportName);
   if (typeof handler !== "function") {{
-    throw new TypeError(`Zap route handler export ${{method}} must be a function`);
+    throw new TypeError(`Zap route handler export ${{exportName}} must be a function`);
   }}
   return normalizeZapOutput(await handler(request));
 }}
@@ -1203,6 +1207,7 @@ const hidden = 1;
         let app = temp.path().join("app");
         fs::create_dir_all(&app).unwrap();
         fs::create_dir_all(app.join("api/echo")).unwrap();
+        fs::create_dir_all(app.join("api/ping")).unwrap();
         fs::write(
             app.join("page.tsx"),
             "export const dynamic = 'force-dynamic';
@@ -1220,6 +1225,12 @@ export function Counter(){ return '1'; }
         fs::write(
             app.join("api/echo/route.ts"),
             "export function POST(request){ return new Response(`echo:${request.method}:${request.path}`, {status: 202, headers: {'x-zap-route': 'echo'}}); }
+",
+        )
+        .unwrap();
+        fs::write(
+            app.join("api/ping/route.ts"),
+            "export function GET(request){ return new Response(`ping:${request.method}:${request.path}`, {status: 200, headers: {'x-zap-route': 'ping'}}); }
 ",
         )
         .unwrap();
@@ -1245,6 +1256,8 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
         assert_eq!(matched.route.module, "page");
         let handler = compiled.resolve("/api/echo").unwrap().unwrap();
         assert_eq!(handler.route.module, "api/echo/route");
+        let get_handler = compiled.resolve("/api/ping").unwrap().unwrap();
+        assert_eq!(get_handler.route.methods, vec!["GET", "HEAD"]);
 
         let server_outputs = output
             .bundles
@@ -1256,13 +1269,15 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
             .iter()
             .filter(|bundle| bundle.target == BuiltBundleTarget::Browser)
             .count();
-        assert_eq!(server_outputs, 3);
+        assert_eq!(server_outputs, 4);
         assert_eq!(browser_outputs, 1);
         let page_bundle = temp.path().join(".zap/server/page.js");
         let route_bundle = temp.path().join(".zap/server/api/echo/route.js");
+        let get_route_bundle = temp.path().join(".zap/server/api/ping/route.js");
         let action_bundle = temp.path().join(".zap/server/actions.js");
         assert!(page_bundle.is_file());
         assert!(route_bundle.is_file());
+        assert!(get_route_bundle.is_file());
         assert!(action_bundle.is_file());
         assert!(!temp.path().join(".zap/server/client.js").exists());
         assert!(temp.path().join(".zap/browser/client.js").is_file());
@@ -1283,6 +1298,12 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
         assert_eq!(handled.status, 202);
         assert_eq!(handled.headers, vec![("x-zap-route".into(), "echo".into())]);
         assert_eq!(handled.body, "echo:POST:/api/echo");
+        let head = Renderer::new(fs::read_to_string(get_route_bundle).unwrap())
+            .handle_route_response(r#"{"method":"HEAD","path":"/api/ping"}"#)
+            .unwrap();
+        assert_eq!(head.status, 200);
+        assert_eq!(head.headers, vec![("x-zap-route".into(), "ping".into())]);
+        assert_eq!(head.body, "ping:HEAD:/api/ping");
         let action = Renderer::new(fs::read_to_string(action_bundle).unwrap())
             .invoke_action_response(r#"{"export":"save","args":[{"id":7}]}"#)
             .unwrap();
