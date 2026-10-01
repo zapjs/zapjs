@@ -659,6 +659,57 @@ mod tests {
     }
 
     #[test]
+    fn omits_ambient_platform_apis() {
+        let output = renderer(
+            r#"
+            const forbidden = [
+                "fetch",
+                "process",
+                "require",
+                "module",
+                "exports",
+                "Buffer",
+                "Deno",
+                "Bun",
+                "WebSocket",
+                "XMLHttpRequest",
+                "localStorage",
+                "sessionStorage",
+                "navigator",
+                "document",
+                "window",
+            ];
+            return JSON.stringify(Object.fromEntries(
+                forbidden.map(name => [name, typeof globalThis[name]])
+            ));
+            "#,
+        )
+        .render("{}")
+        .unwrap();
+
+        let exposed: HashMap<String, String> = serde_json::from_str(&output).unwrap();
+        for name in [
+            "fetch",
+            "process",
+            "require",
+            "module",
+            "exports",
+            "Buffer",
+            "Deno",
+            "Bun",
+            "WebSocket",
+            "XMLHttpRequest",
+            "localStorage",
+            "sessionStorage",
+            "navigator",
+            "document",
+            "window",
+        ] {
+            assert_eq!(exposed.get(name).map(String::as_str), Some("undefined"));
+        }
+    }
+
+    #[test]
     fn enforces_output_limits() {
         let error = renderer(r#"return "0123456789";"#)
             .with_limits(Limits {
