@@ -824,16 +824,30 @@ struct HttpRequest {
     body: Vec<u8>,
 }
 
+const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
+const MAX_HEADER_BYTES: usize = 64 * 1024;
+
 fn handle_connection(executor: &ApplicationExecutor, mut stream: TcpStream) -> Result<()> {
     let request = match read_http_request(&mut stream, AdmissionLimits::default().max_body_bytes) {
         Ok(request) => request,
         Err(error) => {
-            if error.downcast_ref::<HttpBodyTooLarge>().is_some() {
-                eprintln!("payload too large: {error:#}");
-                write_http_response(&mut stream, payload_too_large())?;
-            } else {
-                eprintln!("bad request: {error:#}");
-                write_http_response(&mut stream, bad_request())?;
+            match error.downcast_ref::<HttpReadLimitExceeded>() {
+                Some(HttpReadLimitExceeded::RequestLine { .. }) => {
+                    eprintln!("request URI too long: {error:#}");
+                    write_http_response(&mut stream, request_uri_too_long())?;
+                }
+                Some(HttpReadLimitExceeded::Headers { .. }) => {
+                    eprintln!("request headers too large: {error:#}");
+                    write_http_response(&mut stream, request_headers_too_large())?;
+                }
+                Some(HttpReadLimitExceeded::Body { .. }) => {
+                    eprintln!("payload too large: {error:#}");
+                    write_http_response(&mut stream, payload_too_large())?;
+                }
+                None => {
+                    eprintln!("bad request: {error:#}");
+                    write_http_response(&mut stream, bad_request())?;
+                }
             }
             return Ok(());
         }
@@ -857,6 +871,22 @@ fn bad_request() -> ExecutionResponse {
     }
 }
 
+fn request_uri_too_long() -> ExecutionResponse {
+    ExecutionResponse {
+        status: StatusCode::URI_TOO_LONG,
+        headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
+        body: b"URI Too Long".to_vec(),
+    }
+}
+
+fn request_headers_too_large() -> ExecutionResponse {
+    ExecutionResponse {
+        status: StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+        headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
+        body: b"Request Header Fields Too Large".to_vec(),
+    }
+}
+
 fn payload_too_large() -> ExecutionResponse {
     ExecutionResponse {
         status: StatusCode::PAYLOAD_TOO_LARGE,
@@ -874,29 +904,43 @@ fn internal_server_error() -> ExecutionResponse {
 }
 
 #[derive(Debug)]
-struct HttpBodyTooLarge {
-    declared: u64,
-    max: u64,
+enum HttpReadLimitExceeded {
+    RequestLine { max: usize },
+    Headers { max: usize },
+    Body { declared: u64, max: u64 },
 }
 
-impl fmt::Display for HttpBodyTooLarge {
+impl fmt::Display for HttpReadLimitExceeded {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "HTTP request body declares {} bytes, above the configured {} byte limit",
-            self.declared, self.max
-        )
+        match self {
+            Self::RequestLine { max } => write!(
+                formatter,
+                "HTTP request line exceeded the configured {max} byte limit"
+            ),
+            Self::Headers { max } => write!(
+                formatter,
+                "HTTP request headers exceeded the configured {max} byte limit"
+            ),
+            Self::Body { declared, max } => write!(
+                formatter,
+                "HTTP request body declares {declared} bytes, above the configured {max} byte limit"
+            ),
+        }
     }
 }
 
-impl std::error::Error for HttpBodyTooLarge {}
+impl std::error::Error for HttpReadLimitExceeded {}
 
 fn read_http_request(stream: &mut TcpStream, max_body_bytes: u64) -> Result<HttpRequest> {
     let mut reader = BufReader::new(stream);
-    let mut request_line = String::new();
-    reader
-        .read_line(&mut request_line)
-        .context("read request line")?;
+    let request_line = read_limited_line(
+        &mut reader,
+        MAX_REQUEST_LINE_BYTES,
+        || HttpReadLimitExceeded::RequestLine {
+            max: MAX_REQUEST_LINE_BYTES,
+        },
+        "request line",
+    )?;
     let parts = request_line.split_whitespace().collect::<Vec<_>>();
     if parts.len() != 3 {
         bail!("malformed HTTP request line");
@@ -909,9 +953,17 @@ fn read_http_request(stream: &mut TcpStream, max_body_bytes: u64) -> Result<Http
     }
 
     let mut headers = BTreeMap::new();
+    let mut header_bytes = 0usize;
     loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).context("read request header")?;
+        let line = read_limited_line(
+            &mut reader,
+            MAX_HEADER_BYTES.saturating_sub(header_bytes),
+            || HttpReadLimitExceeded::Headers {
+                max: MAX_HEADER_BYTES,
+            },
+            "request header",
+        )?;
+        header_bytes += line.len();
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.is_empty() {
             break;
@@ -929,7 +981,7 @@ fn read_http_request(stream: &mut TcpStream, max_body_bytes: u64) -> Result<Http
         .context("parse content-length")?
         .unwrap_or(0);
     if content_length as u64 > max_body_bytes {
-        bail!(HttpBodyTooLarge {
+        bail!(HttpReadLimitExceeded::Body {
             declared: content_length as u64,
             max: max_body_bytes,
         });
@@ -945,6 +997,37 @@ fn read_http_request(stream: &mut TcpStream, max_body_bytes: u64) -> Result<Http
         headers,
         body,
     })
+}
+
+fn read_limited_line(
+    reader: &mut impl BufRead,
+    max_bytes: usize,
+    limit_error: impl Fn() -> HttpReadLimitExceeded,
+    label: &str,
+) -> Result<String> {
+    let mut bytes = Vec::new();
+    loop {
+        let available = reader.fill_buf().with_context(|| format!("read {label}"))?;
+        if available.is_empty() {
+            bail!("{label} ended before newline");
+        }
+
+        let chunk_len = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|index| index + 1)
+            .unwrap_or(available.len());
+        if bytes.len().saturating_add(chunk_len) > max_bytes {
+            bail!(limit_error());
+        }
+        bytes.extend_from_slice(&available[..chunk_len]);
+        reader.consume(chunk_len);
+        if bytes.ends_with(b"\n") {
+            break;
+        }
+    }
+
+    String::from_utf8(bytes).with_context(|| format!("{label} must be UTF-8"))
 }
 
 fn execute_http_request(

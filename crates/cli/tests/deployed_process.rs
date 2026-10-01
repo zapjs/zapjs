@@ -253,6 +253,34 @@ fn assert_served_framework_responses(address: &str) {
         oversized_body.ends_with("Payload Too Large"),
         "413 response must not leak admission internals:\n{oversized_body}"
     );
+
+    let long_path = format!(
+        "GET /{} HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+        "x".repeat(8192)
+    );
+    let long_uri = http_exchange(address, long_path.as_bytes());
+    assert!(
+        long_uri.starts_with("HTTP/1.1 414 URI Too Long"),
+        "oversized request targets must return a bounded 414 response:\n{long_uri}"
+    );
+    assert!(
+        long_uri.ends_with("URI Too Long"),
+        "414 response must not leak parser internals:\n{long_uri}"
+    );
+
+    let large_header = format!(
+        "GET / HTTP/1.1\r\nhost: zap.local\r\nx-zap-large: {}\r\nconnection: close\r\n\r\n",
+        "x".repeat(64 * 1024)
+    );
+    let large_header_response = http_exchange(address, large_header.as_bytes());
+    assert!(
+        large_header_response.starts_with("HTTP/1.1 431 Request Header Fields Too Large"),
+        "oversized headers must return a bounded 431 response:\n{large_header_response}"
+    );
+    assert!(
+        large_header_response.ends_with("Request Header Fields Too Large"),
+        "431 response must not leak parser internals:\n{large_header_response}"
+    );
 }
 
 fn http_exchange(address: &str, request: &[u8]) -> String {
