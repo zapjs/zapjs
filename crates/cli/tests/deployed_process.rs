@@ -164,6 +164,44 @@ fn assert_served_framework_responses(address: &str) {
         "unexpected route response body:\n{route}"
     );
 
+    let get_head_route = http_exchange(
+        address,
+        b"GET /api/ping HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        get_head_route.starts_with("HTTP/1.1 200 OK"),
+        "unexpected GET-to-HEAD route GET response:\n{get_head_route}"
+    );
+    assert!(
+        get_head_route.contains("x-zap-route: ping"),
+        "GET-to-HEAD route GET response missed route header:\n{get_head_route}"
+    );
+    assert!(
+        get_head_route.ends_with("ping:GET:/api/ping"),
+        "GET-to-HEAD route GET response missed body:\n{get_head_route}"
+    );
+
+    let get_head_route_head = http_exchange(
+        address,
+        b"HEAD /api/ping HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        get_head_route_head.starts_with("HTTP/1.1 200 OK"),
+        "unexpected GET-to-HEAD route HEAD response:\n{get_head_route_head}"
+    );
+    assert!(
+        get_head_route_head.contains("x-zap-route: ping"),
+        "GET-to-HEAD route HEAD response missed route header:\n{get_head_route_head}"
+    );
+    assert!(
+        get_head_route_head.contains("content-length: 0"),
+        "GET-to-HEAD route HEAD response must advertise an empty body:\n{get_head_route_head}"
+    );
+    assert!(
+        get_head_route_head.ends_with("\r\n\r\n"),
+        "GET-to-HEAD route HEAD response must not include a body:\n{get_head_route_head}"
+    );
+
     let page = http_exchange(
         address,
         b"GET / HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
@@ -362,6 +400,7 @@ fn http_exchange(address: &str, request: &[u8]) -> String {
 fn write_minimal_app(root: &Path) {
     let app = root.join("app/api/echo");
     fs::create_dir_all(&app).expect("create app route");
+    fs::create_dir_all(root.join("app/api/ping")).expect("create ping route");
     fs::create_dir_all(root.join("app/broken")).expect("create broken route");
     fs::create_dir_all(root.join("app/docs/[...slug]")).expect("create docs catch-all route");
     fs::create_dir_all(root.join("app/files/[[...path]]"))
@@ -391,6 +430,11 @@ fn write_minimal_app(root: &Path) {
         "export function POST(request){ return `echo:${request.method}:${request.path}`; }\n",
     )
     .expect("write route");
+    fs::write(
+        root.join("app/api/ping/route.ts"),
+        "export function GET(request){ return new Response(`ping:${request.method}:${request.path}`, { headers: { 'x-zap-route': 'ping' } }); }\n",
+    )
+    .expect("write ping route");
 }
 
 struct TempDir {
