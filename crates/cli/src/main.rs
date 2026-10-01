@@ -71,6 +71,7 @@ struct DeployCommand {
 enum DeployTarget {
     LocalPackage,
     ManagedNative,
+    ProviderFs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +254,21 @@ async fn run_deploy(command: DeployCommand) -> Result<()> {
             println!("deploy_root={}", deploy_dir.display());
             Ok(())
         }
+        DeployTarget::ProviderFs => {
+            let provider_root = command
+                .out_dir
+                .clone()
+                .unwrap_or_else(|| command.graph.root.join(".zap/deploy/provider-fs"));
+            run_provider_fs_deploy(
+                &command.graph.root,
+                &output.deployment,
+                command.graph.public_dir,
+                &provider_root,
+            )?;
+            println!("deploy_target=provider-fs");
+            println!("provider_root={}", provider_root.display());
+            Ok(())
+        }
     }
 }
 
@@ -322,6 +338,53 @@ fn run_managed_native_deploy(
     println!("managed_manifest={}", managed_manifest_path.display());
     println!("function_root={}", function_root.display());
     println!("static_root={}", static_root.display());
+    Ok(())
+}
+
+fn run_provider_fs_deploy(
+    root: &Path,
+    deployment_path: &Path,
+    public_dir: PublicDir,
+    provider_root: &Path,
+) -> Result<()> {
+    let staging_root = root.join(".zap/deploy/provider-fs-stage");
+    if staging_root.exists() {
+        fs::remove_dir_all(&staging_root).with_context(|| {
+            format!(
+                "remove stale provider staging root at {}",
+                staging_root.display()
+            )
+        })?;
+    }
+    run_managed_native_deploy(root, deployment_path, public_dir, &staging_root)?;
+    fs::create_dir_all(provider_root).with_context(|| {
+        format!(
+            "create provider filesystem upload root at {}",
+            provider_root.display()
+        )
+    })?;
+    copy_directory_contents(&staging_root, provider_root, "provider upload artifact")?;
+    verify_executor_root(
+        &provider_root.join("function"),
+        "provider-fs uploaded function",
+    )?;
+
+    let receipt = serde_json::json!({
+        "schema": "zap.provider-fs-upload.v1",
+        "target": "provider-fs",
+        "managed_manifest": "zap.managed-native.json",
+        "function_root": "function",
+        "static_root": "static",
+        "verified": true,
+    });
+    let receipt_path = provider_root.join("zap.provider-fs-upload.json");
+    fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt)?).with_context(|| {
+        format!(
+            "write provider upload receipt at {}",
+            receipt_path.display()
+        )
+    })?;
+    println!("provider_receipt={}", receipt_path.display());
     Ok(())
 }
 
@@ -518,6 +581,32 @@ fn copy_relative_file(
     )
 }
 
+fn copy_directory_contents(source: &Path, dest: &Path, label: &str) -> Result<()> {
+    for entry in fs::read_dir(source)
+        .with_context(|| format!("read {label} directory {}", source.display()))?
+    {
+        let entry = entry.with_context(|| format!("read {label} entry in {}", source.display()))?;
+        let source_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("read {label} file type for {}", source_path.display()))?;
+        if file_type.is_dir() {
+            fs::create_dir_all(&dest_path)
+                .with_context(|| format!("create {label} directory at {}", dest_path.display()))?;
+            copy_directory_contents(&source_path, &dest_path, label)?;
+        } else if file_type.is_file() {
+            copy_named_file(&source_path, &dest_path, label)?;
+        } else {
+            bail!(
+                "{label} contains unsupported file type at {}",
+                source_path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn copy_named_file(source: &Path, dest: &Path, label: &str) -> Result<()> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
@@ -658,6 +747,7 @@ fn parse_deploy(args: impl IntoIterator<Item = OsString>) -> Result<DeployComman
                 command.target = match target.as_str() {
                     "local-package" => DeployTarget::LocalPackage,
                     "managed-native" => DeployTarget::ManagedNative,
+                    "provider-fs" => DeployTarget::ProviderFs,
                     other => bail!("unsupported deploy target `{other}`"),
                 };
             }
@@ -875,7 +965,7 @@ fn status_reason(status: StatusCode) -> &'static str {
 
 fn print_usage() {
     println!(
-        "ZapJS\n\nUSAGE:\n    zap build [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--no-minify]\n    zap check [--root <path>] [--app <path>] [--public <path>|--no-public]\n    zap package [--root <path>] [--deployment <path>] [--public <path>|--no-public] [--out <path>]\n    zap serve [--root <path>] [--manifest <path>] [--public <path>|--no-public] [--addr <host:port>]\n\nCOMMANDS:\n    build      Build a ZapJS application with the Rust-owned compiler\n    check      Validate the ZapJS application graph without writing build artifacts\n    package    Materialize a deployable artifact tree from the Rust deployment manifest\n    serve      Serve built ZapJS artifacts with the Rust executor\n    help       Print this help\n"
+        "ZapJS\n\nUSAGE:\n    zap build [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--no-minify]\n    zap check [--root <path>] [--app <path>] [--public <path>|--no-public]\n    zap package [--root <path>] [--deployment <path>] [--public <path>|--no-public] [--out <path>]\n    zap deploy [--target <local-package|managed-native|provider-fs>] [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--no-minify]\n    zap serve [--root <path>] [--manifest <path>] [--public <path>|--no-public] [--addr <host:port>]\n\nCOMMANDS:\n    build      Build a ZapJS application with the Rust-owned compiler\n    check      Validate the ZapJS application graph without writing build artifacts\n    package    Materialize a deployable artifact tree from the Rust deployment manifest\n    deploy     Build and upload deployable ZapJS artifacts\n    serve      Serve built ZapJS artifacts with the Rust executor\n    help       Print this help\n"
     );
 }
 
@@ -1072,6 +1162,32 @@ mod tests {
                     ..GraphCommand::default()
                 },
                 target: DeployTarget::ManagedNative,
+                ..DeployCommand::default()
+            })
+        );
+    }
+
+    #[test]
+    fn parses_provider_fs_deploy_target() {
+        assert_eq!(
+            parse_command(os_args(&[
+                "zap",
+                "deploy",
+                "--target",
+                "provider-fs",
+                "--root",
+                "/tmp/app",
+                "--out",
+                "/tmp/provider",
+            ]))
+            .unwrap(),
+            Command::Deploy(DeployCommand {
+                graph: GraphCommand {
+                    root: PathBuf::from("/tmp/app"),
+                    ..GraphCommand::default()
+                },
+                target: DeployTarget::ProviderFs,
+                out_dir: Some(PathBuf::from("/tmp/provider")),
                 ..DeployCommand::default()
             })
         );
@@ -1348,6 +1464,67 @@ mod tests {
                 uses_private_request_state: false,
                 context: InvocationContext {
                     request_id: Some("managed-native-test"),
+                    authenticated: true,
+                    deadline_ms: Some(30_000),
+                },
+            })
+            .unwrap();
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(
+            String::from_utf8(response.body).unwrap(),
+            "echo:POST:/api/echo"
+        );
+    }
+
+    #[tokio::test]
+    async fn deploy_command_uploads_provider_fs_artifacts() {
+        let temp = minimal_app();
+        let provider_root = temp.path().join("dist/provider");
+
+        run_deploy(DeployCommand {
+            graph: GraphCommand {
+                root: temp.path().to_owned(),
+                public_dir: PublicDir::Disabled,
+                ..GraphCommand::default()
+            },
+            target: DeployTarget::ProviderFs,
+            out_dir: Some(provider_root.clone()),
+            minify: false,
+        })
+        .await
+        .unwrap();
+
+        assert!(provider_root.join("zap.managed-native.json").is_file());
+        assert!(provider_root.join("zap.provider-fs-upload.json").is_file());
+        assert!(provider_root.join("function/.zap/package.json").is_file());
+        assert!(provider_root.join("function/.zap/manifest.json").is_file());
+        assert!(
+            provider_root
+                .join("function/.zap/server/api/echo/route.js")
+                .is_file()
+        );
+
+        let receipt: Value = serde_json::from_str(
+            &std::fs::read_to_string(provider_root.join("zap.provider-fs-upload.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt["schema"], "zap.provider-fs-upload.v1");
+        assert_eq!(receipt["target"], "provider-fs");
+        assert_eq!(receipt["managed_manifest"], "zap.managed-native.json");
+        assert_eq!(receipt["function_root"], "function");
+        assert_eq!(receipt["verified"], true);
+
+        let executor = ApplicationExecutor::load(&provider_root.join("function")).unwrap();
+        let response = executor
+            .execute_request(&RequestExecutionInput {
+                method: &Method::POST,
+                path: "/api/echo",
+                headers: Vec::new(),
+                body: Vec::new(),
+                declared_body_bytes: Some(0),
+                uses_private_request_state: false,
+                context: InvocationContext {
+                    request_id: Some("provider-fs-test"),
                     authenticated: true,
                     deadline_ms: Some(30_000),
                 },
