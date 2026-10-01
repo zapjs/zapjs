@@ -246,50 +246,149 @@ fn validate_local_module(root: &Path, path: &Path, visited: &mut BTreeSet<PathBu
     Ok(())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum JsToken {
+    Ident(String),
+    String(String),
+    Punct(char),
+}
+
 fn module_specifiers(text: &str) -> Vec<String> {
+    let tokens = js_tokens(text);
     let mut specifiers = Vec::new();
-    for line in text.lines().map(str::trim) {
-        if line.starts_with("import ") || line.starts_with("export ") {
-            if let Some(specifier) = quoted_after(line, " from ") {
-                specifiers.push(specifier);
-            } else if let Some(rest) = line.strip_prefix("import") {
-                if let Some(specifier) = first_quoted(rest) {
-                    specifiers.push(specifier);
+    for (index, token) in tokens.iter().enumerate() {
+        match token {
+            JsToken::Ident(value) if value == "import" => match tokens.get(index + 1) {
+                Some(JsToken::String(specifier)) => specifiers.push(specifier.clone()),
+                Some(JsToken::Punct('(')) => {
+                    if let Some(JsToken::String(specifier)) = tokens.get(index + 2) {
+                        specifiers.push(specifier.clone());
+                    }
+                }
+                _ => {}
+            },
+            JsToken::Ident(value) if value == "require" => {
+                if matches!(tokens.get(index + 1), Some(JsToken::Punct('('))) {
+                    if let Some(JsToken::String(specifier)) = tokens.get(index + 2) {
+                        specifiers.push(specifier.clone());
+                    }
                 }
             }
-        }
-        let mut remainder = line;
-        while let Some(index) = remainder.find("import(") {
-            remainder = &remainder[index + "import(".len()..];
-            if let Some(specifier) = first_quoted(remainder) {
-                specifiers.push(specifier);
+            JsToken::Ident(value) if value == "from" => {
+                if let Some(JsToken::String(specifier)) = tokens.get(index + 1) {
+                    specifiers.push(specifier.clone());
+                }
             }
-        }
-        let mut remainder = line;
-        while let Some(index) = remainder.find("require(") {
-            remainder = &remainder[index + "require(".len()..];
-            if let Some(specifier) = first_quoted(remainder) {
-                specifiers.push(specifier);
-            }
+            _ => {}
         }
     }
     specifiers
 }
 
-fn quoted_after(line: &str, needle: &str) -> Option<String> {
-    let index = line.find(needle)?;
-    first_quoted(&line[index + needle.len()..])
+fn js_tokens(text: &str) -> Vec<JsToken> {
+    let mut tokens = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    while let Some((_, ch)) = chars.next() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        if ch == '/' {
+            match chars.peek().copied() {
+                Some((_, '/')) => {
+                    chars.next();
+                    for (_, ch) in chars.by_ref() {
+                        if ch == '\n' {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                Some((_, '*')) => {
+                    chars.next();
+                    let mut previous = '\0';
+                    for (_, ch) in chars.by_ref() {
+                        if previous == '*' && ch == '/' {
+                            break;
+                        }
+                        previous = ch;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        if ch == '\'' || ch == '"' {
+            tokens.push(JsToken::String(read_js_string(ch, &mut chars)));
+            continue;
+        }
+        if ch == '`' {
+            skip_template_literal(&mut chars);
+            continue;
+        }
+        if is_ident_start(ch) {
+            let mut ident = String::from(ch);
+            while let Some((_, next)) = chars.peek().copied() {
+                if !is_ident_continue(next) {
+                    break;
+                }
+                ident.push(next);
+                chars.next();
+            }
+            tokens.push(JsToken::Ident(ident));
+            continue;
+        }
+        tokens.push(JsToken::Punct(ch));
+    }
+    tokens
 }
 
-fn first_quoted(text: &str) -> Option<String> {
-    let text = text.trim_start();
-    let quote = text.chars().next()?;
-    if quote != '\'' && quote != '"' {
-        return None;
+fn read_js_string(
+    quote: char,
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+) -> String {
+    let mut value = String::new();
+    let mut escaped = false;
+    for (_, ch) in chars.by_ref() {
+        if escaped {
+            value.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == quote {
+            break;
+        }
+        value.push(ch);
     }
-    let rest = &text[quote.len_utf8()..];
-    let end = rest.find(quote)?;
-    Some(rest[..end].to_owned())
+    value
+}
+
+fn skip_template_literal(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) {
+    let mut escaped = false;
+    for (_, ch) in chars.by_ref() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '`' {
+            break;
+        }
+    }
+}
+
+fn is_ident_start(ch: char) -> bool {
+    ch == '_' || ch == '$' || ch.is_ascii_alphabetic()
+}
+
+fn is_ident_continue(ch: char) -> bool {
+    is_ident_start(ch) || ch.is_ascii_digit()
 }
 
 fn is_unavailable_platform_specifier(specifier: &str) -> bool {
@@ -1586,6 +1685,22 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
                 "commonjs_require.ts",
                 "const os = require('os'); export const value = os.platform;",
             ),
+            (
+                "multiline_import.ts",
+                "import {\n  readFile\n} from\n  'fs/promises'; export const value = readFile;",
+            ),
+            (
+                "multiline_export.ts",
+                "export { readFile }\nfrom\n'node:fs';",
+            ),
+            (
+                "spaced_dynamic_import.ts",
+                "export async function load(){ return import (\n  'worker_threads'\n); }",
+            ),
+            (
+                "spaced_commonjs_require.ts",
+                "const vm = require (\n  'vm'\n); export const value = vm;",
+            ),
         ];
         for (name, source) in cases {
             let temp = tempfile::tempdir().unwrap();
@@ -1638,5 +1753,23 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
             "{error:?}"
         );
         assert!(!output.exists());
+
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("entry.ts"),
+            "// import fs from 'fs';\n/* const os = require('os'); */\nconst text = \"import path from 'path'\"; export const value = text;",
+        )
+        .unwrap();
+        let output = temp.path().join("dist/client.js");
+        let result = bundle(&BundleOptions::new(
+            temp.path(),
+            Path::new("entry.ts"),
+            &output,
+            Target::Browser,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(result.files, vec![output.clone()]);
+        assert!(output.is_file());
     }
 }
