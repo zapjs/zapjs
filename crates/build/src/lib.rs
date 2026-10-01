@@ -266,36 +266,47 @@ pub async fn build_application(
         .context("resolve application root")?;
     let app_root = absolute(&root, &options.graph.app_dir);
     let mut bundles = Vec::new();
+    let page_modules = graph
+        .routes
+        .iter()
+        .filter(|route| route.kind == RouteKind::Page)
+        .map(|route| route.module.clone())
+        .collect::<BTreeSet<_>>();
 
     for module in &graph.modules {
-        let entry = app_root.join(&module.path);
-        let output = absolute(&root, &module.server_bundle);
-        let mut bundle_options = BundleOptions::new(
-            &root,
-            &entry,
-            &output,
-            Target::Server {
-                global: bundle_global(&module.id),
-            },
-        );
-        bundle_options.aliases = options.aliases.clone();
-        bundle_options.conditions = options.server_conditions.clone();
-        bundle_options.minify = options.minify;
-        let built = bundle(&bundle_options)
-            .await
-            .with_context(|| format!("build server bundle for module {}", module.path.display()))?;
-        bundles.push(BuiltBundle {
-            module: module.id.clone(),
-            target: BuiltBundleTarget::Server,
-            output,
-            files: built.files,
-            bytes: built.bytes,
-            warnings: built.warnings,
-        });
+        let source_entry = app_root.join(&module.path);
+        if let Some(server_bundle) = &module.server_bundle {
+            let (server_entry, global) = if page_modules.contains(&module.id) {
+                (
+                    write_page_server_entry(&root, &options.graph.out_dir, module, &source_entry)?,
+                    "ZapRender".into(),
+                )
+            } else {
+                (source_entry.clone(), bundle_global(&module.id))
+            };
+            let output = absolute(&root, server_bundle);
+            let mut bundle_options =
+                BundleOptions::new(&root, &server_entry, &output, Target::Server { global });
+            bundle_options.aliases = options.aliases.clone();
+            bundle_options.conditions = options.server_conditions.clone();
+            bundle_options.minify = options.minify;
+            let built = bundle(&bundle_options).await.with_context(|| {
+                format!("build server bundle for module {}", module.path.display())
+            })?;
+            bundles.push(BuiltBundle {
+                module: module.id.clone(),
+                target: BuiltBundleTarget::Server,
+                output,
+                files: built.files,
+                bytes: built.bytes,
+                warnings: built.warnings,
+            });
+        }
 
         if let Some(browser_chunk) = &module.browser_chunk {
             let output = absolute(&root, browser_chunk);
-            let mut bundle_options = BundleOptions::new(&root, &entry, &output, Target::Browser);
+            let mut bundle_options =
+                BundleOptions::new(&root, &source_entry, &output, Target::Browser);
             bundle_options.aliases = options.aliases.clone();
             bundle_options.conditions = options.browser_conditions.clone();
             bundle_options.minify = options.minify;
@@ -320,6 +331,51 @@ pub async fn build_application(
         manifest,
         bundles,
     })
+}
+
+fn write_page_server_entry(
+    root: &Path,
+    out_dir: &Path,
+    module: &ModuleRef,
+    source_entry: &Path,
+) -> Result<PathBuf> {
+    let entry = absolute(root, out_dir)
+        .join("entries/server")
+        .join(format!("{}.js", module.id));
+    let parent = entry
+        .parent()
+        .context("generated page server entry needs a parent directory")?;
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let source = js_string(&source_entry.to_string_lossy());
+    let body = format!(
+        r#"import renderPage from "{source}";
+
+function normalizeZapOutput(value) {{
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
+  throw new TypeError("Zap page output must be text or a ReadableStream until the React SSR adapter is installed");
+}}
+
+export async function render(request) {{
+  if (typeof renderPage !== "function") {{
+    throw new TypeError("Zap page module must export a default function");
+  }}
+  return normalizeZapOutput(await renderPage(request));
+}}
+"#
+    );
+    fs::write(&entry, body).with_context(|| format!("write {}", entry.display()))?;
+    Ok(entry)
+}
+
+fn js_string(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 pub fn write_manifest_atomically(graph: &ApplicationGraph, path: &Path) -> Result<()> {
@@ -471,7 +527,8 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
     routes.sort_by(|a, b| a.pattern.cmp(&b.pattern).then(a.id.cmp(&b.id)));
     let mut module_refs = Vec::new();
     for module in modules.values() {
-        let server_bundle = out_dir.join("server").join(format!("{}.js", module.id));
+        let server_bundle = (module.kind != ModuleKind::Client)
+            .then(|| out_dir.join("server").join(format!("{}.js", module.id)));
         let browser_chunk = (module.kind == ModuleKind::Client)
             .then(|| out_dir.join("browser").join(format!("{}.js", module.id)));
         module_refs.push(ModuleRef {
@@ -668,6 +725,7 @@ fn discover_assets(public_root: &Path) -> Result<Vec<AssetRef>> {
 mod tests {
     use super::*;
     use std::fs;
+    use zap_render::Renderer;
 
     fn write_fixture(root: &Path) -> Vec<(String, String)> {
         let runtime = root.join("third_party/react");
@@ -758,10 +816,7 @@ mod tests {
             client.browser_chunk.as_deref(),
             Some(Path::new(".zap/browser/counter.js"))
         );
-        assert_eq!(
-            client.server_bundle,
-            PathBuf::from(".zap/server/counter.js")
-        );
+        assert_eq!(client.server_bundle, None);
 
         assert_eq!(graph.actions.len(), 1);
         assert_eq!(graph.actions[0].id, "action:actions");
@@ -800,7 +855,7 @@ mod tests {
         fs::write(
             app.join("page.tsx"),
             "export const dynamic = 'force-dynamic';
-export default function Page(){ return 'home'; }
+export default function Page(request){ return `home:${request.path}`; }
 ",
         )
         .unwrap();
@@ -835,11 +890,17 @@ export function Counter(){ return '1'; }
             .iter()
             .filter(|bundle| bundle.target == BuiltBundleTarget::Browser)
             .count();
-        assert_eq!(server_outputs, output.graph.modules.len());
+        assert_eq!(server_outputs, 1);
         assert_eq!(browser_outputs, 1);
-        assert!(temp.path().join(".zap/server/page.js").is_file());
-        assert!(temp.path().join(".zap/server/client.js").is_file());
+        let page_bundle = temp.path().join(".zap/server/page.js");
+        assert!(page_bundle.is_file());
+        assert!(!temp.path().join(".zap/server/client.js").exists());
         assert!(temp.path().join(".zap/browser/client.js").is_file());
+        assert!(temp.path().join(".zap/entries/server/page.js").is_file());
+        let rendered = Renderer::new(fs::read_to_string(page_bundle).unwrap())
+            .render(r#"{"path":"/"}"#)
+            .unwrap();
+        assert_eq!(rendered, "home:/");
     }
 
     #[tokio::test]

@@ -48,7 +48,7 @@ pub struct ModuleRef {
     pub path: PathBuf,
     pub kind: ModuleKind,
     pub browser_chunk: Option<PathBuf>,
-    pub server_bundle: PathBuf,
+    pub server_bundle: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +118,8 @@ pub enum ManifestError {
     MissingLayout { route: String, layout: String },
     #[error("action {action} references missing module {module}")]
     MissingActionModule { action: String, module: String },
+    #[error("module {module} is missing a server bundle")]
+    MissingServerBundle { module: String },
     #[error("module {module} has an empty server bundle path")]
     EmptyServerBundle { module: String },
     #[error("client module {module} is missing a browser chunk")]
@@ -206,23 +208,38 @@ impl CompiledManifest {
         }
 
         for module in &manifest.modules {
-            if module.server_bundle.as_os_str().is_empty() {
-                return Err(ManifestError::EmptyServerBundle {
-                    module: module.id.clone(),
-                });
-            }
-            if module.kind == ModuleKind::Client && module.browser_chunk.is_none() {
-                return Err(ManifestError::MissingBrowserChunk {
-                    module: module.id.clone(),
-                });
+            match (&module.kind, &module.server_bundle) {
+                (ModuleKind::Client, _) => {
+                    if module.browser_chunk.is_none() {
+                        return Err(ManifestError::MissingBrowserChunk {
+                            module: module.id.clone(),
+                        });
+                    }
+                }
+                (_, Some(path)) if path.as_os_str().is_empty() => {
+                    return Err(ManifestError::EmptyServerBundle {
+                        module: module.id.clone(),
+                    });
+                }
+                (_, Some(_)) => {}
+                (_, None) => {
+                    return Err(ManifestError::MissingServerBundle {
+                        module: module.id.clone(),
+                    });
+                }
             }
         }
 
         for route in &manifest.routes {
-            if !modules.contains_key(&route.module) {
+            let Some(module) = modules.get(&route.module) else {
                 return Err(ManifestError::MissingRouteModule {
                     route: route.id.clone(),
                     module: route.module.clone(),
+                });
+            };
+            if module.server_bundle.is_none() {
+                return Err(ManifestError::MissingServerBundle {
+                    module: module.id.clone(),
                 });
             }
             for layout in &route.layouts {
@@ -330,7 +347,7 @@ mod tests {
                 path: PathBuf::from("shop/[id]/page.tsx"),
                 kind: ModuleKind::Server,
                 browser_chunk: None,
-                server_bundle: PathBuf::from(".zap/server/shop/_id_/page.js"),
+                server_bundle: Some(PathBuf::from(".zap/server/shop/_id_/page.js")),
             }],
             actions: Vec::new(),
             assets: Vec::new(),

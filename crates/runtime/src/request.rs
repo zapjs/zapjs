@@ -122,14 +122,14 @@ mod tests {
                     path: PathBuf::from("shop/[id]/page.tsx"),
                     kind: ModuleKind::Server,
                     browser_chunk: None,
-                    server_bundle: PathBuf::from(".zap/server/page.js"),
+                    server_bundle: Some(PathBuf::from(".zap/server/page.js")),
                 },
                 ModuleRef {
                     id: "handler".into(),
                     path: PathBuf::from("api/echo/route.ts"),
                     kind: ModuleKind::Server,
                     browser_chunk: None,
-                    server_bundle: PathBuf::from(".zap/server/handler.js"),
+                    server_bundle: Some(PathBuf::from(".zap/server/handler.js")),
                 },
             ],
             actions: vec![ActionRef {
