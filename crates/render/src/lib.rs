@@ -643,6 +643,32 @@ mod tests {
     }
 
     #[test]
+    fn exposes_web_response_helpers() {
+        let json = route_handler(
+            r#"const response = Response.json({ok: true}); const clone = response.clone(); return clone.json().then(body => new Response(`${response.headers.get('content-type')}:${body.ok}:${response.bodyUsed}:${clone.bodyUsed}`));"#,
+        )
+        .handle_route_response(r#"{}"#)
+        .unwrap();
+        assert_eq!(json.body, "application/json:true:false:true");
+
+        let redirect = route_handler(r#"return Response.redirect('/login', 307);"#)
+            .handle_route_response(r#"{}"#)
+            .unwrap();
+        assert_eq!(redirect.status, 307);
+        assert_eq!(redirect.headers, vec![("location".into(), "/login".into())]);
+        assert_eq!(redirect.body, "");
+
+        let used_error = route_handler(
+            r#"const response = new Response('hello'); return response.text().then(() => response.text());"#,
+        )
+        .handle_route_response(r#"{}"#)
+        .unwrap_err();
+        assert!(used_error
+            .to_string()
+            .contains("Response body has already been read"));
+    }
+
+    #[test]
     fn handles_route_response_metadata_from_bundle() {
         let response = route_handler(
             r#"return new Response(JSON.stringify({ok: true}), {status: 201, headers: {'content-type': 'application/json'}});"#,

@@ -271,26 +271,48 @@ function bodyText(body) {
 
 globalThis.Request = Request;
 
-globalThis.Response = class Response {
+class Response {
   constructor(body = '', init = {}) {
     this.status = init.status == null ? 200 : Number(init.status);
     if (!Number.isInteger(this.status) || this.status < 200 || this.status > 599) throw new RangeError('Invalid response status');
     this.statusText = init.statusText == null ? '' : String(init.statusText);
     this.headers = new Headers(init.headers);
-    this.body = body;
+    this.body = normalizeBody(body);
+    this.bodyUsed = false;
   }
   static json(value, init = {}) {
     const response = new Response(JSON.stringify(value), init);
     if (!response.headers.has('content-type')) response.headers.set('content-type', 'application/json');
     return response;
   }
-  async text() {
-    if (typeof this.body === 'string') return this.body;
-    if (this.body == null) return '';
-    if (this.body instanceof Uint8Array) return new TextDecoder().decode(this.body);
-    return String(this.body);
+  static redirect(url, status = 302) {
+    status = Number(status);
+    if (![301, 302, 303, 307, 308].includes(status)) throw new RangeError('Invalid redirect status');
+    return new Response('', {status, headers: {location: String(url)}});
   }
-};
+  clone() {
+    if (this.bodyUsed) throw new TypeError('Cannot clone a used Response body');
+    return new Response(this.body, {status: this.status, statusText: this.statusText, headers: this.headers});
+  }
+  async text() {
+    return bodyText(consumeResponseBody(this));
+  }
+  async json() {
+    return JSON.parse(await this.text());
+  }
+  async arrayBuffer() {
+    const bytes = new TextEncoder().encode(await this.text());
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+}
+
+function consumeResponseBody(response) {
+  if (response.bodyUsed) throw new TypeError('Response body has already been read');
+  response.bodyUsed = true;
+  return response.body;
+}
+
+globalThis.Response = Response;
 
 globalThis.__zap_consume = async result => {
   result = await result;
