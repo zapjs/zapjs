@@ -664,15 +664,21 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             }
             route_sources.push((id.clone(), route_kind, methods));
         }
-        modules.insert(
+        if let Some(existing) = modules.insert(
             id.clone(),
             SourceModule {
-                id,
-                relative_path,
+                id: id.clone(),
+                relative_path: relative_path.clone(),
                 kind,
                 cache,
             },
-        );
+        ) {
+            bail!(
+                "duplicate module id {id}: {} and {}",
+                existing.relative_path.display(),
+                relative_path.display()
+            );
+        }
     }
 
     let mut routes = Vec::new();
@@ -1132,6 +1138,30 @@ export default function Page(){}
             .unwrap_err()
             .to_string();
         assert!(error.contains("ambiguous route patterns"), "{error}");
+    }
+
+    #[test]
+    fn application_graph_rejects_duplicate_module_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let route = temp.path().join("app/api/echo");
+        fs::create_dir_all(&route).unwrap();
+        fs::write(
+            route.join("route.ts"),
+            "export function GET(){}
+",
+        )
+        .unwrap();
+        fs::write(
+            route.join("route.tsx"),
+            "export function POST(){}
+",
+        )
+        .unwrap();
+
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("duplicate module id"), "{error}");
     }
 
     #[test]
