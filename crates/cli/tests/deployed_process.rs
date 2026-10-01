@@ -202,6 +202,32 @@ fn assert_served_framework_responses(address: &str) {
         "Flight response did not carry page content:\n{flight}"
     );
 
+    let catch_all = http_exchange(
+        address,
+        b"GET /docs/a/b/c?view=full&tag=one&tag=two HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        catch_all.starts_with("HTTP/1.1 200 OK"),
+        "unexpected catch-all page response:\n{catch_all}"
+    );
+    assert!(
+        catch_all.ends_with("docs:a/b/c:full:one|two"),
+        "catch-all page did not receive decoded params and query data:\n{catch_all}"
+    );
+
+    let catch_all_flight = http_exchange(
+        address,
+        b"GET /docs/a/b/c?view=full&tag=one&tag=two HTTP/1.1\r\nhost: zap.local\r\nrsc: 1\r\naccept: text/x-component\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        catch_all_flight.starts_with("HTTP/1.1 200 OK"),
+        "unexpected catch-all Flight response:\n{catch_all_flight}"
+    );
+    assert!(
+        catch_all_flight.contains(r#""content":"docs:a/b/c:full:one|two""#),
+        "catch-all Flight response did not carry decoded params and query data:\n{catch_all_flight}"
+    );
+
     let failed_page = http_exchange(
         address,
         b"GET /broken HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
@@ -298,11 +324,17 @@ fn write_minimal_app(root: &Path) {
     let app = root.join("app/api/echo");
     fs::create_dir_all(&app).expect("create app route");
     fs::create_dir_all(root.join("app/broken")).expect("create broken route");
+    fs::create_dir_all(root.join("app/docs/[...slug]")).expect("create docs catch-all route");
     fs::write(
         root.join("app/page.tsx"),
         "export default function Page(){ return 'home'; }\n",
     )
     .expect("write page");
+    fs::write(
+        root.join("app/docs/[...slug]/page.tsx"),
+        "export default function Docs({ params, searchParams }){ return `docs:${params.slug.join('/')}:${searchParams.view[0]}:${searchParams.tag.join('|')}`; }\n",
+    )
+    .expect("write docs page");
     fs::write(
         root.join("app/broken/page.tsx"),
         "export default function Broken(){ throw new Error('broken page'); }\n",

@@ -1805,7 +1805,7 @@ function zapSearchParams(request) {
   const input = request && request.searchParams && typeof request.searchParams === "object" ? request.searchParams : {};
   const output = {};
   for (const [key, value] of Object.entries(input)) {
-    output[key] = Array.isArray(value) && value.length === 1 ? value[0] : value;
+    output[key] = Array.isArray(value) ? value.slice() : [value];
   }
   return output;
 }
