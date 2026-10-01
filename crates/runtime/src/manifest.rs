@@ -68,6 +68,20 @@ pub struct ClientReference {
     pub browser_chunk: PathBuf,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClientHydrationReference {
+    pub id: String,
+    pub module: String,
+    pub export: String,
+    pub browser_chunk: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteHydration {
+    pub client_references: Vec<ClientHydrationReference>,
+    pub browser_chunks: Vec<PathBuf>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayoutRef {
     pub id: String,
@@ -582,6 +596,30 @@ impl CompiledManifest {
             .map(|index| &self.manifest.client_references[*index])
     }
 
+    pub fn route_hydration(&self, route: &RouteEntry) -> Result<RouteHydration, ManifestError> {
+        let mut browser_chunks = BTreeSet::new();
+        let mut client_references = Vec::with_capacity(route.client_references.len());
+        for id in &route.client_references {
+            let Some(reference) = self.client_reference(id) else {
+                return Err(ManifestError::MissingRouteClientReference {
+                    route: route.id.clone(),
+                    reference: id.clone(),
+                });
+            };
+            browser_chunks.insert(reference.browser_chunk.clone());
+            client_references.push(ClientHydrationReference {
+                id: reference.id.clone(),
+                module: reference.module.clone(),
+                export: reference.export.clone(),
+                browser_chunk: reference.browser_chunk.clone(),
+            });
+        }
+        Ok(RouteHydration {
+            client_references,
+            browser_chunks: browser_chunks.into_iter().collect(),
+        })
+    }
+
     pub fn module(&self, id: &str) -> Option<&ModuleRef> {
         self.manifest.modules.iter().find(|module| module.id == id)
     }
@@ -756,6 +794,12 @@ mod tests {
                 .browser_chunk,
             PathBuf::from(".zap/browser/shop/_id_/counter.js")
         );
+        let hydration = compiled.route_hydration(matched.route).unwrap();
+        assert_eq!(
+            hydration.browser_chunks,
+            vec![PathBuf::from(".zap/browser/shop/_id_/counter.js")]
+        );
+        assert_eq!(hydration.client_references[0].export, "Counter");
         let asset = compiled.asset("/images/logo.svg").unwrap();
         assert_eq!(
             compiled

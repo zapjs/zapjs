@@ -2980,7 +2980,8 @@ export type { IgnoredAction };
         fs::create_dir_all(app.join("api/ping")).unwrap();
         fs::write(
             app.join("page.tsx"),
-            "export const dynamic = 'force-dynamic';
+            "import { Counter } from './client';
+export const dynamic = 'force-dynamic';
 export default function Page(request){ return <main data-path={request.path}>home:{request.path}</main>; }
 ",
         )
@@ -3036,6 +3037,19 @@ export const Label = 'count';
         let compiled = CompiledManifest::load(&output.manifest).unwrap();
         let matched = compiled.resolve("/").unwrap().unwrap();
         assert_eq!(matched.route.module, "page");
+        let hydration = compiled.route_hydration(matched.route).unwrap();
+        assert_eq!(
+            hydration.browser_chunks,
+            vec![PathBuf::from(".zap/browser/client.js")]
+        );
+        assert_eq!(
+            hydration
+                .client_references
+                .iter()
+                .map(|reference| reference.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["client:client#Counter"]
+        );
         let handler = compiled.resolve("/api/echo").unwrap().unwrap();
         assert_eq!(handler.route.module, "api/echo/route");
         let get_handler = compiled.resolve("/api/ping").unwrap().unwrap();

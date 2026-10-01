@@ -1,7 +1,7 @@
 use crate::{
     manifest::{
         ActionRef, AssetRef, CachePolicy, CompiledManifest, DynamicPolicy, ManifestError,
-        RouteEntry, RouteKind,
+        RouteEntry, RouteHydration, RouteKind,
     },
     routing::Param,
 };
@@ -16,6 +16,7 @@ pub enum RequestTarget<'a> {
         route: &'a RouteEntry,
         params: BTreeMap<String, Param>,
         cache: RouteCacheDecision,
+        hydration: RouteHydration,
     },
     RouteHandler {
         route: &'a RouteEntry,
@@ -319,10 +320,12 @@ pub fn plan_request<'a>(
                     allowed: PAGE_METHODS.to_vec(),
                 });
             }
+            let hydration = manifest.route_hydration(matched.route)?;
             Ok(RequestTarget::Page {
                 route: matched.route,
                 params: matched.params,
                 cache: route_cache_decision(&matched.route.cache),
+                hydration,
             })
         }
         RouteKind::Handler => {
