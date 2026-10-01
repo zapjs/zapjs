@@ -588,10 +588,17 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/handler.js")),
                 },
+                ModuleRef {
+                    id: "actions".into(),
+                    path: PathBuf::from("actions.ts"),
+                    kind: ModuleKind::ServerActions,
+                    browser_chunk: None,
+                    server_bundle: Some(PathBuf::from(".zap/server/actions.js")),
+                },
             ],
             actions: vec![ActionRef {
-                id: "action:page#save".into(),
-                module: "page".into(),
+                id: "action:actions#save".into(),
+                module: "actions".into(),
                 export: "save".into(),
                 path: PathBuf::from("actions.ts"),
             }],
@@ -635,7 +642,7 @@ mod tests {
         let admitted = plan_action(
             &manifest,
             &Method::POST,
-            "action:page#save",
+            "action:actions#save",
             Some("https://example.com/form"),
             Some("https://example.com"),
         )
@@ -643,7 +650,7 @@ mod tests {
         assert_eq!(admitted.target.action.export, "save");
 
         assert!(matches!(
-            plan_action(&manifest, &Method::GET, "action:page#save", None, None),
+            plan_action(&manifest, &Method::GET, "action:actions#save", None, None),
             Err(RequestPlanError::ActionMethod)
         ));
         assert!(matches!(
@@ -654,7 +661,7 @@ mod tests {
             plan_action(
                 &manifest,
                 &Method::POST,
-                "action:page#save",
+                "action:actions#save",
                 Some("https://evil.example"),
                 Some("https://example.com"),
             ),
@@ -664,7 +671,7 @@ mod tests {
             plan_action(
                 &manifest,
                 &Method::POST,
-                "action:page#save",
+                "action:actions#save",
                 Some("not an origin"),
                 Some("https://example.com"),
             ),
@@ -674,7 +681,7 @@ mod tests {
             plan_action(
                 &manifest,
                 &Method::POST,
-                "action:page#save",
+                "action:actions#save",
                 Some("not an origin"),
                 Some("also not an origin"),
             ),
@@ -704,7 +711,7 @@ mod tests {
                 &manifest,
                 &ActionInput {
                     method: &Method::POST,
-                    action_id: "action:page#save",
+                    action_id: "action:actions#save",
                     origin: None,
                     expected_origin: None,
                     declared_body_bytes: Some(5),
@@ -916,7 +923,7 @@ mod tests {
             &manifest,
             &ActionInput {
                 method: &Method::POST,
-                action_id: "action:page#save",
+                action_id: "action:actions#save",
                 origin: Some("https://example.com/form"),
                 expected_origin: Some("https://example.com"),
                 declared_body_bytes: Some(4),
@@ -936,7 +943,7 @@ mod tests {
                 &manifest,
                 &ActionInput {
                     method: &Method::GET,
-                    action_id: "action:page#save",
+                    action_id: "action:actions#save",
                     origin: None,
                     expected_origin: None,
                     declared_body_bytes: None,
@@ -969,7 +976,7 @@ mod tests {
                 &manifest,
                 &ActionInput {
                     method: &Method::POST,
-                    action_id: "action:page#save",
+                    action_id: "action:actions#save",
                     origin: Some("https://evil.example"),
                     expected_origin: Some("https://example.com"),
                     declared_body_bytes: None,
@@ -984,7 +991,7 @@ mod tests {
                 &manifest,
                 &ActionInput {
                     method: &Method::POST,
-                    action_id: "action:page#save",
+                    action_id: "action:actions#save",
                     origin: None,
                     expected_origin: None,
                     declared_body_bytes: Some(5),
@@ -1059,7 +1066,7 @@ mod tests {
                 &manifest,
                 &ActionInput {
                     method: &Method::POST,
-                    action_id: "action:page#save",
+                    action_id: "action:actions#save",
                     origin: None,
                     expected_origin: None,
                     declared_body_bytes: None,
@@ -1080,7 +1087,7 @@ mod tests {
                 &manifest,
                 &ActionInput {
                     method: &Method::POST,
-                    action_id: "action:page#save",
+                    action_id: "action:actions#save",
                     origin: None,
                     expected_origin: None,
                     declared_body_bytes: None,

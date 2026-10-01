@@ -116,10 +116,14 @@ pub enum ManifestError {
     Route(#[from] RouteError),
     #[error("route {route} references missing module {module}")]
     MissingRouteModule { route: String, module: String },
+    #[error("route {route} references non-server module {module}")]
+    InvalidRouteModuleKind { route: String, module: String },
     #[error("route {route} references missing layout {layout}")]
     MissingLayout { route: String, layout: String },
     #[error("action {action} references missing module {module}")]
     MissingActionModule { action: String, module: String },
+    #[error("action {action} references non-action module {module}")]
+    InvalidActionModuleKind { action: String, module: String },
     #[error("module {module} is missing a server bundle")]
     MissingServerBundle { module: String },
     #[error("module {module} has an empty server bundle path")]
@@ -303,6 +307,12 @@ impl CompiledManifest {
                     module: route.module.clone(),
                 });
             };
+            if module.kind != ModuleKind::Server {
+                return Err(ManifestError::InvalidRouteModuleKind {
+                    route: route.id.clone(),
+                    module: module.id.clone(),
+                });
+            }
             if module.server_bundle.is_none() {
                 return Err(ManifestError::MissingServerBundle {
                     module: module.id.clone(),
@@ -324,10 +334,21 @@ impl CompiledManifest {
         }
 
         for action in &manifest.actions {
-            if !modules.contains_key(&action.module) {
+            let Some(module) = modules.get(&action.module) else {
                 return Err(ManifestError::MissingActionModule {
                     action: action.id.clone(),
                     module: action.module.clone(),
+                });
+            };
+            if module.kind != ModuleKind::ServerActions {
+                return Err(ManifestError::InvalidActionModuleKind {
+                    action: action.id.clone(),
+                    module: module.id.clone(),
+                });
+            }
+            if module.server_bundle.is_none() {
+                return Err(ManifestError::MissingServerBundle {
+                    module: module.id.clone(),
                 });
             }
         }
@@ -475,16 +496,25 @@ mod tests {
                 path: PathBuf::from("layout.tsx"),
                 depth: 0,
             }],
-            modules: vec![ModuleRef {
-                id: "shop/_id_/page".into(),
-                path: PathBuf::from("shop/[id]/page.tsx"),
-                kind: ModuleKind::Server,
-                browser_chunk: None,
-                server_bundle: Some(PathBuf::from(".zap/server/shop/_id_/page.js")),
-            }],
+            modules: vec![
+                ModuleRef {
+                    id: "shop/_id_/page".into(),
+                    path: PathBuf::from("shop/[id]/page.tsx"),
+                    kind: ModuleKind::Server,
+                    browser_chunk: None,
+                    server_bundle: Some(PathBuf::from(".zap/server/shop/_id_/page.js")),
+                },
+                ModuleRef {
+                    id: "shop/_id_/actions".into(),
+                    path: PathBuf::from("shop/[id]/actions.ts"),
+                    kind: ModuleKind::ServerActions,
+                    browser_chunk: None,
+                    server_bundle: Some(PathBuf::from(".zap/server/shop/_id_/actions.js")),
+                },
+            ],
             actions: vec![ActionRef {
                 id: "action:shop/_id_/actions#save".into(),
-                module: "shop/_id_/page".into(),
+                module: "shop/_id_/actions".into(),
                 export: "save".into(),
                 path: PathBuf::from("shop/[id]/actions.ts"),
             }],
@@ -601,6 +631,20 @@ mod tests {
         assert!(matches!(
             CompiledManifest::new(client_server_bundle).unwrap_err(),
             ManifestError::UnexpectedClientServerBundle { .. }
+        ));
+
+        let mut invalid_action_module = manifest();
+        invalid_action_module.actions[0].module = "shop/_id_/page".into();
+        assert!(matches!(
+            CompiledManifest::new(invalid_action_module).unwrap_err(),
+            ManifestError::InvalidActionModuleKind { .. }
+        ));
+
+        let mut invalid_route_module = manifest();
+        invalid_route_module.modules[0].kind = ModuleKind::ServerActions;
+        assert!(matches!(
+            CompiledManifest::new(invalid_route_module).unwrap_err(),
+            ManifestError::InvalidRouteModuleKind { .. }
         ));
     }
 }
