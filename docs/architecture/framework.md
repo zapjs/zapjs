@@ -5,15 +5,15 @@ Status: Rust-owned implementation in progress.
 
 ## Product contract
 
-ZapJS is a Next.js-style integrated React framework whose runtime and tooling are owned by Rust. The user model is still one application: pages, layouts, route handlers, server functions, client assets, server rendering, navigation, cache metadata and deployment output are produced together.
+ZapJS is a Next.js-style integrated React framework whose runtime and tooling are owned by Rust. The user model is still one application: pages, layouts, route handlers, server actions, client assets, server rendering, navigation, cache metadata and deployment output are produced together.
 
 third-party JavaScript source may be bundled as input, but ZapJS does not use a JavaScript server runtime, JavaScript package-manager workflow, compatibility layer, HTTP adapter, or separately operated backend service as the product runtime.
 
-React remains real React. Server rendering, React Server Components, hydration and navigation require JavaScript execution, so Rust embeds and controls a JavaScript engine with explicit host capabilities. Rust owns request admission, routing, I/O, resource limits, cancellation, application functions, build orchestration, deployment packaging and validation.
+React remains real React. Server rendering, React Server Components, hydration and navigation require JavaScript execution, so Rust embeds and controls a JavaScript engine with explicit host capabilities. Rust owns request admission, routing, I/O, resource limits, cancellation, explicit host operations, build orchestration, deployment packaging and validation.
 
 ## Runtime shape
 
-The deployment contains static browser assets and Rust-managed function artifacts under one application/project. Dynamic requests enter the hosting platform's managed native function process, not a user-operated server. Inside that process, ZapJS dispatches routes, executes Rust application functions, runs the embedded React renderer when needed, streams responses with backpressure and enforces resource limits.
+The deployment contains static browser assets and Rust-managed function artifacts under one application/project. Dynamic requests enter the hosting platform's managed native function process, not a user-operated server. Inside that process, ZapJS dispatches routes, applies Rust-owned admission, runs the embedded React renderer when needed, invokes explicit host operations and enforces response streaming/resource limits.
 
 ```mermaid
 flowchart TD
@@ -30,7 +30,7 @@ flowchart TD
     Host --> Invoke[Native function invocation]
     Invoke --> Runtime[Rust request runtime]
     Runtime --> Router[Compiled route trie]
-    Runtime --> RustFns[Direct Rust application functions]
+    Runtime --> HostOps[Explicit Rust host operations]
     Runtime --> Renderer[Embedded JS engine running React]
     Renderer --> Stream[HTML or Flight stream]
 ```
@@ -54,7 +54,7 @@ Rust owns:
 - route dispatch through a compiled route trie;
 - request-scoped context, body limits and cancellation;
 - server action and route handler admission;
-- direct Rust application function calls;
+- explicit Rust host operations and admitted action/handler dispatch;
 - explicit host calls available to React server bundles;
 - streaming response backpressure;
 - typed error boundaries at routing, rendering and function boundaries.
@@ -106,7 +106,7 @@ ZapJS is production-ready only after these gates are executable and recorded:
 1. real React HTML SSR and Flight run through the Rust-owned engine with cancellation, streaming and memory limits;
 2. the Rust graph emits matching server bundles, browser chunks, client references, action IDs and route manifests;
 3. hydration, client navigation, pending/error boundaries and React-wired server actions are verified in Aegis;
-4. application route handlers and server functions execute through the Rust-owned runtime with explicit body/input/context limits and application-specific authorization hooks;
+4. application route handlers and server actions execute through the Rust-owned runtime with explicit body/input/context limits and application-specific authorization hooks;
 5. Splice adds tested streaming only if the framework needs a streaming worker boundary;
 6. native managed deployment artifacts are produced and verified on the target platform;
 7. development, build, test and deploy commands run through the Rust toolchain;

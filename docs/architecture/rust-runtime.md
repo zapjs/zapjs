@@ -6,7 +6,7 @@ Status: Rust-owned implementation in progress.
 
 ZapJS is a Rust framework with React UI. A separately launched JavaScript server does not satisfy this contract.
 
-React remains real React JavaScript. Server rendering requires a JavaScript engine embedded and controlled by Rust, with an explicit set of host capabilities. Rust owns request admission, routing, I/O, resource limits, lifecycle, application functions, deployment and tooling.
+React remains real React JavaScript. Server rendering requires a JavaScript engine embedded and controlled by Rust, with an explicit set of host capabilities. Rust owns request admission, routing, I/O, resource limits, lifecycle, explicit host operations, admitted action/handler dispatch, deployment and tooling.
 
 A deployment contains static browser assets and Rust function artifacts under one application/project. It must not require users to operate an additional backend or Splice service. Splice is an internal Rust process protocol and lifecycle mechanism, particularly for isolation and development replacement; its presence does not establish deployment compatibility by itself.
 
