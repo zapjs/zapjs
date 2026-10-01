@@ -17,6 +17,7 @@ pub enum RequestTarget<'a> {
         params: BTreeMap<String, Param>,
         cache: RouteCacheDecision,
         hydration: RouteHydration,
+        invocation: PageInvocation,
     },
     RouteHandler {
         route: &'a RouteEntry,
@@ -28,6 +29,11 @@ pub enum RequestTarget<'a> {
     MethodNotAllowed {
         allowed: Vec<Method>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageInvocation {
+    pub server_bundle: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,12 +333,31 @@ pub fn plan_request<'a>(
                     allowed: PAGE_METHODS.to_vec(),
                 });
             }
+            let module =
+                manifest
+                    .module(&matched.route.module)
+                    .ok_or(RequestPlanError::Manifest(
+                        ManifestError::MissingRouteModule {
+                            route: matched.route.id.clone(),
+                            module: matched.route.module.clone(),
+                        },
+                    ))?;
+            let Some(server_bundle) = &module.server_bundle else {
+                return Err(RequestPlanError::Manifest(
+                    ManifestError::MissingServerBundle {
+                        module: module.id.clone(),
+                    },
+                ));
+            };
             let hydration = manifest.route_hydration(matched.route)?;
             Ok(RequestTarget::Page {
                 route: matched.route,
                 params: matched.params,
                 cache: route_cache_decision(&matched.route.cache),
                 hydration,
+                invocation: PageInvocation {
+                    server_bundle: server_bundle.clone(),
+                },
             })
         }
         RouteKind::Handler => {
@@ -699,9 +724,18 @@ mod tests {
             target => panic!("unexpected target: {target:?}"),
         }
         match plan_request(&manifest, &Method::HEAD, "/shop/caf%C3%A9").unwrap() {
-            RequestTarget::Page { route, params, .. } => {
+            RequestTarget::Page {
+                route,
+                params,
+                invocation,
+                ..
+            } => {
                 assert_eq!(route.module, "page");
                 assert_eq!(params["id"], Param::One("café".into()));
+                assert_eq!(
+                    invocation.server_bundle,
+                    PathBuf::from(".zap/server/page.js")
+                );
             }
             target => panic!("unexpected target: {target:?}"),
         }
@@ -953,8 +987,14 @@ mod tests {
         )
         .unwrap()
         {
-            AdmissionOutcome::Dispatch(RequestTarget::Page { route, .. }) => {
-                assert_eq!(route.module, "page")
+            AdmissionOutcome::Dispatch(RequestTarget::Page {
+                route, invocation, ..
+            }) => {
+                assert_eq!(route.module, "page");
+                assert_eq!(
+                    invocation.server_bundle,
+                    PathBuf::from(".zap/server/page.js")
+                );
             }
             outcome => panic!("unexpected outcome: {outcome:?}"),
         }
