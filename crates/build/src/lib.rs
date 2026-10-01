@@ -1452,6 +1452,24 @@ export default function Page(){}
     }
 
     #[test]
+    fn application_graph_rejects_unsafe_route_segments() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(app.join("bad segment")).unwrap();
+        fs::write(
+            app.join("bad segment/page.tsx"),
+            "export default function Page(){}
+",
+        )
+        .unwrap();
+
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("invalid route pattern"), "{error}");
+    }
+
+    #[test]
     fn application_graph_rejects_unsafe_public_asset_paths() {
         let temp = tempfile::tempdir().unwrap();
         let app = temp.path().join("app");

@@ -59,7 +59,7 @@ impl Route {
             } else if let Some(name) = part.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
                 Segment::Param(name.into())
             } else {
-                if part.contains(['[', ']', '?', '#', '\\', '%']) {
+                if !is_safe_static_segment(part) {
                     return Err(RouteError::Segment((*part).into()));
                 }
                 Segment::Static((*part).into())
@@ -88,6 +88,18 @@ impl Route {
             segments,
         })
     }
+}
+
+fn is_safe_static_segment(part: &str) -> bool {
+    !part.is_empty()
+        && part.chars().all(|character| {
+            character.is_ascii()
+                && !character.is_ascii_control()
+                && !character.is_ascii_whitespace()
+        })
+        && !part.contains(['[', ']', '?', '#', '\\', '%'])
+        && part != "."
+        && part != ".."
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,8 +300,17 @@ mod tests {
         ] {
             assert_eq!(r.resolve(path).unwrap_err(), RouteError::Path);
         }
-        for path in ["/[id]/[id]", "/[...all]/child", "/[]", "/[bad-name]"] {
-            assert!(Route::parse("x", path).is_err());
+        for path in [
+            "/[id]/[id]",
+            "/[...all]/child",
+            "/[]",
+            "/[bad-name]",
+            "/bad segment",
+            "/café",
+            "/.",
+            "/..",
+        ] {
+            assert!(Route::parse("x", path).is_err(), "{path}");
         }
         assert!(
             Router::new(vec![
