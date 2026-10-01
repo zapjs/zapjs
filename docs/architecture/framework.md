@@ -80,7 +80,7 @@ The fastest architecture is the one that removes request-time work and measures 
 1. prerender and cache public output correctly;
 2. reduce browser JavaScript through server/client boundaries;
 3. avoid render and data waterfalls;
-4. stream early with real backpressure;
+4. stream early only on paths with tested backpressure and abort propagation;
 5. avoid mandatory IPC for ordinary request work;
 6. control cold starts through dependency tracing and lazy initialization;
 7. use Rust for measured CPU-heavy work;
