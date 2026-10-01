@@ -1,6 +1,6 @@
 //! Runs compiler-produced React bundles inside a Rust-owned QuickJS context.
-//! Every invocation gets an isolated heap; no process, filesystem or network APIs
-//! are exposed to JavaScript. Explicit host operations provide application data.
+//! Every invocation gets an isolated heap with only the Web primitives and
+//! Rust host functions installed by ZapJS.
 
 use rquickjs::{Context, Ctx, Exception, Function, Promise, Runtime, TypedArray};
 use serde::Deserialize;

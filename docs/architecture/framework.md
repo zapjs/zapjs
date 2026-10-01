@@ -7,13 +7,13 @@ Status: Rust-owned implementation in progress.
 
 ZapJS is a Next.js-style integrated React framework whose runtime and tooling are owned by Rust. The user model is still one application: pages, layouts, route handlers, server actions, client assets, server rendering, navigation, cache metadata and deployment output are produced together.
 
-Third-party JavaScript source may be bundled as input, but ZapJS does not use a separate server runtime, package-manager workflow, compatibility layer, HTTP adapter, or separately operated backend service as the product runtime.
+Third-party JavaScript source may be bundled as input, while the product runtime remains the Rust-owned React graph, request runtime, renderer host and managed artifact output.
 
 React remains real React. Server rendering, React Server Components, hydration and navigation require JavaScript execution, so Rust embeds and controls a JavaScript engine with explicit host capabilities. Rust owns request admission, routing, I/O, resource limits, cancellation, explicit host operations, build orchestration, deployment packaging and validation.
 
 ## Runtime shape
 
-The deployment contains static browser assets and Rust-managed function artifacts under one application/project. Dynamic requests enter the hosting platform's managed native function process, not a user-operated server. Inside that process, ZapJS dispatches routes, applies Rust-owned admission, runs the embedded React renderer when needed, invokes explicit host operations and enforces response streaming/resource limits.
+The deployment contains static browser assets and Rust-managed function artifacts under one application/project. Dynamic requests enter the hosting platform's managed native function process. Inside that process, ZapJS dispatches routes, applies Rust-owned admission, runs the embedded React renderer when needed, invokes explicit host operations and enforces response streaming/resource limits.
 
 ```mermaid
 flowchart TD
@@ -35,7 +35,7 @@ flowchart TD
     Renderer --> Stream[HTML or Flight stream]
 ```
 
-Splice is internal infrastructure for Rust-owned process isolation and replacement. It is not a public server and it is not a required user-operated service. Production may use direct in-process Rust calls where isolation is not needed; development and selected production boundaries can use Splice workers when the lifecycle and failure semantics are explicitly supported.
+Splice is internal infrastructure for Rust-owned process isolation and replacement. Production may use direct in-process Rust calls where isolation is not needed; development and selected production boundaries can use Splice workers when the lifecycle and failure semantics are explicitly supported.
 
 ## Build graph
 
@@ -47,7 +47,7 @@ React Server Components require separate handling from HTML SSR. Flight referenc
 
 ## Request runtime
 
-The runtime contract is platform-neutral: method, URL, headers, body stream, request context, abort signal, deadline, response headers and response byte stream. The managed host entrypoint is lowered directly into this contract without becoming a separate application server or public HTTP adapter layer.
+The runtime contract is platform-neutral: method, URL, headers, body stream, request context, abort signal, deadline, response headers and response byte stream. The managed host entrypoint is lowered directly into this contract.
 
 Rust owns:
 
@@ -65,11 +65,11 @@ The embedded JavaScript context receives only the Web primitives and host operat
 
 Splice version 2 is a bounded Rust-to-Rust transport for trusted worker boundaries. The restored implementation currently supports unary invocation, typed remote errors, negotiated frame limits, bounded in-flight requests, deadlines, cancellation and connection-failure cleanup. It deliberately does not advertise streaming until credit-based stream backpressure is implemented and tested.
 
-Splice must never turn into a second application server. The framework owns socket creation, subprocess supervision, worker replacement, authentication assumptions and deployment policy. A disconnected worker cancels in-flight calls; requests are not silently retried unless a higher framework layer explicitly makes an idempotent retry decision.
+The framework owns socket creation, subprocess supervision, worker replacement, authentication assumptions and deployment policy. A disconnected worker cancels in-flight calls; requests are not silently retried unless a higher framework layer explicitly makes an idempotent retry decision.
 
 ## Managed deployment
 
-The target deployment model mirrors the managed shape of Next.js: one project output lowered into the host's supported artifact layout. Static assets go to static/CDN output. Dynamic code runs in native managed function artifacts. Users should not operate a separate Zap server, Splice daemon, queue worker or sidecar to deploy a normal app.
+The target deployment model mirrors the managed shape of Next.js: one project output lowered into the host's supported artifact layout. Static assets go to static/CDN output. Dynamic code runs in native managed function artifacts owned by the ZapJS build output.
 
 The target platform remains a managed native-function host. ZapJS must produce and upload native build-output artifacts directly, then verify the deployed artifact and process runtime.
 

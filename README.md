@@ -2,7 +2,7 @@
 
 ZapJS is a Rust-owned React framework. The implementation is organized around one application graph, one Rust request runtime, one embedded React execution host, one Rust TSX build path, and an internal Splice worker boundary for process isolation when the framework chooses to use it.
 
-The final product model mirrors the core deployment shape developers expect from Next.js: a single project produces static assets, browser chunks, server-rendered React output, route handlers, server actions, cache metadata and managed deployment artifacts. Users do not run a separate application backend, external worker service or sidecar.
+The final product model mirrors the core deployment shape developers expect from Next.js: a single project produces static assets, browser chunks, server-rendered React output, route handlers, server actions, cache metadata and managed deployment artifacts under one Rust-owned application output.
 
 ## Workspace
 

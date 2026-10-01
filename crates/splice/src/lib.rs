@@ -1,6 +1,6 @@
-//! Splice connects Rust-owned workers without a public RPC port or a separately
-//! operated service. Use direct Rust calls within one process; use this transport only
-//! where process isolation or binary replacement requires a worker boundary.
+//! Splice is the internal Rust worker boundary used when ZapJS needs process
+//! isolation or binary replacement. Direct Rust calls remain the ordinary in-process
+//! path; this transport exists for framework-owned worker boundaries.
 //!
 //! Version 2 deliberately advertises only bounded unary invocation and cancellation.
 //! The frame contract is intentionally narrow and rejects peers that do not speak it.

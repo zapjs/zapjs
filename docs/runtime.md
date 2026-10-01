@@ -6,7 +6,7 @@ Zap applications use one route graph rooted at `app/`. Pages, layouts, route han
 
 ## Request model
 
-The runtime receives a platform-neutral request: method, URL, headers, body stream, request context, abort signal and deadline. Rust owns admission, routing, body limits, response headers and response byte streams. The managed host entrypoint is lowered directly into this contract without becoming a separate application server or public HTTP adapter layer.
+The runtime receives a platform-neutral request: method, URL, headers, body stream, request context, abort signal and deadline. Rust owns admission, routing, body limits, response headers and response byte streams. The managed host entrypoint is lowered directly into this contract.
 
 Request context is explicit Rust-owned state. Client bundles stay on the browser side of the graph.
 
@@ -32,7 +32,7 @@ Personalized responses must remain private. Public cache fills must reject reque
 
 Splice is an internal Rust worker boundary. The current version supports bounded unary calls, negotiated frame limits, deadlines, cancellation, typed remote errors and crash cleanup. It does not yet advertise streaming.
 
-Normal application deployment must not require a user-operated Splice service. The framework owns any worker lifecycle it chooses to use.
+The framework owns any Splice worker lifecycle it chooses to use.
 
 ## Current limits
 
