@@ -1540,7 +1540,7 @@ fn exported_const_values(text: &str) -> Vec<(String, JsToken)> {
                 index += 5;
                 continue;
             }
-            Some(JsToken::Punct('{')) => {
+            Some(JsToken::Punct('{')) if !export_list_has_from_clause(&tokens, index + 1) => {
                 for (local, exported) in exported_named_specifier_pairs(&tokens, index + 1) {
                     if let Some(value) = local_consts.get(&local) {
                         values.push((exported, value.clone()));
@@ -1631,13 +1631,30 @@ fn exported_declaration_names(text: &str) -> Vec<String> {
                     names.push(name.clone());
                 }
             }
-            Some(JsToken::Punct('{')) => {
+            Some(JsToken::Punct('{')) if !export_list_has_from_clause(&tokens, index) => {
                 names.extend(exported_named_specifiers(&tokens, index));
             }
             _ => {}
         }
     }
     names
+}
+
+fn export_list_has_from_clause(tokens: &[JsToken], open_brace: usize) -> bool {
+    let mut depth = 0usize;
+    for index in open_brace..tokens.len() {
+        match tokens.get(index) {
+            Some(JsToken::Punct('{')) => depth += 1,
+            Some(JsToken::Punct('}')) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return matches!(tokens.get(index + 1), Some(JsToken::Ident(value)) if value == "from");
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn exported_named_specifiers(tokens: &[JsToken], open_brace: usize) -> Vec<String> {
@@ -1911,6 +1928,16 @@ export default function Page(){}
         let graph = build_application_graph(&GraphOptions::new(temp.path())).unwrap();
         assert_eq!(graph.routes[0].cache.dynamic, DynamicPolicy::ForceStatic);
         assert_eq!(graph.routes[0].cache.revalidate_seconds, Some(45));
+
+        fs::write(
+            app.join("page.tsx"),
+            "export { dynamic } from './cache';
+export default function Page(){}
+",
+        )
+        .unwrap();
+        let graph = build_application_graph(&GraphOptions::new(temp.path())).unwrap();
+        assert_eq!(graph.routes[0].cache, CachePolicy::default());
     }
 
     #[test]
@@ -2013,6 +2040,21 @@ export default function Page(){}
         fs::create_dir_all(&app).unwrap();
         fs::write(
             app.join("route.ts"),
+            "export { GET } from './methods';
+",
+        )
+        .unwrap();
+
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("must export at least one HTTP method"),
+            "{error}"
+        );
+
+        fs::write(
+            app.join("route.ts"),
             "export function helper(){}
 ",
         )
@@ -2060,6 +2102,20 @@ export { getHandler as GET };
 ",
         )
         .unwrap();
+        fs::write(
+            app.join("actions.ts"),
+            "/* generated */
+'use server';
+export { save } from './impl';
+",
+        )
+        .unwrap();
+
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("must export at least one"), "{error}");
+
         fs::write(
             app.join("actions.ts"),
             "/* generated */
