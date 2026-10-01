@@ -1196,21 +1196,34 @@ fn write_page_server_entry(
         .context("generated page server entry needs a parent directory")?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     let source = js_string(&source_entry.to_string_lossy());
+    let react_adapter_import = if page_source_uses_jsx(source_entry)? {
+        "import { renderToReadableStream } from \"react-dom/server.browser\";\n\n"
+    } else {
+        ""
+    };
+    let react_adapter_renderer = if react_adapter_import.is_empty() {
+        r#"function renderZapTree() {
+  throw new TypeError("Zap page returned a React render tree, but this page was built without JSX and no React SSR adapter was included");
+}
+"#
+    } else {
+        r#"function renderZapTree(value) {
+  if (typeof renderToReadableStream !== "function") {
+    throw new TypeError("Zap page React SSR adapter must export renderToReadableStream");
+  }
+  return renderToReadableStream(value);
+}
+"#
+    };
     let body = format!(
         r#"import renderPage from "{source}";
-import {{ renderToReadableStream }} from "react-dom/server.browser";
-
+{react_adapter_import}{react_adapter_renderer}
 async function normalizeZapOutput(value) {{
   if (value == null) return "";
   if (typeof value === "string") return value;
   if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return value;
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
-  if (typeof value === "object") {{
-    if (typeof renderToReadableStream !== "function") {{
-      throw new TypeError("Zap page React SSR adapter must export renderToReadableStream");
-    }}
-    return renderToReadableStream(value);
-  }}
+  if (typeof value === "object") return renderZapTree(value);
   throw new TypeError("Zap page output must be text, a Web ReadableStream, or a React render tree");
 }}
 
@@ -1253,6 +1266,60 @@ export async function flight(request) {{
     );
     fs::write(&entry, body).with_context(|| format!("write {}", entry.display()))?;
     Ok(entry)
+}
+
+fn page_source_uses_jsx(source_entry: &Path) -> Result<bool> {
+    let source = fs::read_to_string(source_entry)
+        .with_context(|| format!("read page source {}", source_entry.display()))?;
+    Ok(contains_jsx_syntax(&source))
+}
+
+fn contains_jsx_syntax(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let mut index = 0usize;
+    let mut quote: Option<u8> = None;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(quote_byte) = quote {
+            if byte == b'\\' {
+                index += 2;
+                continue;
+            }
+            if byte == quote_byte {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'\'' || byte == b'"' || byte == b'`' {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            index += 2;
+            while index < bytes.len() && bytes[index] != b'\n' {
+                index += 1;
+            }
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            index += 2;
+            while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/') {
+                index += 1;
+            }
+            index = (index + 2).min(bytes.len());
+            continue;
+        }
+        if byte == b'<' {
+            let next = bytes.get(index + 1).copied();
+            if matches!(next, Some(b'a'..=b'z' | b'A'..=b'Z' | b'>')) {
+                return true;
+            }
+        }
+        index += 1;
+    }
+    false
 }
 
 fn write_route_handler_server_entry(
@@ -3361,6 +3428,66 @@ export type { IgnoredAction };
         );
     }
 
+    #[test]
+    fn detects_jsx_syntax_without_strings_or_comments() {
+        assert!(contains_jsx_syntax(
+            "export default function Page(){ return <main>Zap</main>; }"
+        ));
+        assert!(contains_jsx_syntax(
+            "export default function Page(){ return <>Zap</>; }"
+        ));
+        assert!(!contains_jsx_syntax(
+            "export default function Page(){ return '<main>Zap</main>'; }"
+        ));
+        assert!(!contains_jsx_syntax(
+            "// <main>Zap</main>
+export default function Page(){ return 'Zap'; }"
+        ));
+        assert!(!contains_jsx_syntax(
+            "/* <main>Zap</main> */
+export default function Page(){ return 'Zap'; }"
+        ));
+    }
+
+    #[tokio::test]
+    async fn builds_string_pages_without_react_ssr_adapter() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(temp.path().join("public")).unwrap();
+        fs::write(
+            app.join("page.tsx"),
+            "export default function Page({ request }) { return `plain:${request.path}`; }
+",
+        )
+        .unwrap();
+
+        let mut options = ApplicationBuildOptions::new(temp.path());
+        options.minify = false;
+        let output = build_application(&options).await.unwrap();
+        let page_entry = temp.path().join(".zap/entries/server/page.js");
+        let page_entry_source = fs::read_to_string(page_entry).unwrap();
+        assert!(!page_entry_source.contains("react-dom/server.browser"));
+        assert!(page_entry_source.contains("built without JSX"));
+
+        let compiled = CompiledManifest::load(&output.manifest).unwrap();
+        let page_bundle = temp.path().join(
+            compiled
+                .module("page")
+                .and_then(|module| module.server_bundle.clone())
+                .unwrap(),
+        );
+        let page_request = plan_request(&compiled, &Method::GET, "/")
+            .unwrap()
+            .renderer_request_json("/", &[], b"")
+            .unwrap()
+            .unwrap();
+        let rendered = Renderer::new(fs::read_to_string(page_bundle).unwrap())
+            .render(&page_request)
+            .unwrap();
+        assert_eq!(rendered, "plain:/");
+    }
+
     #[tokio::test]
     async fn build_application_writes_manifest_and_bundles_graph_outputs() {
         let temp = tempfile::tempdir().unwrap();
@@ -3567,6 +3694,7 @@ export const Label = 'count';
         assert!(browser_bootstrap_source.contains("__zap_hydrated"));
         let page_entry_source =
             fs::read_to_string(temp.path().join(".zap/entries/server/page.js")).unwrap();
+        assert!(page_entry_source.contains("react-dom/server.browser"));
         assert!(page_entry_source.contains("export async function flight"));
         let route_entry_source =
             fs::read_to_string(temp.path().join(".zap/entries/server/api/echo/route.js")).unwrap();
