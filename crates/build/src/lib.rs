@@ -1578,6 +1578,10 @@ fn exported_declaration_names(text: &str) -> Vec<String> {
             continue;
         }
         index += 1;
+        if matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "type") {
+            index += 1;
+            continue;
+        }
         if matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "async") {
             index += 1;
         }
@@ -1592,8 +1596,39 @@ fn exported_declaration_names(text: &str) -> Vec<String> {
                     names.push(name.clone());
                 }
             }
+            Some(JsToken::Punct('{')) => {
+                names.extend(exported_named_specifiers(&tokens, index));
+            }
             _ => {}
         }
+    }
+    names
+}
+
+fn exported_named_specifiers(tokens: &[JsToken], open_brace: usize) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut index = open_brace + 1;
+    while index < tokens.len() {
+        match tokens.get(index) {
+            Some(JsToken::Punct('}')) => return names,
+            Some(JsToken::Ident(value)) if value == "type" => {
+                index += 1;
+            }
+            Some(JsToken::Ident(local)) | Some(JsToken::String(local)) => {
+                let mut exported = local.clone();
+                if matches!(tokens.get(index + 1), Some(JsToken::Ident(value)) if value == "as") {
+                    if let Some(JsToken::Ident(alias) | JsToken::String(alias)) =
+                        tokens.get(index + 2)
+                    {
+                        exported = alias.clone();
+                        index += 2;
+                    }
+                }
+                names.push(exported);
+            }
+            _ => {}
+        }
+        index += 1;
     }
     names
 }
@@ -1944,8 +1979,8 @@ export default function Page(){}
         fs::create_dir_all(&app).unwrap();
         fs::write(
             app.join("route.ts"),
-            "export async
-function GET(){}
+            "const getHandler = () => new Response('ok');
+export { getHandler as GET };
 ",
         )
         .unwrap();
@@ -1990,8 +2025,11 @@ const hidden = 1;
 'use server';
 export async
 function save(){}
+const destroy = async () => {};
 export const
 remove = async () => {};
+export { destroy as deleteItem };
+export type { IgnoredAction };
 ",
         )
         .unwrap();
@@ -2001,7 +2039,7 @@ remove = async () => {};
             .iter()
             .map(|action| action.export.clone())
             .collect();
-        assert_eq!(exports, vec!["remove", "save"]);
+        assert_eq!(exports, vec!["deleteItem", "remove", "save"]);
     }
 
     #[tokio::test]
