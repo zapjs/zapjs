@@ -2482,9 +2482,10 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             );
         }
         if graph_entry && kind == ModuleKind::ServerActions {
-            let exports = server_action_exports(&text).with_context(|| {
-                format!("discover server actions in {}", relative_path.display())
-            })?;
+            let exports =
+                server_action_exports(&app_root, &absolute_path, &text).with_context(|| {
+                    format!("discover server actions in {}", relative_path.display())
+                })?;
             if exports.is_empty() {
                 bail!(
                     "server action module must export at least one callable action: {}",
@@ -2505,9 +2506,10 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             }
         }
         if graph_entry && kind == ModuleKind::Client {
-            let exports = client_reference_exports(&text).with_context(|| {
-                format!("discover client references in {}", relative_path.display())
-            })?;
+            let exports =
+                client_reference_exports(&app_root, &absolute_path, &text).with_context(|| {
+                    format!("discover client references in {}", relative_path.display())
+                })?;
             if exports.is_empty() {
                 bail!(
                     "client module must export at least one component or value: {}",
@@ -2533,7 +2535,8 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             if let Some(route_kind) = route_kind {
                 let methods = match route_kind {
                     RouteKind::Page => vec!["GET".into(), "HEAD".into()],
-                    RouteKind::Handler => route_handler_methods(&text).with_context(|| {
+                    RouteKind::Handler => route_handler_methods(&app_root, &absolute_path, &text)
+                        .with_context(|| {
                         format!(
                             "discover route handler methods in {}",
                             relative_path.display()
@@ -2989,6 +2992,60 @@ fn imported_named_specifiers(tokens: &[JsToken], open_brace: usize) -> Vec<Strin
     names
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ForwardedExport {
+    specifier: String,
+    selection: ForwardedExportSelection,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ForwardedExportSelection {
+    All,
+    Named(Vec<(String, String)>),
+}
+
+fn forwarded_exports(text: &str) -> Vec<ForwardedExport> {
+    let tokens = js_tokens(text);
+    let mut exports = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        if !matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "export") {
+            index += 1;
+            continue;
+        }
+        match tokens.get(index + 1) {
+            Some(JsToken::Punct('*')) => {
+                if let Some((specifier, specifier_index)) =
+                    following_from_specifier(&tokens, index + 2)
+                {
+                    exports.push(ForwardedExport {
+                        specifier,
+                        selection: ForwardedExportSelection::All,
+                    });
+                    index = specifier_index;
+                }
+            }
+            Some(JsToken::Punct('{')) => {
+                if let Some((specifier, specifier_index)) =
+                    following_from_specifier(&tokens, index + 1)
+                {
+                    exports.push(ForwardedExport {
+                        specifier,
+                        selection: ForwardedExportSelection::Named(exported_named_specifier_pairs(
+                            &tokens,
+                            index + 1,
+                        )),
+                    });
+                    index = specifier_index;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    exports
+}
+
 fn parse_cache_policy(text: &str) -> Result<CachePolicy> {
     let mut policy = CachePolicy::default();
     for (name, value) in exported_const_values(text) {
@@ -3085,10 +3142,10 @@ fn const_values(tokens: &[JsToken]) -> BTreeMap<String, JsToken> {
     values
 }
 
-fn route_handler_methods(text: &str) -> Result<Vec<String>> {
+fn route_handler_methods(app_root: &Path, path: &Path, text: &str) -> Result<Vec<String>> {
     const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
     let mut found = BTreeSet::new();
-    for name in exported_callable_names(text) {
+    for name in exported_callable_names_resolved(app_root, path, text)? {
         if METHODS.contains(&name.as_str()) {
             found.insert(name);
         }
@@ -3099,9 +3156,9 @@ fn route_handler_methods(text: &str) -> Result<Vec<String>> {
     Ok(found.into_iter().collect())
 }
 
-fn server_action_exports(text: &str) -> Result<Vec<String>> {
+fn server_action_exports(app_root: &Path, path: &Path, text: &str) -> Result<Vec<String>> {
     let mut names = BTreeSet::new();
-    for name in exported_callable_names(text) {
+    for name in exported_callable_names_resolved(app_root, path, text)? {
         if !is_valid_named_export(&name) {
             bail!("invalid server action export name: {name}");
         }
@@ -3110,14 +3167,109 @@ fn server_action_exports(text: &str) -> Result<Vec<String>> {
     Ok(names.into_iter().collect())
 }
 
-fn client_reference_exports(text: &str) -> Result<Vec<String>> {
+fn client_reference_exports(app_root: &Path, path: &Path, text: &str) -> Result<Vec<String>> {
     let mut names = BTreeSet::new();
-    for name in exported_value_names(text) {
+    for name in exported_value_names_resolved(app_root, path, text)? {
         if name != "default" && !is_valid_named_export(&name) {
             bail!("invalid client reference export name: {name}");
         }
         names.insert(name);
     }
+    Ok(names.into_iter().collect())
+}
+
+fn exported_callable_names_resolved(
+    app_root: &Path,
+    path: &Path,
+    text: &str,
+) -> Result<Vec<String>> {
+    let mut visited = BTreeSet::new();
+    resolve_exported_names(
+        app_root,
+        path,
+        text,
+        ExportResolution::Callable,
+        &mut visited,
+    )
+}
+
+fn exported_value_names_resolved(app_root: &Path, path: &Path, text: &str) -> Result<Vec<String>> {
+    let mut visited = BTreeSet::new();
+    resolve_exported_names(app_root, path, text, ExportResolution::Value, &mut visited)
+}
+
+#[derive(Clone, Copy)]
+enum ExportResolution {
+    Callable,
+    Value,
+}
+
+fn resolve_exported_names(
+    app_root: &Path,
+    path: &Path,
+    text: &str,
+    resolution: ExportResolution,
+    visited: &mut BTreeSet<PathBuf>,
+) -> Result<Vec<String>> {
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("resolve source module {}", path.display()))?;
+    if !canonical.starts_with(app_root) {
+        bail!(
+            "source module {} escapes app root {}",
+            canonical.display(),
+            app_root.display()
+        );
+    }
+    if !visited.insert(canonical.clone()) {
+        return Ok(Vec::new());
+    }
+
+    let mut names = match resolution {
+        ExportResolution::Callable => exported_callable_names(text),
+        ExportResolution::Value => exported_value_names(text),
+    }
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+
+    for forwarded in forwarded_exports(text) {
+        let imported =
+            resolve_local_specifier(&canonical, &forwarded.specifier).with_context(|| {
+                format!(
+                    "resolve forwarded export {:?} from {}",
+                    forwarded.specifier,
+                    canonical.display()
+                )
+            })?;
+        let imported = imported
+            .canonicalize()
+            .with_context(|| format!("canonicalize {}", imported.display()))?;
+        if !imported.starts_with(app_root) {
+            bail!(
+                "forwarded export {} escapes app root {}",
+                imported.display(),
+                app_root.display()
+            );
+        }
+        let imported_text = fs::read_to_string(&imported)
+            .with_context(|| format!("read forwarded export source {}", imported.display()))?;
+        let upstream =
+            resolve_exported_names(app_root, &imported, &imported_text, resolution, visited)?
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+        match forwarded.selection {
+            ForwardedExportSelection::All => names.extend(upstream),
+            ForwardedExportSelection::Named(pairs) => {
+                for (imported_name, exported_name) in pairs {
+                    if upstream.contains(&imported_name) {
+                        names.insert(exported_name);
+                    }
+                }
+            }
+        }
+    }
+
+    visited.remove(&canonical);
     Ok(names.into_iter().collect())
 }
 
@@ -3835,6 +3987,42 @@ const lazy = import('./lazy');
     }
 
     #[test]
+    fn application_graph_resolves_forwarded_client_references() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            app.join("page.tsx"),
+            "import { Widget } from './client-barrel';\nexport default function Page(){ return Widget; }\n",
+        )
+        .unwrap();
+        fs::write(
+            app.join("client-barrel.tsx"),
+            "'use client';\nexport { Widget } from './widget';\nexport * from './extra';\n",
+        )
+        .unwrap();
+        fs::write(app.join("widget.tsx"), "export function Widget(){}\n").unwrap();
+        fs::write(app.join("extra.tsx"), "export function Extra(){}\n").unwrap();
+
+        let graph = build_application_graph(&GraphOptions::new(temp.path())).unwrap();
+        let all_references = graph
+            .client_references
+            .iter()
+            .map(|reference| reference.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            all_references,
+            vec!["client:client-barrel#Extra", "client:client-barrel#Widget"]
+        );
+        let page = graph
+            .routes
+            .iter()
+            .find(|route| route.pattern == "/")
+            .unwrap();
+        assert_eq!(page.client_references, vec!["client:client-barrel#Widget"]);
+    }
+
+    #[test]
     fn application_graph_discovers_routes_modules_actions_layouts_and_assets() {
         let temp = tempfile::tempdir().unwrap();
         let app = temp.path().join("app");
@@ -4177,10 +4365,22 @@ export default function Page(){}
         let error = build_application_graph(&GraphOptions::new(temp.path()))
             .unwrap_err()
             .to_string();
-        assert!(
-            error.contains("must export at least one HTTP method"),
-            "{error}"
-        );
+        assert!(error.contains("discover route handler methods"), "{error}");
+
+        fs::write(
+            app.join("methods.ts"),
+            "export const getHandler: Handler = () => new Response('ok');
+export { getHandler as GET };
+",
+        )
+        .unwrap();
+        let graph = build_application_graph(&GraphOptions::new(temp.path())).unwrap();
+        let route = graph
+            .routes
+            .iter()
+            .find(|route| route.pattern == "/api/empty")
+            .unwrap();
+        assert_eq!(route.methods, vec!["GET", "HEAD"]);
 
         fs::write(
             app.join("route.ts"),
@@ -4259,7 +4459,23 @@ export { save } from './impl';
         let error = build_application_graph(&GraphOptions::new(temp.path()))
             .unwrap_err()
             .to_string();
-        assert!(error.contains("must export at least one"), "{error}");
+        assert!(error.contains("discover server actions"), "{error}");
+
+        fs::write(
+            app.join("impl.ts"),
+            "export async function save(){}
+const destroy: Action = async () => {};
+export { destroy as deleteItem };
+",
+        )
+        .unwrap();
+        let graph = build_application_graph(&GraphOptions::new(temp.path())).unwrap();
+        let exports: Vec<_> = graph
+            .actions
+            .iter()
+            .map(|action| action.export.clone())
+            .collect();
+        assert_eq!(exports, vec!["save"]);
 
         fs::write(
             app.join("actions.ts"),
