@@ -7,7 +7,7 @@ Status: Rust-owned implementation in progress.
 
 ZapJS is a Next.js-style integrated React framework whose runtime and tooling are owned by Rust. The user model is still one application: pages, layouts, route handlers, server actions, client assets, server rendering, navigation, cache metadata and deployment output are produced together.
 
-Third-party JavaScript source may be bundled as input, but ZapJS does not use a JavaScript server runtime, JavaScript package-manager workflow, compatibility layer, HTTP adapter, or separately operated backend service as the product runtime.
+Third-party JavaScript source may be bundled as input, but ZapJS does not use a separate server runtime, package-manager workflow, compatibility layer, HTTP adapter, or separately operated backend service as the product runtime.
 
 React remains real React. Server rendering, React Server Components, hydration and navigation require JavaScript execution, so Rust embeds and controls a JavaScript engine with explicit host capabilities. Rust owns request admission, routing, I/O, resource limits, cancellation, explicit host operations, build orchestration, deployment packaging and validation.
 
@@ -35,13 +35,13 @@ flowchart TD
     Renderer --> Stream[HTML or Flight stream]
 ```
 
-Splice is internal infrastructure for Rust-owned process isolation and replacement. It is not a public RPC server and it is not a required user-operated service. Production may use direct in-process Rust calls where isolation is not needed; development and selected production boundaries can use Splice workers when the lifecycle and failure semantics are explicitly supported.
+Splice is internal infrastructure for Rust-owned process isolation and replacement. It is not a public server and it is not a required user-operated service. Production may use direct in-process Rust calls where isolation is not needed; development and selected production boundaries can use Splice workers when the lifecycle and failure semantics are explicitly supported.
 
 ## Build graph
 
 One authoritative graph owns route hierarchy, layouts, client/server boundaries, action references, assets, dependency resolution, cache policy and deployment capabilities. Development and production must use the same graph semantics.
 
-The Rust build path compiles TypeScript and TSX through Rust libraries. Server bundles target the embedded engine; browser bundles target Web modules. The graph must reject unsupported server-only imports in browser code and unsupported browser APIs in server-only code. Produced artifacts cannot rely on unresolved platform imports, ambient globals or compatibility polyfills.
+The Rust build path compiles TypeScript and TSX through Rust libraries. Server bundles target the embedded engine; browser bundles target Web modules. The graph must reject unsupported server-only imports in browser code and unsupported browser capabilities in server-only code. Produced artifacts cannot rely on unresolved platform imports, ambient globals or compatibility polyfills.
 
 React Server Components require separate handling from HTML SSR. Flight references, browser client references, server action identity, build IDs and hydration inputs must all come from the same manifest. A static SSR demonstration is not proof of the full framework path.
 
@@ -59,7 +59,7 @@ Rust owns:
 - streaming response backpressure;
 - typed error boundaries at routing, rendering and function boundaries.
 
-The embedded JavaScript context receives only the Web primitives and host operations ZapJS installs. It has no process, filesystem, network, browser storage, DOM, socket or package-loader API by default. Host calls are named, typed at the framework boundary and bounded by deadline/output limits.
+The embedded JavaScript context receives only the Web primitives and host operations ZapJS installs. Host calls are named, typed at the framework boundary and bounded by deadline/output limits.
 
 ## Splice contract
 
@@ -71,7 +71,7 @@ Splice must never turn into a second application server. The framework owns sock
 
 The target deployment model mirrors the managed shape of Next.js: one project output lowered into the host's supported artifact layout. Static assets go to static/CDN output. Dynamic code runs in native managed function artifacts. Users should not operate a separate Zap server, Splice daemon, queue worker or sidecar to deploy a normal app.
 
-Vercel remains a candidate target because it documents a Rust runtime and native function support. ZapJS must produce and upload native build-output artifacts directly, then verify the deployed artifact and process runtime.
+The target platform remains a managed native-function host. ZapJS must produce and upload native build-output artifacts directly, then verify the deployed artifact and process runtime.
 
 ## Performance policy
 
@@ -95,7 +95,7 @@ The current Rust layer includes:
 - `zap-runtime`: compiled route parsing and lookup with unsafe URL path rejection, manifest source/bundle path and route/action source identity validation, route/action module-kind validation, server-action identity validation, route-handler method validation, client/server bundle boundary validation, GET-to-HEAD route-handler admission, request id/auth/deadline and cache/privacy policy admission and cache policy validation, cache-control header decisions.
 - `zap-splice`: bounded Rust worker transport with cancellation, deadlines, crash cleanup and subprocess coverage.
 - `zap-render`: Rust-owned QuickJS execution with Web Stream, route/action `Response` support, response status/header validation, typed execution failures, explicit host calls, output limits and CPU interruption.
-- `zap-build`: Rust-only TSX bundling through Rolldown/Oxc for server IIFE and browser module outputs, typed callable export discovery for actions and route handlers plus typed local named export-list cache metadata discovery, re-export list exclusion until explicit graph resolution exists, GET-to-HEAD route-handler method derivation, generated GET fallback for HEAD route-handler bundles, duplicate graph module ID rejection, Node built-in/platform-module rejection, ambient platform-global rejection across direct, optional, literal and statically computed bracketed, probe and destructured references, static template module-specifier scanning, local type-only import/export elision, non-static dynamic-import rejection, regex-literal and non-reference identifier false-positive protection and strict cache export and policy validation.
+- `zap-build`: Rust-only TSX bundling through Rolldown/Oxc for server IIFE and browser module outputs, typed callable export discovery for actions and route handlers plus typed local named export-list cache metadata discovery, re-export list exclusion until explicit graph resolution exists, GET-to-HEAD route-handler method derivation, generated GET fallback for HEAD route-handler bundles, duplicate graph module ID rejection, unsupported platform-module rejection, ambient platform-global rejection across direct, optional, literal and statically computed bracketed, probe and destructured references, static template module-specifier scanning, local type-only import/export elision, non-static dynamic-import rejection, regex-literal and non-reference identifier false-positive protection and strict cache export and policy validation.
 
 This is foundation work, not a full production framework claim.
 
