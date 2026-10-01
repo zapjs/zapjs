@@ -51,6 +51,8 @@ pub struct ModuleRef {
     pub server_bundle: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flight_bundle: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hydration_bundle: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +84,8 @@ pub struct ClientHydrationReference {
 pub struct RouteHydration {
     pub client_references: Vec<ClientHydrationReference>,
     pub browser_chunks: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_hydration_chunk: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -439,6 +443,19 @@ impl CompiledManifest {
                     });
                 }
             }
+            if let Some(path) = &module.hydration_bundle {
+                if module.kind == ModuleKind::Client {
+                    return Err(ManifestError::UnexpectedClientServerBundle {
+                        module: module.id.clone(),
+                    });
+                }
+                if !is_safe_manifest_path(path) {
+                    return Err(ManifestError::InvalidBundlePath {
+                        module: module.id.clone(),
+                        path: path.clone(),
+                    });
+                }
+            }
         }
 
         for route in &manifest.routes {
@@ -682,12 +699,22 @@ impl CompiledManifest {
         if let Some(action_proxy) = &self.manifest.action_proxy {
             browser_chunks.insert(action_proxy.clone());
         }
+        let page_hydration_chunk = (route.kind == RouteKind::Page)
+            .then(|| {
+                self.module(&route.module)
+                    .and_then(|module| module.hydration_bundle.clone())
+            })
+            .flatten();
+        if let Some(page_hydration_chunk) = &page_hydration_chunk {
+            browser_chunks.insert(page_hydration_chunk.clone());
+        }
         if let Some(browser_bootstrap) = &self.manifest.browser_bootstrap {
             browser_chunks.insert(browser_bootstrap.clone());
         }
         Ok(RouteHydration {
             client_references,
             browser_chunks: browser_chunks.into_iter().collect(),
+            page_hydration_chunk,
         })
     }
 
@@ -810,6 +837,7 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/shop/_id_/page.js")),
                     flight_bundle: Some(PathBuf::from(".zap/server/shop/_id_/page.flight.js")),
+                    hydration_bundle: Some(PathBuf::from(".zap/browser/shop/_id_/page.hydrate.js")),
                 },
                 ModuleRef {
                     id: "shop/_id_/actions".into(),
@@ -818,6 +846,7 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/shop/_id_/actions.js")),
                     flight_bundle: None,
+                    hydration_bundle: None,
                 },
                 ModuleRef {
                     id: "shop/_id_/counter".into(),
@@ -826,6 +855,7 @@ mod tests {
                     browser_chunk: Some(PathBuf::from(".zap/browser/shop/_id_/counter.js")),
                     server_bundle: None,
                     flight_bundle: None,
+                    hydration_bundle: None,
                 },
             ],
             actions: vec![ActionRef {
@@ -884,8 +914,13 @@ mod tests {
             vec![
                 PathBuf::from(".zap/browser/actions.js"),
                 PathBuf::from(".zap/browser/bootstrap.js"),
-                PathBuf::from(".zap/browser/shop/_id_/counter.js")
+                PathBuf::from(".zap/browser/shop/_id_/counter.js"),
+                PathBuf::from(".zap/browser/shop/_id_/page.hydrate.js")
             ]
+        );
+        assert_eq!(
+            hydration.page_hydration_chunk.as_deref(),
+            Some(Path::new(".zap/browser/shop/_id_/page.hydrate.js"))
         );
         assert_eq!(hydration.client_references[0].export, "Counter");
         let asset = compiled.asset("/images/logo.svg").unwrap();

@@ -893,6 +893,7 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/page.js")),
                     flight_bundle: Some(PathBuf::from(".zap/server/page.flight.js")),
+                    hydration_bundle: None,
                 },
                 ModuleRef {
                     id: "static-page".into(),
@@ -901,6 +902,7 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/static-page.js")),
                     flight_bundle: Some(PathBuf::from(".zap/server/static-page.flight.js")),
+                    hydration_bundle: None,
                 },
                 ModuleRef {
                     id: "dynamic-page".into(),
@@ -909,6 +911,7 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/dynamic-page.js")),
                     flight_bundle: Some(PathBuf::from(".zap/server/dynamic-page.flight.js")),
+                    hydration_bundle: None,
                 },
                 ModuleRef {
                     id: "handler".into(),
@@ -917,6 +920,7 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/handler.js")),
                     flight_bundle: None,
+                    hydration_bundle: None,
                 },
                 ModuleRef {
                     id: "get-handler".into(),
@@ -925,6 +929,7 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/get-handler.js")),
                     flight_bundle: None,
+                    hydration_bundle: None,
                 },
                 ModuleRef {
                     id: "actions".into(),
@@ -933,6 +938,7 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/actions.js")),
                     flight_bundle: None,
+                    hydration_bundle: None,
                 },
             ],
             actions: vec![ActionRef {

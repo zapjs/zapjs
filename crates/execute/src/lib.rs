@@ -385,6 +385,7 @@ impl ApplicationExecutor {
                     append_hydration_bootstrap(
                         rendered,
                         input.path,
+                        &request_json,
                         hydration,
                         self.manifest.action_proxy(),
                         self.manifest.browser_bootstrap(),
@@ -450,6 +451,7 @@ fn immediate_response(response: ImmediateResponse) -> ExecutionResponse {
 fn append_hydration_bootstrap(
     html: String,
     path: &str,
+    request_json: &str,
     hydration: &RouteHydration,
     action_proxy: Option<&Path>,
     browser_bootstrap: Option<&Path>,
@@ -475,9 +477,18 @@ fn append_hydration_bootstrap(
             })
         })
         .collect::<Vec<_>>();
+    let request_payload: serde_json::Value =
+        serde_json::from_str(request_json).map_err(ExecuteError::HydrationPayload)?;
     let payload = serde_json::json!({
         "path": path,
+        "request": {
+            "method": request_payload.get("method").cloned().unwrap_or_else(|| serde_json::json!("GET")),
+            "path": request_payload.get("path").cloned().unwrap_or_else(|| serde_json::json!(path)),
+            "params": request_payload.get("params").cloned().unwrap_or_else(|| serde_json::json!({})),
+            "searchParams": request_payload.get("searchParams").cloned().unwrap_or_else(|| serde_json::json!({})),
+        },
         "action_proxy": action_proxy.map(browser_asset_url),
+        "page_hydration": hydration.page_hydration_chunk.as_ref().map(|chunk| browser_asset_url(chunk)),
         "browser_chunks": chunks,
         "client_references": references,
     });
@@ -621,12 +632,16 @@ mod tests {
         let hydration: serde_json::Value = serde_json::from_str(hydration_json).unwrap();
         assert_eq!(hydration["path"], "/");
         assert_eq!(hydration["action_proxy"], "/.zap/browser/actions.js");
+        assert_eq!(hydration["page_hydration"], "/.zap/browser/page.hydrate.js");
+        assert_eq!(hydration["request"]["method"], "GET");
+        assert_eq!(hydration["request"]["path"], "/");
         assert_eq!(
             hydration["browser_chunks"],
             serde_json::json!([
                 "/.zap/browser/actions.js",
                 "/.zap/browser/bootstrap.js",
-                "/.zap/browser/client.js"
+                "/.zap/browser/client.js",
+                "/.zap/browser/page.hydrate.js"
             ])
         );
         assert_eq!(hydration["client_references"].as_array().unwrap().len(), 1);
@@ -1047,6 +1062,11 @@ mod tests {
             "globalThis.__zap_bootstrap = true;",
         )
         .unwrap();
+        fs::write(
+            root.join(".zap/browser/page.hydrate.js"),
+            "export function hydrateZapPage(){}",
+        )
+        .unwrap();
         let manifest = ApplicationManifest {
             routes: vec![
                 RouteEntry {
@@ -1081,6 +1101,7 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/page.js")),
                     flight_bundle: Some(PathBuf::from(".zap/server/page.flight.js")),
+                    hydration_bundle: Some(PathBuf::from(".zap/browser/page.hydrate.js")),
                 },
                 ModuleRef {
                     id: "echo".into(),
@@ -1089,6 +1110,7 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/api/echo/route.js")),
                     flight_bundle: None,
+                    hydration_bundle: None,
                 },
                 ModuleRef {
                     id: "actions".into(),
@@ -1097,6 +1119,7 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/actions.js")),
                     flight_bundle: None,
+                    hydration_bundle: None,
                 },
                 ModuleRef {
                     id: "client".into(),
@@ -1105,6 +1128,7 @@ mod tests {
                     browser_chunk: Some(PathBuf::from(".zap/browser/client.js")),
                     server_bundle: None,
                     flight_bundle: None,
+                    hydration_bundle: None,
                 },
             ],
             actions: vec![ActionRef {

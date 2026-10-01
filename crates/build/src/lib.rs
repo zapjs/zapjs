@@ -1175,6 +1175,31 @@ pub async fn build_application(
             });
         }
 
+        if let Some(hydration_bundle) = &module.hydration_bundle {
+            let hydration_entry =
+                write_page_hydration_entry(&root, &options.graph.out_dir, module, &source_entry)?;
+            let output = absolute(&root, hydration_bundle);
+            let mut bundle_options =
+                BundleOptions::new(&root, &hydration_entry, &output, Target::Browser);
+            bundle_options.aliases = options.aliases.clone();
+            bundle_options.conditions = options.browser_conditions.clone();
+            bundle_options.minify = options.minify;
+            let built = bundle(&bundle_options).await.with_context(|| {
+                format!(
+                    "build page hydration bundle for module {}",
+                    module.path.display()
+                )
+            })?;
+            bundles.push(BuiltBundle {
+                module: module.id.clone(),
+                target: BuiltBundleTarget::Browser,
+                output,
+                files: built.files,
+                bytes: built.bytes,
+                warnings: built.warnings,
+            });
+        }
+
         if let Some(browser_chunk) = &module.browser_chunk {
             let output = absolute(&root, browser_chunk);
             let mut bundle_options =
@@ -1215,6 +1240,64 @@ pub async fn build_application(
         deployment,
         bundles,
     })
+}
+
+fn write_page_hydration_entry(
+    root: &Path,
+    out_dir: &Path,
+    module: &ModuleRef,
+    source_entry: &Path,
+) -> Result<PathBuf> {
+    let entry = absolute(root, out_dir)
+        .join("entries/browser")
+        .join(format!("{}.hydrate.js", module.id));
+    let parent = entry
+        .parent()
+        .context("generated page hydration entry needs a parent directory")?;
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let source = js_string(&source_entry.to_string_lossy());
+    let body = format!(
+        r#"import {{ hydrateRoot }} from "react-dom/client";
+import renderPage from "{source}";
+{PAGE_PROPS_HELPERS}
+
+function zapHydrationPageProps(hydration) {{
+  const request = hydration && hydration.request ? hydration.request : {{}};
+  const path = typeof request.path === "string" ? request.path : (hydration && hydration.path) || (globalThis.location && globalThis.location.pathname + globalThis.location.search) || "/";
+  return {{
+    params: request.params || {{}},
+    searchParams: zapSearchParams({{ searchParams: request.searchParams || {{}} }}),
+    request: {{
+      method: request.method || "GET",
+      path,
+      headers: request.headers || {{}},
+      body: request.body || ""
+    }}
+  }};
+}}
+
+export async function hydrateZapPage(context = {{}}) {{
+  if (typeof hydrateRoot !== "function") {{
+    throw new TypeError("Zap page hydration requires react-dom/client hydrateRoot");
+  }}
+  if (typeof renderPage !== "function") {{
+    throw new TypeError("Zap page module must export a default function for hydration");
+  }}
+  const hydration = context.hydration || {{}};
+  const props = zapHydrationPageProps(hydration);
+  props.actions = context.actions;
+  props.navigate = context.navigate;
+  const model = await renderPage(props);
+  const container = context.container || document.body;
+  const root = hydrateRoot(container, model);
+  globalThis.__zap_react_root = root;
+  globalThis.__zap_react_model = model;
+  return {{ root, model }};
+}}
+"#
+    );
+    fs::write(&entry, body).with_context(|| format!("write {}", entry.display()))?;
+    Ok(entry)
 }
 
 fn write_flight_shadow_source(
@@ -1852,6 +1935,10 @@ async function hydrateZapDocument(targetDocument = document) {
   const imported = await Promise.all(importChunks.map((chunk) => import(chunk)));
   const modulesByChunk = new Map(importChunks.map((chunk, index) => [zapChunkUrl(chunk), imported[index]]));
   const actionModule = typeof hydration.action_proxy === "string" ? modulesByChunk.get(zapChunkUrl(hydration.action_proxy)) : undefined;
+  const pageHydrationModule = typeof hydration.page_hydration === "string" ? modulesByChunk.get(zapChunkUrl(hydration.page_hydration)) : undefined;
+  const react = pageHydrationModule && typeof pageHydrationModule.hydrateZapPage === "function"
+    ? await pageHydrationModule.hydrateZapPage({ hydration, actions: actionModule, navigate: navigateZap })
+    : undefined;
   const hooks = [];
   for (const reference of references) {
     const module = modulesByChunk.get(zapChunkUrl(reference.browser_chunk));
@@ -1863,7 +1950,7 @@ async function hydrateZapDocument(targetDocument = document) {
     }
   }
   await Promise.all(hooks);
-  const state = { hydration, chunks, importChunks, references, actions: actionModule, navigate: navigateZap };
+  const state = { hydration, chunks, importChunks, references, actions: actionModule, react, navigate: navigateZap };
   globalThis.__zap_hydrated = state;
   return state;
 }
@@ -2001,6 +2088,11 @@ fn deployment_manifest_json(graph: &ApplicationGraph, manifest_path: &Path) -> R
         .collect::<BTreeSet<_>>();
     if let Some(action_proxy) = &graph.action_proxy {
         browser_assets.insert(action_proxy.clone());
+    }
+    for module in &graph.modules {
+        if let Some(page_hydration) = &module.hydration_bundle {
+            browser_assets.insert(page_hydration.clone());
+        }
     }
     if let Some(browser_bootstrap) = &graph.browser_bootstrap {
         browser_assets.insert(browser_bootstrap.clone());
@@ -2319,6 +2411,13 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
         });
         let browser_chunk = (module.kind == ModuleKind::Client)
             .then(|| out_dir.join("browser").join(format!("{}.js", module.id)));
+        let hydration_bundle = (page_route_modules.contains(&module.id)
+            && contains_jsx_syntax(&module.text))
+        .then(|| {
+            out_dir
+                .join("browser")
+                .join(format!("{}.hydrate.js", module.id))
+        });
         module_refs.push(ModuleRef {
             id: module.id.clone(),
             path: module.relative_path.clone(),
@@ -2326,6 +2425,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             browser_chunk,
             server_bundle,
             flight_bundle,
+            hydration_bundle,
         });
     }
     module_refs.sort_by(|a, b| a.id.cmp(&b.id));
@@ -3186,6 +3286,16 @@ mod tests {
         )
         .unwrap();
         fs::write(
+            react_dom.join("client.js"),
+            r#"
+            export function hydrateRoot(container, model) {
+                container.__zapHydratedModel = model;
+                return { container, model, unmount() { container.__zapHydratedModel = undefined; } };
+            }
+            "#,
+        )
+        .unwrap();
+        fs::write(
             rsc.join("server.edge.js"),
             r#"
             const CLIENT_REFERENCE = Symbol.for("react.client.reference");
@@ -3288,6 +3398,10 @@ mod tests {
                 "./server.browser": {
                   "browser": "./server.browser.js",
                   "default": "./server.default.js"
+                },
+                "./client": {
+                  "browser": "./client.browser.js",
+                  "default": "./client.default.js"
                 }
               }
             }"#,
@@ -3324,6 +3438,21 @@ mod tests {
                         controller.close();
                     }
                 });
+            }
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            react_dom.join("client.default.js"),
+            "throw new Error('default client export should not be selected');\n",
+        )
+        .unwrap();
+        fs::write(
+            react_dom.join("client.browser.js"),
+            r#"
+            export function hydrateRoot(container, model) {
+                container.__zapHydratedModel = model;
+                return { container, model, unmount() { container.__zapHydratedModel = undefined; } };
             }
             "#,
         )
@@ -4110,7 +4239,8 @@ export const Label = 'count';
             vec![
                 PathBuf::from(".zap/browser/actions.js"),
                 PathBuf::from(".zap/browser/bootstrap.js"),
-                PathBuf::from(".zap/browser/client.js")
+                PathBuf::from(".zap/browser/client.js"),
+                PathBuf::from(".zap/browser/page.hydrate.js")
             ]
         );
         assert_eq!(
@@ -4137,8 +4267,9 @@ export const Label = 'count';
             .filter(|bundle| bundle.target == BuiltBundleTarget::Browser)
             .count();
         assert_eq!(server_outputs, 7);
-        assert_eq!(browser_outputs, 1);
+        assert_eq!(browser_outputs, 3);
         let page_bundle = temp.path().join(".zap/server/page.js");
+        let page_hydration_bundle = temp.path().join(".zap/browser/page.hydrate.js");
         let route_bundle = temp.path().join(".zap/server/api/echo/route.js");
         let get_route_bundle = temp.path().join(".zap/server/api/ping/route.js");
         let action_bundle = temp.path().join(".zap/server/actions.js");
@@ -4168,6 +4299,10 @@ export const Label = 'count';
         assert!(action_bundle.is_file());
         assert!(action_proxy.is_file());
         assert!(browser_bootstrap.is_file());
+        assert!(page_hydration_bundle.is_file());
+        let page_hydration_source = fs::read_to_string(&page_hydration_bundle).unwrap();
+        assert!(page_hydration_source.contains("hydrateRoot"));
+        assert!(page_hydration_source.contains("hydrateZapPage"));
         let browser_bootstrap_source = fs::read_to_string(&browser_bootstrap).unwrap();
         assert!(browser_bootstrap_source.contains("__zap_hydration"));
         assert!(browser_bootstrap_source.contains("import(chunk)"));
@@ -4175,6 +4310,8 @@ export const Label = 'count';
         assert!(browser_bootstrap_source.contains("import.meta.url"));
         assert!(browser_bootstrap_source.contains("zapChunkUrl(reference.browser_chunk)"));
         assert!(browser_bootstrap_source.contains("actions: actionModule"));
+        assert!(browser_bootstrap_source.contains("page_hydration"));
+        assert!(browser_bootstrap_source.contains("hydrateZapPage"));
         assert!(browser_bootstrap_source.contains("__zap_navigate"));
         assert!(browser_bootstrap_source.contains("replaceZapDocument"));
         assert!(browser_bootstrap_source.contains("document.head.replaceWith(nextDocument.head)"));
