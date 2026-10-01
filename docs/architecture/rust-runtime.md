@@ -29,12 +29,12 @@ Performance choices require measurements of the complete path: cold start, warm 
 
 The first Rust-only foundation crates are now present under `crates/`:
 
-- `zap-runtime` owns the shared application manifest schema, graph validation, route parsing, trie lookup, request target planning and unsafe path rejection.
+- `zap-runtime` owns the shared application manifest schema, graph validation, route parsing, trie lookup, request target planning, terminal HTTP response mapping and unsafe path rejection.
 - `zap-splice` restores Splice as a bounded Rust transport with tested deadlines, cancellation, frame limits, crash cleanup and subprocess behavior.
 - `zap-render` runs JavaScript bundles inside a Rust-owned QuickJS context with stream consumption, explicit host calls, output limits and CPU interruption.
 - `zap-build` discovers the application graph, writes `.zap/manifest.json`, emits page server bundles with the `ZapRender.render` contract, emits per-export server-action IDs, records route-handler methods and compiles TSX through Rust Rolldown/Oxc APIs for server IIFE and browser module targets.
 
-These crates are foundation evidence only. The runtime crate now owns the manifest schema that the build crate emits, validates manifest references, plans requests against static assets/pages/route handlers with method policy, admits known server actions with same-origin checks and enforces declared body limits before dispatch. The build crate proves typed graph discovery, atomic manifest emission, page server-bundle execution, per-export action identity, route-handler method identity, action admission, body-limit admission and graph module bundling, but the workspace does not yet prove full React Server Components, hydration/navigation, server-action execution, managed deployment or the landing site. The exact test and Fozzy evidence is recorded in [`../implementation.md`](../implementation.md).
+These crates are foundation evidence only. The runtime crate now owns the manifest schema that the build crate emits, validates manifest references, plans requests against static assets/pages/route handlers with method policy, maps terminal request/action outcomes to HTTP responses, admits known server actions with same-origin checks and enforces declared body limits before dispatch. The build crate proves typed graph discovery, atomic manifest emission, page server-bundle execution, per-export action identity, route-handler method identity and graph module bundling, while the runtime crate proves action admission, terminal HTTP response mapping and body-limit admission. The workspace does not yet prove full React Server Components, hydration/navigation, server-action execution, managed deployment or the landing site. The exact test and Fozzy evidence is recorded in [`../implementation.md`](../implementation.md).
 
 ## Splice history
 

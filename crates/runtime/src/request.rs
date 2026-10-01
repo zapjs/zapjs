@@ -2,7 +2,7 @@ use crate::{
     manifest::{ActionRef, AssetRef, CompiledManifest, ManifestError, RouteEntry, RouteKind},
     routing::Param,
 };
-use http::{Method, Uri};
+use http::{Method, StatusCode, Uri};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
@@ -21,6 +21,34 @@ pub enum RequestTarget<'a> {
     MethodNotAllowed {
         allowed: Vec<Method>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdmissionOutcome<T> {
+    Dispatch(T),
+    Respond(ImmediateResponse),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImmediateResponse {
+    pub status: StatusCode,
+    pub headers: Vec<(String, String)>,
+}
+
+impl ImmediateResponse {
+    pub fn new(status: StatusCode) -> Self {
+        Self {
+            status,
+            headers: Vec::new(),
+        }
+    }
+
+    pub fn method_not_allowed(allowed: &[Method]) -> Self {
+        Self {
+            status: StatusCode::METHOD_NOT_ALLOWED,
+            headers: vec![("allow".into(), allow_header(allowed))],
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -71,6 +99,52 @@ pub struct ActionInput<'a> {
     pub origin: Option<&'a str>,
     pub expected_origin: Option<&'a str>,
     pub declared_body_bytes: Option<u64>,
+}
+
+pub fn admit_request_input<'a>(
+    manifest: &'a CompiledManifest,
+    input: &RequestInput<'_>,
+    limits: &AdmissionLimits,
+) -> Result<AdmissionOutcome<RequestTarget<'a>>, RequestPlanError> {
+    match plan_request_input(manifest, input, limits) {
+        Ok(RequestTarget::NotFound) => Ok(AdmissionOutcome::Respond(ImmediateResponse::new(
+            StatusCode::NOT_FOUND,
+        ))),
+        Ok(RequestTarget::MethodNotAllowed { allowed }) => Ok(AdmissionOutcome::Respond(
+            ImmediateResponse::method_not_allowed(&allowed),
+        )),
+        Ok(target) => Ok(AdmissionOutcome::Dispatch(target)),
+        Err(RequestPlanError::Path) => Ok(AdmissionOutcome::Respond(ImmediateResponse::new(
+            StatusCode::BAD_REQUEST,
+        ))),
+        Err(RequestPlanError::BodyTooLarge) => Ok(AdmissionOutcome::Respond(
+            ImmediateResponse::new(StatusCode::PAYLOAD_TOO_LARGE),
+        )),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn admit_action_input<'a>(
+    manifest: &'a CompiledManifest,
+    input: &ActionInput<'_>,
+    limits: &AdmissionLimits,
+) -> Result<AdmissionOutcome<ActionAdmission<'a>>, RequestPlanError> {
+    match plan_action_input(manifest, input, limits) {
+        Ok(admission) => Ok(AdmissionOutcome::Dispatch(admission)),
+        Err(RequestPlanError::ActionMethod) => Ok(AdmissionOutcome::Respond(
+            ImmediateResponse::method_not_allowed(&[Method::POST]),
+        )),
+        Err(RequestPlanError::ActionOrigin) => Ok(AdmissionOutcome::Respond(
+            ImmediateResponse::new(StatusCode::FORBIDDEN),
+        )),
+        Err(RequestPlanError::UnknownAction) => Ok(AdmissionOutcome::Respond(
+            ImmediateResponse::new(StatusCode::NOT_FOUND),
+        )),
+        Err(RequestPlanError::BodyTooLarge) => Ok(AdmissionOutcome::Respond(
+            ImmediateResponse::new(StatusCode::PAYLOAD_TOO_LARGE),
+        )),
+        Err(error) => Err(error),
+    }
 }
 
 pub fn plan_request_input<'a>(
@@ -177,6 +251,14 @@ pub fn plan_action<'a>(
     Ok(ActionAdmission {
         target: ActionTarget { action },
     })
+}
+
+fn allow_header(methods: &[Method]) -> String {
+    methods
+        .iter()
+        .map(Method::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn origin_allowed(origin: Option<&str>, expected_origin: Option<&str>) -> bool {
@@ -395,6 +477,174 @@ mod tests {
             .unwrap(),
             RequestTarget::RouteHandler { .. }
         ));
+    }
+
+    #[test]
+    fn admission_outcomes_map_terminal_requests_to_http_responses() {
+        let manifest = compiled();
+        let limits = AdmissionLimits { max_body_bytes: 4 };
+
+        match admit_request_input(
+            &manifest,
+            &RequestInput {
+                method: &Method::GET,
+                path: "/shop/1",
+                declared_body_bytes: None,
+            },
+            &limits,
+        )
+        .unwrap()
+        {
+            AdmissionOutcome::Dispatch(RequestTarget::Page { route, .. }) => {
+                assert_eq!(route.module, "page")
+            }
+            outcome => panic!("unexpected outcome: {outcome:?}"),
+        }
+
+        assert_eq!(
+            admit_request_input(
+                &manifest,
+                &RequestInput {
+                    method: &Method::POST,
+                    path: "/shop/1",
+                    declared_body_bytes: None,
+                },
+                &limits,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse {
+                status: StatusCode::METHOD_NOT_ALLOWED,
+                headers: vec![("allow".into(), "GET, HEAD".into())],
+            })
+        );
+        assert_eq!(
+            admit_request_input(
+                &manifest,
+                &RequestInput {
+                    method: &Method::GET,
+                    path: "/missing",
+                    declared_body_bytes: None,
+                },
+                &limits,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::NOT_FOUND))
+        );
+        assert_eq!(
+            admit_request_input(
+                &manifest,
+                &RequestInput {
+                    method: &Method::GET,
+                    path: "/shop/1?x=1",
+                    declared_body_bytes: None,
+                },
+                &limits,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::BAD_REQUEST))
+        );
+        assert_eq!(
+            admit_request_input(
+                &manifest,
+                &RequestInput {
+                    method: &Method::POST,
+                    path: "/api/echo",
+                    declared_body_bytes: Some(5),
+                },
+                &limits,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::PAYLOAD_TOO_LARGE))
+        );
+    }
+
+    #[test]
+    fn admission_outcomes_map_terminal_actions_to_http_responses() {
+        let manifest = compiled();
+        let limits = AdmissionLimits { max_body_bytes: 4 };
+
+        match admit_action_input(
+            &manifest,
+            &ActionInput {
+                method: &Method::POST,
+                action_id: "action:page#save",
+                origin: Some("https://example.com/form"),
+                expected_origin: Some("https://example.com"),
+                declared_body_bytes: Some(4),
+            },
+            &limits,
+        )
+        .unwrap()
+        {
+            AdmissionOutcome::Dispatch(admission) => {
+                assert_eq!(admission.target.action.export, "save")
+            }
+            outcome => panic!("unexpected outcome: {outcome:?}"),
+        }
+
+        assert_eq!(
+            admit_action_input(
+                &manifest,
+                &ActionInput {
+                    method: &Method::GET,
+                    action_id: "action:page#save",
+                    origin: None,
+                    expected_origin: None,
+                    declared_body_bytes: None,
+                },
+                &limits,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse {
+                status: StatusCode::METHOD_NOT_ALLOWED,
+                headers: vec![("allow".into(), "POST".into())],
+            })
+        );
+        assert_eq!(
+            admit_action_input(
+                &manifest,
+                &ActionInput {
+                    method: &Method::POST,
+                    action_id: "missing",
+                    origin: None,
+                    expected_origin: None,
+                    declared_body_bytes: None,
+                },
+                &limits,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::NOT_FOUND))
+        );
+        assert_eq!(
+            admit_action_input(
+                &manifest,
+                &ActionInput {
+                    method: &Method::POST,
+                    action_id: "action:page#save",
+                    origin: Some("https://evil.example"),
+                    expected_origin: Some("https://example.com"),
+                    declared_body_bytes: None,
+                },
+                &limits,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::FORBIDDEN))
+        );
+        assert_eq!(
+            admit_action_input(
+                &manifest,
+                &ActionInput {
+                    method: &Method::POST,
+                    action_id: "action:page#save",
+                    origin: None,
+                    expected_origin: None,
+                    declared_body_bytes: Some(5),
+                },
+                &limits,
+            )
+            .unwrap(),
+            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::PAYLOAD_TOO_LARGE))
+        );
     }
 
     #[test]
