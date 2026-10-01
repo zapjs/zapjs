@@ -225,7 +225,14 @@ fn validate_local_module(root: &Path, path: &Path, visited: &mut BTreeSet<PathBu
     let path = path
         .canonicalize()
         .with_context(|| format!("resolve source module {}", path.display()))?;
-    if !path.starts_with(root) || !visited.insert(path.clone()) {
+    if !path.starts_with(root) {
+        bail!(
+            "source module {} escapes bundle root {}",
+            path.display(),
+            root.display()
+        );
+    }
+    if !visited.insert(path.clone()) {
         return Ok(());
     }
     let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
@@ -1871,5 +1878,29 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
         .unwrap();
         assert_eq!(result.files, vec![output.clone()]);
         assert!(output.is_file());
+
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside.ts");
+        fs::write(&outside, "export const value = 1;").unwrap();
+        fs::create_dir_all(temp.path().join("app")).unwrap();
+        fs::write(
+            temp.path().join("app/entry.ts"),
+            "import '../outside'; export const value = 1;",
+        )
+        .unwrap();
+        let output = temp.path().join("dist/client.js");
+        let error = bundle(&BundleOptions::new(
+            &temp.path().join("app"),
+            Path::new("entry.ts"),
+            &output,
+            Target::Browser,
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("escapes bundle root"),
+            "{error:?}"
+        );
+        assert!(!output.exists());
     }
 }
