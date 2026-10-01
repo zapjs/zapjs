@@ -32,7 +32,6 @@ fn managed_native_artifact_serves_from_real_zap_process() {
             temp.path().to_str().unwrap(),
             "--out",
             deploy_root.to_str().unwrap(),
-            "--no-public",
             "--no-minify",
         ])
         .output()
@@ -46,6 +45,8 @@ fn managed_native_artifact_serves_from_real_zap_process() {
 
     let function_root = deploy_root.join("function");
     assert!(function_root.join(".zap/manifest.json").is_file());
+    assert!(function_root.join("public/logo.txt").is_file());
+    assert!(deploy_root.join("static/logo.txt").is_file());
     assert!(deploy_root.join("zap.managed-native.json").is_file());
 
     let mut child = Command::new(binary)
@@ -53,7 +54,6 @@ fn managed_native_artifact_serves_from_real_zap_process() {
             "serve",
             "--root",
             function_root.to_str().unwrap(),
-            "--no-public",
             "--addr",
             "127.0.0.1:0",
         ])
@@ -98,7 +98,6 @@ fn provider_fs_upload_serves_from_real_zap_process() {
             temp.path().to_str().unwrap(),
             "--out",
             provider_root.to_str().unwrap(),
-            "--no-public",
             "--no-minify",
         ])
         .output()
@@ -112,6 +111,8 @@ fn provider_fs_upload_serves_from_real_zap_process() {
 
     assert!(provider_root.join("zap.provider-fs-upload.json").is_file());
     assert!(provider_root.join("function/.zap/manifest.json").is_file());
+    assert!(provider_root.join("function/public/logo.txt").is_file());
+    assert!(provider_root.join("static/logo.txt").is_file());
     assert_served_framework(binary, &provider_root.join("function"));
 }
 
@@ -121,7 +122,6 @@ fn assert_served_framework(binary: &str, function_root: &Path) {
             "serve",
             "--root",
             function_root.to_str().unwrap(),
-            "--no-public",
             "--addr",
             "127.0.0.1:0",
         ])
@@ -200,6 +200,36 @@ fn assert_served_framework_responses(address: &str) {
     assert!(
         get_head_route_head.ends_with("\r\n\r\n"),
         "GET-to-HEAD route HEAD response must not include a body:\n{get_head_route_head}"
+    );
+
+    let static_asset = http_exchange(
+        address,
+        b"GET /logo.txt HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        static_asset.starts_with("HTTP/1.1 200 OK"),
+        "unexpected static asset response:\n{static_asset}"
+    );
+    assert!(
+        static_asset.ends_with("zap-static"),
+        "static asset response missed public file body:\n{static_asset}"
+    );
+
+    let static_asset_head = http_exchange(
+        address,
+        b"HEAD /logo.txt HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        static_asset_head.starts_with("HTTP/1.1 200 OK"),
+        "unexpected static asset HEAD response:\n{static_asset_head}"
+    );
+    assert!(
+        static_asset_head.contains("content-length: 0"),
+        "static asset HEAD response must advertise an empty body:\n{static_asset_head}"
+    );
+    assert!(
+        static_asset_head.ends_with("\r\n\r\n"),
+        "static asset HEAD response must not include a body:\n{static_asset_head}"
     );
 
     let page = http_exchange(
@@ -400,6 +430,7 @@ fn http_exchange(address: &str, request: &[u8]) -> String {
 fn write_minimal_app(root: &Path) {
     let app = root.join("app/api/echo");
     fs::create_dir_all(&app).expect("create app route");
+    fs::create_dir_all(root.join("public")).expect("create public directory");
     fs::create_dir_all(root.join("app/api/ping")).expect("create ping route");
     fs::create_dir_all(root.join("app/broken")).expect("create broken route");
     fs::create_dir_all(root.join("app/docs/[...slug]")).expect("create docs catch-all route");
@@ -410,6 +441,7 @@ fn write_minimal_app(root: &Path) {
         "export default function Page(){ return 'home'; }\n",
     )
     .expect("write page");
+    fs::write(root.join("public/logo.txt"), "zap-static").expect("write static asset");
     fs::write(
         root.join("app/docs/[...slug]/page.tsx"),
         "export default function Docs({ params, searchParams }){ return `docs:${params.slug.join('/')}:${searchParams.view[0]}:${searchParams.tag.join('|')}`; }\n",
