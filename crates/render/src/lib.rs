@@ -274,6 +274,7 @@ impl Renderer {
                 metadata.status
             )));
         }
+        validate_response_headers(label, &metadata.headers)?;
         Ok(metadata)
     }
 
@@ -394,6 +395,39 @@ impl Renderer {
             })
         })
     }
+}
+
+fn validate_response_headers(label: &str, headers: &[(String, String)]) -> Result<(), RenderError> {
+    for (name, value) in headers {
+        if !is_valid_header_name(name) {
+            return Err(RenderError(format!(
+                "{label} response header name is invalid: {name:?}"
+            )));
+        }
+        if !is_valid_header_value(value) {
+            return Err(RenderError(format!(
+                "{label} response header value is invalid for {name:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_valid_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^'
+                    | b'_' | b'`' | b'|' | b'~' | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
+            )
+        })
+}
+
+fn is_valid_header_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| matches!(byte, b'\t' | b' '..=b'~' | 0x80..=0xff))
 }
 
 fn execution_failure(label: &str, error: RenderError) -> ExecutionFailure {
@@ -545,6 +579,32 @@ mod tests {
             vec![("x-zap-action".into(), "save".into())]
         );
         assert_eq!(response.body, "saved:7");
+    }
+
+    #[test]
+    fn rejects_invalid_response_metadata() {
+        let status_error = route_handler(r#"return new Response("bad", {status: 99});"#)
+            .handle_route_response(r#"{"method":"GET","path":"/api/bad"}"#)
+            .unwrap_err();
+        assert!(status_error.to_string().contains("Invalid response status"));
+
+        let header_name_error = route_handler(
+            r#"return new Response("bad", {status: 200, headers: [["bad name", "value"]]});"#,
+        )
+        .handle_route_response(r#"{"method":"GET","path":"/api/bad"}"#)
+        .unwrap_err();
+        assert!(header_name_error
+            .to_string()
+            .contains("Invalid header name"));
+
+        let header_value_error = action_handler(
+            r#"return new Response('bad', {status: 200, headers: [['x-zap', 'bad\r\nvalue']]});"#,
+        )
+        .invoke_action_response(r#"{"export":"save","args":[]}"#)
+        .unwrap_err();
+        assert!(header_value_error
+            .to_string()
+            .contains("header value is invalid"));
     }
 
     #[test]
