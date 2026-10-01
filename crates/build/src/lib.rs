@@ -236,6 +236,12 @@ fn validate_local_module(root: &Path, path: &Path, visited: &mut BTreeSet<PathBu
         return Ok(());
     }
     let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    if let Some(global) = unavailable_platform_global(&text) {
+        bail!(
+            "bundle cannot depend on unavailable platform global {global:?} in {}",
+            path.display()
+        );
+    }
     for specifier in module_specifiers(&text) {
         if is_unavailable_platform_specifier(&specifier) {
             bail!(
@@ -409,6 +415,26 @@ fn is_ident_start(ch: char) -> bool {
 
 fn is_ident_continue(ch: char) -> bool {
     is_ident_start(ch) || ch.is_ascii_digit()
+}
+
+fn unavailable_platform_global(text: &str) -> Option<String> {
+    js_tokens(text).into_iter().find_map(|token| match token {
+        JsToken::Ident(value)
+            if matches!(
+                value.as_str(),
+                "process"
+                    | "Buffer"
+                    | "require"
+                    | "module"
+                    | "exports"
+                    | "__dirname"
+                    | "__filename"
+            ) =>
+        {
+            Some(value)
+        }
+        _ => None,
+    })
 }
 
 fn is_unavailable_platform_specifier(specifier: &str) -> bool {
@@ -1826,6 +1852,23 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
                 "spaced_commonjs_require.ts",
                 "const vm = require (\n  'vm'\n); export const value = vm;",
             ),
+            (
+                "require_resolve.ts",
+                "export const value = require.resolve('fs');",
+            ),
+            (
+                "process_env.ts",
+                "export const value = process.env.NODE_ENV;",
+            ),
+            (
+                "buffer_global.ts",
+                "export const value = Buffer.from('zap');",
+            ),
+            (
+                "module_exports.ts",
+                "module.exports = {}; export const value = 1;",
+            ),
+            ("dirname_global.ts", "export const value = __dirname;"),
         ];
         for (name, source) in cases {
             let temp = tempfile::tempdir().unwrap();
@@ -1843,7 +1886,10 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
             assert!(
                 error
                     .to_string()
-                    .contains("bundle cannot depend on unavailable platform module"),
+                    .contains("bundle cannot depend on unavailable platform module")
+                    || error
+                        .to_string()
+                        .contains("bundle cannot depend on unavailable platform global"),
                 "{name}: {error:?}"
             );
             assert!(!output.exists(), "{name}");
@@ -1882,7 +1928,7 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
         let temp = tempfile::tempdir().unwrap();
         fs::write(
             temp.path().join("entry.ts"),
-            "// import fs from 'fs';\n/* const os = require('os'); */\nconst text = \"import path from 'path'\"; export const value = text;",
+            "// import fs from 'fs'; process.env.SECRET;\n/* const os = require('os'); Buffer.from('x'); */\nconst text = \"import path from 'path'; process.env.NODE_ENV\"; export const value = text;",
         )
         .unwrap();
         let output = temp.path().join("dist/client.js");
