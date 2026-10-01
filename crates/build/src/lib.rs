@@ -1544,14 +1544,14 @@ fn exported_const_values(text: &str) -> Vec<(String, JsToken)> {
                     index += 1;
                     continue;
                 };
-                if !matches!(tokens.get(index + 3), Some(JsToken::Punct('='))) {
+                let Some(assignment) = assignment_operator_after_binding(&tokens, index + 3) else {
                     index += 1;
                     continue;
-                }
-                if let Some(value) = tokens.get(index + 4) {
+                };
+                if let Some(value) = tokens.get(assignment + 1) {
                     values.push((name.clone(), value.clone()));
                 }
-                index += 5;
+                index = assignment + 2;
                 continue;
             }
             Some(JsToken::Punct('{')) if !export_list_has_from_clause(&tokens, index + 1) => {
@@ -1580,14 +1580,14 @@ fn const_values(tokens: &[JsToken]) -> BTreeMap<String, JsToken> {
             index += 1;
             continue;
         };
-        if !matches!(tokens.get(index + 2), Some(JsToken::Punct('='))) {
+        let Some(assignment) = assignment_operator_after_binding(tokens, index + 2) else {
             index += 1;
             continue;
-        }
-        if let Some(value) = tokens.get(index + 3) {
+        };
+        if let Some(value) = tokens.get(assignment + 1) {
             values.insert(name.clone(), value.clone());
         }
-        index += 4;
+        index = assignment + 2;
     }
     values
 }
@@ -1696,15 +1696,59 @@ fn callable_values(tokens: &[JsToken]) -> BTreeSet<String> {
 }
 
 fn is_callable_assignment(tokens: &[JsToken], index: usize) -> bool {
-    if !matches!(tokens.get(index), Some(JsToken::Punct('='))) {
+    let Some(assignment) = assignment_operator_after_binding(tokens, index) else {
         return false;
-    }
-    let mut value_index = index + 1;
+    };
+    let mut value_index = assignment + 1;
     if matches!(tokens.get(value_index), Some(JsToken::Ident(value)) if value == "async") {
         value_index += 1;
     }
     matches!(tokens.get(value_index), Some(JsToken::Ident(value)) if value == "function")
         || is_arrow_function_assignment(tokens, value_index)
+}
+
+fn assignment_operator_after_binding(tokens: &[JsToken], index: usize) -> Option<usize> {
+    match tokens.get(index) {
+        Some(JsToken::Punct('=')) => Some(index),
+        Some(JsToken::Punct(':')) => {
+            let mut angle_depth = 0usize;
+            let mut paren_depth = 0usize;
+            let mut bracket_depth = 0usize;
+            let mut brace_depth = 0usize;
+            for cursor in index + 1..tokens.len() {
+                match tokens.get(cursor) {
+                    Some(JsToken::Punct('<')) => angle_depth += 1,
+                    Some(JsToken::Punct('>')) => angle_depth = angle_depth.saturating_sub(1),
+                    Some(JsToken::Punct('(')) => paren_depth += 1,
+                    Some(JsToken::Punct(')')) => paren_depth = paren_depth.saturating_sub(1),
+                    Some(JsToken::Punct('[')) => bracket_depth += 1,
+                    Some(JsToken::Punct(']')) => bracket_depth = bracket_depth.saturating_sub(1),
+                    Some(JsToken::Punct('{')) => brace_depth += 1,
+                    Some(JsToken::Punct('}')) => brace_depth = brace_depth.saturating_sub(1),
+                    Some(JsToken::Punct('='))
+                        if angle_depth == 0
+                            && paren_depth == 0
+                            && bracket_depth == 0
+                            && brace_depth == 0
+                            && !matches!(tokens.get(cursor + 1), Some(JsToken::Punct('>'))) =>
+                    {
+                        return Some(cursor);
+                    }
+                    Some(JsToken::Punct(',' | ';'))
+                        if angle_depth == 0
+                            && paren_depth == 0
+                            && bracket_depth == 0
+                            && brace_depth == 0 =>
+                    {
+                        return None;
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 fn is_arrow_function_assignment(tokens: &[JsToken], index: usize) -> bool {
@@ -2005,8 +2049,8 @@ export default function Page(){}
 
         fs::write(
             app.join("page.tsx"),
-            "const mode = 'force-static';
-const seconds = 45;
+            "const mode: 'force-static' = 'force-static';
+const seconds: number = 45;
 export { mode as dynamic, seconds as revalidate };
 export default function Page(){}
 ",
@@ -2179,7 +2223,7 @@ export const POST = { handler: true };
         fs::create_dir_all(&app).unwrap();
         fs::write(
             app.join("route.ts"),
-            "const getHandler = () => new Response('ok');
+            "const getHandler: Handler = () => new Response('ok');
 export { getHandler as GET };
 ",
         )
@@ -2260,11 +2304,11 @@ export const config = { mutate: true };
 'use server';
 export async
 function save(){}
-const destroy = async () => {};
-const archive = function() {};
+const destroy: Action = async () => {};
+const archive: Action = function() {};
 export const
-remove = async () => {};
-export let rename = input => input;
+remove: Action = async () => {};
+export let rename: (input: Input) => Output = input => input;
 export { destroy as deleteItem, archive };
 export type { IgnoredAction };
 ",
