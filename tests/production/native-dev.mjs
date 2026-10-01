@@ -7,6 +7,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const parent = await mkdtemp(join(tmpdir(), 'zap-native-dev-'));
@@ -79,7 +80,7 @@ try {
   await eventually(() => matches(43));
   const diagnosticStart = output.length;
   await writeFile(source, original + '\nthis deliberately does not compile\n');
-  await eventually(() => assert.match(output.slice(diagnosticStart), /error:|error\[E/));
+  await eventually(() => assert.match(stripVTControlCharacters(output.slice(diagnosticStart)), /error:|error\[E/));
   await writeFile(source, original);
   await eventually(() => matches(42));
   // Verify domain failures from the generated example through the actual addon.
