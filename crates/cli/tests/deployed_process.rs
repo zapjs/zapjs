@@ -232,6 +232,58 @@ fn assert_served_framework_responses(address: &str) {
         "static asset HEAD response must not include a body:\n{static_asset_head}"
     );
 
+    let missing = http_exchange(
+        address,
+        b"GET /missing HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        missing.starts_with("HTTP/1.1 404 Not Found"),
+        "missing routes must return the runtime not-found contract:\n{missing}"
+    );
+    assert!(
+        missing.ends_with("\r\n\r\n"),
+        "missing route responses must not leak route internals:\n{missing}"
+    );
+
+    let page_wrong_method = http_exchange(
+        address,
+        b"POST / HTTP/1.1\r\nhost: zap.local\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        page_wrong_method.starts_with("HTTP/1.1 405 Method Not Allowed"),
+        "page wrong-method requests must return method-not-allowed:\n{page_wrong_method}"
+    );
+    assert!(
+        page_wrong_method.contains("allow: GET, HEAD"),
+        "page wrong-method responses must expose allowed methods:\n{page_wrong_method}"
+    );
+
+    let static_wrong_method = http_exchange(
+        address,
+        b"DELETE /logo.txt HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        static_wrong_method.starts_with("HTTP/1.1 405 Method Not Allowed"),
+        "static asset wrong-method requests must return method-not-allowed:\n{static_wrong_method}"
+    );
+    assert!(
+        static_wrong_method.contains("allow: GET, HEAD"),
+        "static asset wrong-method responses must expose allowed methods:\n{static_wrong_method}"
+    );
+
+    let route_wrong_method = http_exchange(
+        address,
+        b"GET /api/echo HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        route_wrong_method.starts_with("HTTP/1.1 405 Method Not Allowed"),
+        "route handler wrong-method requests must return method-not-allowed:\n{route_wrong_method}"
+    );
+    assert!(
+        route_wrong_method.contains("allow: POST"),
+        "route handler wrong-method responses must expose allowed methods:\n{route_wrong_method}"
+    );
+
     let action_body = br#"{"action_id":"action:actions#save","args":[{"id":9}]}"#;
     let action_request = format!(
         "POST /_zap/action HTTP/1.1\r\nhost: zap.local\r\norigin: http://zap.local\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -250,6 +302,51 @@ fn assert_served_framework_responses(address: &str) {
     assert!(
         action.ends_with("saved:9"),
         "server action endpoint response missed body:\n{action}"
+    );
+
+    let action_wrong_method = http_exchange(
+        address,
+        b"GET /_zap/action HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        action_wrong_method.starts_with("HTTP/1.1 405 Method Not Allowed"),
+        "server action endpoint must reject non-POST methods:\n{action_wrong_method}"
+    );
+    assert!(
+        action_wrong_method.contains("allow: POST"),
+        "server action endpoint wrong-method response must expose POST:\n{action_wrong_method}"
+    );
+
+    let malformed_action = http_exchange(
+        address,
+        b"POST /_zap/action HTTP/1.1\r\nhost: zap.local\r\norigin: http://zap.local\r\ncontent-type: application/json\r\ncontent-length: 1\r\nconnection: close\r\n\r\n{",
+    );
+    assert!(
+        malformed_action.starts_with("HTTP/1.1 400 Bad Request"),
+        "server action endpoint must reject malformed payloads:\n{malformed_action}"
+    );
+
+    let unknown_action_body = br#"{"action_id":"action:actions#missing","args":[]}"#;
+    let unknown_action_request = format!(
+        "POST /_zap/action HTTP/1.1\r\nhost: zap.local\r\norigin: http://zap.local\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        unknown_action_body.len(),
+        String::from_utf8_lossy(unknown_action_body)
+    );
+    let unknown_action = http_exchange(address, unknown_action_request.as_bytes());
+    assert!(
+        unknown_action.starts_with("HTTP/1.1 404 Not Found"),
+        "server action endpoint must reject unknown action ids:\n{unknown_action}"
+    );
+
+    let cross_origin_action_request = format!(
+        "POST /_zap/action HTTP/1.1\r\nhost: zap.local\r\norigin: http://evil.local\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        action_body.len(),
+        String::from_utf8_lossy(action_body)
+    );
+    let cross_origin_action = http_exchange(address, cross_origin_action_request.as_bytes());
+    assert!(
+        cross_origin_action.starts_with("HTTP/1.1 403 Forbidden"),
+        "server action endpoint must reject cross-origin calls before dispatch:\n{cross_origin_action}"
     );
 
     let page = http_exchange(
@@ -309,6 +406,19 @@ fn assert_served_framework_responses(address: &str) {
     assert!(
         action_proxy_head.ends_with("\r\n\r\n"),
         "browser action proxy HEAD response must not include a body:\n{action_proxy_head}"
+    );
+
+    let action_proxy_wrong_method = http_exchange(
+        address,
+        b"PUT /.zap/browser/actions.js HTTP/1.1\r\nhost: zap.local\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        action_proxy_wrong_method.starts_with("HTTP/1.1 405 Method Not Allowed"),
+        "browser action proxy wrong-method requests must return method-not-allowed:\n{action_proxy_wrong_method}"
+    );
+    assert!(
+        action_proxy_wrong_method.contains("allow: GET, HEAD"),
+        "browser action proxy wrong-method responses must expose allowed methods:\n{action_proxy_wrong_method}"
     );
 
     let browser_bootstrap = http_exchange(
