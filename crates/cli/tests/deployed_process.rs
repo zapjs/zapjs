@@ -273,6 +273,65 @@ fn assert_served_framework_responses(address: &str) {
         "page response did not include action proxy hydration metadata:\n{page}"
     );
 
+    let action_proxy = http_exchange(
+        address,
+        b"GET /.zap/browser/actions.js HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        action_proxy.starts_with("HTTP/1.1 200 OK"),
+        "unexpected browser action proxy response:\n{action_proxy}"
+    );
+    assert!(
+        action_proxy.contains("content-type: text/javascript; charset=utf-8"),
+        "browser action proxy did not carry JavaScript content type:\n{action_proxy}"
+    );
+    assert!(
+        action_proxy.contains("/_zap/action"),
+        "browser action proxy did not target the Rust action endpoint:\n{action_proxy}"
+    );
+    assert!(
+        action_proxy.contains("action:actions#save"),
+        "browser action proxy did not expose the manifest action id:\n{action_proxy}"
+    );
+
+    let action_proxy_head = http_exchange(
+        address,
+        b"HEAD /.zap/browser/actions.js HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        action_proxy_head.starts_with("HTTP/1.1 200 OK"),
+        "unexpected browser action proxy HEAD response:\n{action_proxy_head}"
+    );
+    assert!(
+        action_proxy_head.contains("content-length: 0"),
+        "browser action proxy HEAD response must advertise an empty body:\n{action_proxy_head}"
+    );
+    assert!(
+        action_proxy_head.ends_with("\r\n\r\n"),
+        "browser action proxy HEAD response must not include a body:\n{action_proxy_head}"
+    );
+
+    let browser_bootstrap = http_exchange(
+        address,
+        b"GET /.zap/browser/bootstrap.js HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        browser_bootstrap.starts_with("HTTP/1.1 200 OK"),
+        "unexpected browser bootstrap response:\n{browser_bootstrap}"
+    );
+    assert!(
+        browser_bootstrap.contains("content-type: text/javascript; charset=utf-8"),
+        "browser bootstrap did not carry JavaScript content type:\n{browser_bootstrap}"
+    );
+    assert!(
+        browser_bootstrap.contains("zap:navigation-state"),
+        "browser bootstrap did not include navigation state publication:\n{browser_bootstrap}"
+    );
+    assert!(
+        browser_bootstrap.contains("hydrate"),
+        "browser bootstrap did not include hydration dispatch code:\n{browser_bootstrap}"
+    );
+
     let flight = http_exchange(
         address,
         b"GET / HTTP/1.1\r\nhost: zap.local\r\nrsc: 1\r\naccept: text/x-component\r\nconnection: close\r\n\r\n",
