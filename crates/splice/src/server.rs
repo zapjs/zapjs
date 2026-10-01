@@ -61,7 +61,11 @@ where
                 biased;
                 _ = closed.cancelled() => return Err(Error::Disconnected),
                 result = tasks.join_next(), if !tasks.is_empty() => {
-                    let (id, result) = result.unwrap().map_err(|e| Error::Protocol(format!("worker handler failed: {e}")))?;
+                    let Some(result) = result else {
+                        return Err(Error::Protocol("worker task set ended unexpectedly".into()));
+                    };
+                    let (id, result) = result
+                        .map_err(|e| Error::Protocol(format!("worker handler failed: {e}")))?;
                     active.remove(&id);
                     result?;
                 }

@@ -3,7 +3,7 @@
 //! where process isolation or binary replacement requires a worker boundary.
 //!
 //! Version 2 deliberately advertises only bounded unary invocation and cancellation.
-//! It is not wire compatible with the incomplete legacy version 1 streaming protocol.
+//! The frame contract is intentionally narrow and rejects peers that do not speak it.
 //! Handlers must be asynchronous and yield: cancellation cannot preempt blocking Rust.
 
 mod client;

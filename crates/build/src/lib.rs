@@ -577,7 +577,16 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
     let mut actions = Vec::<ActionRef>::new();
 
     for absolute_path in files {
-        let relative_path = absolute_path.strip_prefix(&app_root).unwrap().to_owned();
+        let relative_path = absolute_path
+            .strip_prefix(&app_root)
+            .with_context(|| {
+                format!(
+                    "collected app file {} outside {}",
+                    absolute_path.display(),
+                    app_root.display()
+                )
+            })?
+            .to_owned();
         let Some(file_name) = relative_path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
@@ -927,7 +936,16 @@ fn discover_assets(public_root: &Path) -> Result<Vec<AssetRef>> {
     files.sort();
     let mut assets = Vec::new();
     for absolute_path in files {
-        let relative = absolute_path.strip_prefix(public_root).unwrap().to_owned();
+        let relative = absolute_path
+            .strip_prefix(public_root)
+            .with_context(|| {
+                format!(
+                    "collected public asset {} outside {}",
+                    absolute_path.display(),
+                    public_root.display()
+                )
+            })?
+            .to_owned();
         let mut url_path = String::from("/");
         url_path.push_str(
             &relative

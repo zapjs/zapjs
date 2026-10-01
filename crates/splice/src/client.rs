@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
     },
     time::Duration,
 };
@@ -34,15 +34,22 @@ struct Core {
 }
 
 impl Core {
+    fn pending(&self) -> MutexGuard<'_, HashMap<u64, Pending>> {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn finish(&self, id: u64, result: Result<Bytes, Error>) {
-        let pending = self.pending.lock().unwrap().remove(&id);
+        let pending = self.pending().remove(&id);
         if let Some(pending) = pending {
             let _ = pending.reply.send(result);
         }
     }
+
     fn fail(&self, error: Error) {
         self.closed.cancel();
-        let pending = std::mem::take(&mut *self.pending.lock().unwrap());
+        let pending = std::mem::take(&mut *self.pending());
         for (_, request) in pending {
             let _ = request.reply.send(Err(error.clone()));
         }
@@ -68,10 +75,16 @@ impl Drop for RequestGuard {
     fn drop(&mut self) {
         // A terminal response already removed the entry. Call-drop and timeout remove
         // their own entry exactly once, release capacity, and notify the worker.
-        let pending = self.core.pending.lock().unwrap().remove(&self.id);
+        let pending = self.core.pending().remove(&self.id);
         if pending.is_some() {
-            let cancel =
-                wire::encode(&Message::Cancel { id: self.id }, self.core.frame_limit).unwrap();
+            let cancel = match wire::encode(&Message::Cancel { id: self.id }, self.core.frame_limit)
+            {
+                Ok(cancel) => cancel,
+                Err(error) => {
+                    self.core.fail(error);
+                    return;
+                }
+            };
             if self.core.outgoing.try_send(cancel).is_err() {
                 // Never silently abandon a cancellation behind a saturated writer.
                 self.core.fail(Error::Disconnected);
@@ -171,7 +184,7 @@ impl Client {
         )?;
         let (reply, response) = oneshot::channel();
         {
-            let mut pending = core.pending.lock().unwrap();
+            let mut pending = core.pending();
             if core.closed.is_cancelled() {
                 return Err(Error::Disconnected);
             }
