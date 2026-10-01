@@ -160,6 +160,8 @@ pub enum ManifestError {
     InvalidAssetSource(PathBuf),
     #[error("route {route} has invalid method set")]
     InvalidRouteMethods { route: String },
+    #[error("route {route} has invalid cache policy")]
+    InvalidRouteCachePolicy { route: String },
 }
 
 #[derive(Debug)]
@@ -333,6 +335,11 @@ impl CompiledManifest {
                     route: route.id.clone(),
                 });
             }
+            if !is_valid_cache_policy(&route.cache) {
+                return Err(ManifestError::InvalidRouteCachePolicy {
+                    route: route.id.clone(),
+                });
+            }
             for layout in &route.layouts {
                 if !layouts.contains_key(layout) {
                     return Err(ManifestError::MissingLayout {
@@ -443,6 +450,10 @@ impl CompiledManifest {
             params: matched.params,
         }))
     }
+}
+
+fn is_valid_cache_policy(policy: &CachePolicy) -> bool {
+    !(policy.dynamic == DynamicPolicy::ForceDynamic && policy.revalidate_seconds.is_some())
 }
 
 fn is_valid_action_export(export: &str) -> bool {
@@ -698,6 +709,16 @@ mod tests {
         assert!(matches!(
             CompiledManifest::new(duplicate_handler_method).unwrap_err(),
             ManifestError::InvalidRouteMethods { .. }
+        ));
+
+        let mut invalid_cache_policy = manifest();
+        invalid_cache_policy.routes[0].cache = CachePolicy {
+            dynamic: DynamicPolicy::ForceDynamic,
+            revalidate_seconds: Some(60),
+        };
+        assert!(matches!(
+            CompiledManifest::new(invalid_cache_policy).unwrap_err(),
+            ManifestError::InvalidRouteCachePolicy { .. }
         ));
     }
 }

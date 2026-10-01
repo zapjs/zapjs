@@ -870,6 +870,9 @@ fn parse_cache_policy(text: &str) -> Result<CachePolicy> {
             }
         }
     }
+    if policy.dynamic == DynamicPolicy::ForceDynamic && policy.revalidate_seconds.is_some() {
+        bail!("force-dynamic routes cannot declare revalidate");
+    }
     Ok(policy)
 }
 
@@ -1115,6 +1118,22 @@ export default function Page(){}
             .unwrap_err()
             .to_string();
         assert!(error.contains("invalid dynamic value"), "{error}");
+
+        fs::write(
+            app.join("page.tsx"),
+            "export const dynamic = 'force-dynamic';
+export const revalidate = 60;
+export default function Page(){}
+",
+        )
+        .unwrap();
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("force-dynamic routes cannot declare revalidate"),
+            "{error}"
+        );
     }
 
     #[test]
