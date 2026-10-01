@@ -1104,13 +1104,42 @@ pub async fn build_application(
             (route.module.clone(), references)
         })
         .collect::<BTreeMap<_, _>>();
+    let layout_by_id = graph
+        .layouts
+        .iter()
+        .map(|layout| (layout.id.clone(), layout))
+        .collect::<BTreeMap<_, _>>();
+    let layouts_by_route_module = graph
+        .routes
+        .iter()
+        .map(|route| {
+            let layouts = route
+                .layouts
+                .iter()
+                .filter_map(|id| layout_by_id.get(id).copied())
+                .cloned()
+                .collect::<Vec<_>>();
+            (route.module.clone(), layouts)
+        })
+        .collect::<BTreeMap<_, _>>();
 
     for module in &graph.modules {
         let source_entry = app_root.join(&module.path);
         if let Some(server_bundle) = &module.server_bundle {
             let (server_entry, global) = if page_modules.contains(&module.id) {
+                let route_layouts = layouts_by_route_module
+                    .get(&module.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
                 (
-                    write_page_server_entry(&root, &options.graph.out_dir, module, &source_entry)?,
+                    write_page_server_entry(
+                        &root,
+                        &options.graph.out_dir,
+                        &app_root,
+                        module,
+                        &source_entry,
+                        route_layouts,
+                    )?,
                     "ZapRender".into(),
                 )
             } else if let Some(methods) = handler_methods.get(&module.id) {
@@ -1158,12 +1187,17 @@ pub async fn build_application(
         }
 
         if let Some(flight_bundle) = &module.flight_bundle {
+            let route_layouts = layouts_by_route_module
+                .get(&module.id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             let flight_entry = write_page_flight_entry(
                 &root,
                 &options.graph.out_dir,
                 &app_root,
                 module,
                 &source_entry,
+                route_layouts,
                 &graph.client_references,
             )?;
             let output = absolute(&root, flight_bundle);
@@ -1297,13 +1331,15 @@ fn write_page_hydration_entry(
         static_imports.push_str("import * as ");
         static_imports.push_str(&binding);
         static_imports.push_str(" from ");
-        static_imports.push_str(&serde_json::to_string(&specifier).expect("serialize import specifier"));
+        static_imports
+            .push_str(&serde_json::to_string(&specifier).expect("serialize import specifier"));
         static_imports.push_str(";\n");
         if !static_entries.is_empty() {
             static_entries.push_str(",\n");
         }
         static_entries.push_str("  [");
-        static_entries.push_str(&serde_json::to_string(&reference.module).expect("serialize client id"));
+        static_entries
+            .push_str(&serde_json::to_string(&reference.module).expect("serialize client id"));
         static_entries.push_str(", ");
         static_entries.push_str(&binding);
         static_entries.push(']');
@@ -1311,7 +1347,9 @@ fn write_page_hydration_entry(
     }
     let mut body = String::new();
     body.push_str("import { hydrateRoot } from \"react-dom/client\";\n");
-    body.push_str("import { createFromReadableStream } from \"react-server-dom-webpack/client.edge\";\n");
+    body.push_str(
+        "import { createFromReadableStream } from \"react-server-dom-webpack/client.edge\";\n",
+    );
     body.push_str(&static_imports);
     body.push_str("const zapStaticClientRefs = new Map([\n");
     body.push_str(&static_entries);
@@ -1536,11 +1574,59 @@ fn client_reference_shim(path: &Path, references: &[&ClientReference]) -> String
     body
 }
 
+fn page_or_layouts_use_jsx(
+    app_root: &Path,
+    source_entry: &Path,
+    layouts: &[LayoutRef],
+) -> Result<bool> {
+    if page_source_uses_jsx(source_entry)? {
+        return Ok(true);
+    }
+    for layout in layouts {
+        if page_source_uses_jsx(&app_root.join(&layout.path))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn layout_imports(source_root: &Path, layouts: &[LayoutRef]) -> String {
+    let mut imports = String::new();
+    for (index, layout) in layouts.iter().enumerate() {
+        let source = source_root
+            .join(&layout.path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        imports.push_str("import ZapLayout");
+        imports.push_str(&index.to_string());
+        imports.push_str(" from ");
+        imports.push_str(&serde_json::to_string(&source).expect("serialize layout import"));
+        imports.push_str(";\n");
+    }
+    imports
+}
+
+fn layout_application(layouts: &[LayoutRef]) -> String {
+    let mut body =
+        String::from("async function applyZapLayouts(children, props) {\n  let tree = children;\n");
+    for index in (0..layouts.len()).rev() {
+        body.push_str("  if (typeof ZapLayout");
+        body.push_str(&index.to_string());
+        body.push_str(" !== \"function\") {\n    throw new TypeError(\"Zap layout module must export a default function\");\n  }\n  tree = await ZapLayout");
+        body.push_str(&index.to_string());
+        body.push_str("({ ...props, children: tree });\n");
+    }
+    body.push_str("  return tree;\n}\n");
+    body
+}
+
 fn write_page_server_entry(
     root: &Path,
     out_dir: &Path,
+    app_root: &Path,
     module: &ModuleRef,
     source_entry: &Path,
+    layouts: &[LayoutRef],
 ) -> Result<PathBuf> {
     let entry = absolute(root, out_dir)
         .join("entries/server")
@@ -1550,7 +1636,9 @@ fn write_page_server_entry(
         .context("generated page server entry needs a parent directory")?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     let source = js_string(&source_entry.to_string_lossy());
-    let react_adapter_import = if page_source_uses_jsx(source_entry)? {
+    let layout_imports = layout_imports(app_root, layouts);
+    let layout_application = layout_application(layouts);
+    let react_adapter_import = if page_or_layouts_use_jsx(app_root, source_entry, layouts)? {
         "import { renderToReadableStream } from \"react-dom/server.browser\";\n\n"
     } else {
         ""
@@ -1571,12 +1659,15 @@ fn write_page_server_entry(
     };
     let body = format!(
         r#"import renderPage from "{source}";
-{react_adapter_import}{react_adapter_renderer}{PAGE_PROPS_HELPERS}
+{layout_imports}{react_adapter_import}{react_adapter_renderer}{PAGE_PROPS_HELPERS}
+{layout_application}
 async function renderPageOutput(request) {{
   if (typeof renderPage !== "function") {{
     throw new TypeError("Zap page module must export a default function");
   }}
-  return await renderPage(zapPageProps(request));
+  const props = zapPageProps(request);
+  const page = await renderPage(props);
+  return await applyZapLayouts(page, props);
 }}
 
 export async function render(request) {{
@@ -1594,6 +1685,7 @@ fn write_page_flight_entry(
     app_root: &Path,
     module: &ModuleRef,
     source_entry: &Path,
+    layouts: &[LayoutRef],
     client_references: &[ClientReference],
 ) -> Result<PathBuf> {
     let entry = absolute(root, out_dir)
@@ -1613,7 +1705,9 @@ fn write_page_flight_entry(
             )
         })?);
     let source = js_string(&shadow_entry.to_string_lossy());
-    let uses_jsx = page_source_uses_jsx(source_entry)?;
+    let layout_imports = layout_imports(&flight_source, layouts);
+    let layout_application = layout_application(layouts);
+    let uses_jsx = page_or_layouts_use_jsx(app_root, source_entry, layouts)?;
     let flight_import = if uses_jsx {
         "import { renderToReadableStream as renderToFlightReadableStream } from \"react-server-dom-webpack/server.edge\";\n"
     } else {
@@ -1661,12 +1755,15 @@ async function defaultZapFlight(request) {
     };
     let body = format!(
         r#"{flight_import}import renderPage from "{source}";
-{PAGE_PROPS_HELPERS}
+{layout_imports}{PAGE_PROPS_HELPERS}
+{layout_application}
 async function renderPageOutput(request) {{
   if (typeof renderPage !== "function") {{
     throw new TypeError("Zap page module must export a default function");
   }}
-  return await renderPage(zapPageProps(request));
+  const props = zapPageProps(request);
+  const page = await renderPage(props);
+  return await applyZapLayouts(page, props);
 }}
 
 {default_flight}
@@ -4299,6 +4396,18 @@ export default function Page(){ return 'Zap'; }"
         fs::create_dir_all(app.join("api/ping")).unwrap();
         fs::create_dir_all(app.join("shop/[id]")).unwrap();
         fs::write(
+            app.join("layout.tsx"),
+            r#"export default function RootLayout({ children }){ return <section data-layout="root">{children}</section>; }
+"#,
+        )
+        .unwrap();
+        fs::write(
+            app.join("shop/layout.tsx"),
+            r#"export default function ShopLayout({ children }){ return <article data-layout="shop">{children}</article>; }
+"#,
+        )
+        .unwrap();
+        fs::write(
             app.join("page.tsx"),
             "import { Counter } from './client';
 export const dynamic = 'force-dynamic';
@@ -4379,7 +4488,7 @@ export const Label = 'count';
         assert_eq!(deployment["routes"], 4);
         assert_eq!(deployment["actions"], 1);
         assert_eq!(deployment["client_references"], 2);
-        assert_eq!(deployment["server_bundles"].as_array().unwrap().len(), 7);
+        assert_eq!(deployment["server_bundles"].as_array().unwrap().len(), 9);
         assert!(deployment["server_bundles"].as_array().unwrap().iter().any(
             |entry| entry["module"] == "actions"
                 && entry["kind"] == "server-actions"
@@ -4448,7 +4557,7 @@ export const Label = 'count';
             .iter()
             .filter(|bundle| bundle.target == BuiltBundleTarget::Browser)
             .count();
-        assert_eq!(server_outputs, 7);
+        assert_eq!(server_outputs, 9);
         assert_eq!(browser_outputs, 3);
         let page_bundle = temp.path().join(".zap/server/page.js");
         let page_hydration_bundle = temp.path().join(".zap/browser/page.hydrate.js");
@@ -4492,14 +4601,15 @@ export const Label = 'count';
         assert!(page_hydration_source.contains(r#"document.getElementById("__zap_root")"#));
         assert!(!page_hydration_source.contains("import renderPage"));
         assert!(!page_hydration_source.contains("zapHydrationPageProps"));
-        let page_hydration_entry_source = fs::read_to_string(
-            temp.path().join(".zap/entries/browser/page.hydrate.js"),
-        )
-        .unwrap();
+        let page_hydration_entry_source =
+            fs::read_to_string(temp.path().join(".zap/entries/browser/page.hydrate.js")).unwrap();
         assert!(page_hydration_entry_source.contains("ZapClient0"));
         assert!(page_hydration_entry_source.contains("zapStaticClientRefs"));
         assert!(page_hydration_entry_source.contains("/app/client.tsx"));
-        assert!(page_hydration_entry_source.contains(r#"headers: { accept: "text/x-component", rsc: "1" }"#));
+        assert!(
+            page_hydration_entry_source
+                .contains(r#"headers: { accept: "text/x-component", rsc: "1" }"#)
+        );
         assert!(!page_hydration_entry_source.contains("import renderPage"));
         assert!(!page_hydration_entry_source.contains(r#"from "/app/page.tsx""#));
         let browser_bootstrap_source = fs::read_to_string(&browser_bootstrap).unwrap();
@@ -4587,7 +4697,10 @@ export const Label = 'count';
             .unwrap();
         let page_renderer = Renderer::new(fs::read_to_string(page_bundle).unwrap());
         let rendered = page_renderer.render(&page_request).unwrap();
-        assert_eq!(rendered, r#"<main data-path="/">home:/1</main>"#);
+        assert_eq!(
+            rendered,
+            r#"<section data-layout="root"><main data-path="/">home:/1</main></section>"#
+        );
         let page_flight_bundle = compiled
             .module("page")
             .and_then(|module| module.flight_bundle.clone())
@@ -4598,7 +4711,7 @@ export const Label = 'count';
                 .unwrap();
         assert_eq!(
             flight,
-            r#"RSC:client#Counter:<main>home:/<client-reference id="client#Counter"></client-reference></main>"#
+            r#"RSC:client#Counter:<section><main>home:/<client-reference id="client#Counter"></client-reference></main></section>"#
         );
         let product_match = compiled.resolve("/shop/caf%C3%A9").unwrap().unwrap();
         let product_bundle = compiled
@@ -4624,7 +4737,7 @@ export const Label = 'count';
                 .unwrap();
         assert_eq!(
             product_rendered,
-            r#"<main data-id="café" data-tags="fast|rust">product:café:orange:zap js</main>"#
+            r#"<section data-layout="root"><article data-layout="shop"><main data-id="café" data-tags="fast|rust">product:café:orange:zap js</main></article></section>"#
         );
         let route_request = plan_request(&compiled, &Method::POST, "/api/echo")
             .unwrap()
