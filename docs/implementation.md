@@ -6,10 +6,10 @@ Verified October 1, 2026 for the Rust-owned foundation. This page records what i
 
 | Crate | Evidence |
 |---|---|
-| `zap-runtime` | Owns the shared application manifest schema, validates graph references, parses route patterns, builds a compiled trie, resolves manifest-backed routes, plans request targets for static assets/pages/route handlers and rejects malformed, unsafe or ambiguous URL paths. |
+| `zap-runtime` | Owns the shared application manifest schema, validates graph references, parses route patterns, builds a compiled trie, resolves manifest-backed routes, plans request targets for static assets/pages/route handlers, enforces page/asset/handler method policy and rejects malformed, unsafe or ambiguous URL paths. |
 | `zap-splice` | Implements bounded Rust-to-Rust unary invocation over Unix streams with version handshake, negotiated frame size, max in-flight admission, typed remote errors, cancellation, deadlines, disconnect cleanup and a real same-binary subprocess fixture. |
 | `zap-render` | Runs bundle-produced JavaScript in a Rust-owned QuickJS context with no process/filesystem/network APIs exposed by default. Tests cover string output, Web `ReadableStream` output, explicit Rust host calls, output limits and CPU interruption. |
-| `zap-build` | Builds the runtime-owned application manifest, writes it atomically under `.zap/manifest.json`, emits page server bundles with the `ZapRender.render` contract, emits per-export server-action IDs, skips fake server bundles for client modules and bundles graph modules through Rust Rolldown/Oxc APIs. Tests cover route/layout/action-export/client-module/asset/cache discovery, action-module export validation, ambiguous route rejection, runtime manifest loading, page server-bundle execution through `zap-render`, browser module output and graph-to-artifact emission without invoking an external JavaScript runtime. |
+| `zap-build` | Builds the runtime-owned application manifest, writes it atomically under `.zap/manifest.json`, emits page server bundles with the `ZapRender.render` contract, emits per-export server-action IDs, records exported route-handler methods, skips fake server bundles for client modules and bundles graph modules through Rust Rolldown/Oxc APIs. Tests cover route/layout/action-export/handler-method/client-module/asset/cache discovery, action-module and route-handler export validation, ambiguous route rejection, runtime manifest loading, page server-bundle execution through `zap-render`, browser module output and graph-to-artifact emission without invoking an external JavaScript runtime. |
 
 ## Commands run
 
@@ -22,7 +22,7 @@ Results:
 - `zap-runtime`: 8 tests passed.
 - `zap-splice`: 7 tests passed, 1 ignored subprocess helper invoked by the parent test.
 - `zap-render`: 5 tests passed.
-- `zap-build`: 5 tests passed.
+- `zap-build`: 7 tests passed.
 
 ## Fozzy validation
 
@@ -53,7 +53,7 @@ The foundation still needs:
 1. real React HTML SSR and Flight through the Rust-owned renderer using production React bundles;
 2. production React graph integration that turns the runtime-owned manifest artifacts into matching Flight payloads, client references, hydration assets and executable action invocation; page server bundles now have an executable Rust-renderer contract and server action IDs are per export, but React SSR and action execution are still gates;
 3. Aegis verification for initial render, hydration, nested/dynamic navigation, pending/error boundaries and server actions;
-4. executable Rust route-handler/server-function invocation with explicit input, context, authorization and error boundaries;
+4. executable Rust route-handler/server-function invocation with explicit input, context, authorization and error boundaries; route-handler method admission is now manifest-backed, but handler execution is still a gate;
 5. optional Splice streaming with credit-based backpressure if a worker boundary needs streaming;
 6. direct native managed-deployment artifacts from the Rust build path;
 7. Rust-owned development, build, test and deploy commands;

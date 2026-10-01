@@ -430,7 +430,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
     files.sort();
 
     let mut modules = BTreeMap::<String, SourceModule>::new();
-    let mut route_sources = Vec::<(String, RouteKind)>::new();
+    let mut route_sources = Vec::<(String, RouteKind, Vec<String>)>::new();
     let mut layouts_by_dir = BTreeMap::<PathBuf, LayoutRef>::new();
     let mut action_ids = BTreeSet::<String>::new();
     let mut actions = Vec::<ActionRef>::new();
@@ -493,7 +493,22 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             _ => None,
         };
         if let Some(route_kind) = route_kind {
-            route_sources.push((id.clone(), route_kind));
+            let methods = match route_kind {
+                RouteKind::Page => vec!["GET".into(), "HEAD".into()],
+                RouteKind::Handler => route_handler_methods(&text).with_context(|| {
+                    format!(
+                        "discover route handler methods in {}",
+                        relative_path.display()
+                    )
+                })?,
+            };
+            if methods.is_empty() {
+                bail!(
+                    "route handler must export at least one HTTP method: {}",
+                    relative_path.display()
+                );
+            }
+            route_sources.push((id.clone(), route_kind, methods));
         }
         modules.insert(
             id.clone(),
@@ -507,7 +522,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
     }
 
     let mut routes = Vec::new();
-    for (id, route_kind) in route_sources {
+    for (id, route_kind, methods) in route_sources {
         let module = modules
             .get(&id)
             .with_context(|| format!("missing module for route {id}"))?;
@@ -532,6 +547,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             source: module.relative_path.clone(),
             layouts,
             module: id,
+            methods,
             cache: module.cache.clone(),
         });
     }
@@ -693,6 +709,33 @@ fn parse_cache_policy(text: &str) -> Result<CachePolicy> {
     Ok(policy)
 }
 
+fn route_handler_methods(text: &str) -> Result<Vec<String>> {
+    const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+    let mut found = BTreeSet::new();
+    for line in text.lines().map(str::trim) {
+        let Some(line) = line.strip_prefix("export ").map(str::trim_start) else {
+            continue;
+        };
+        let candidate = if let Some(rest) = line.strip_prefix("async function ") {
+            rest
+        } else if let Some(rest) = line.strip_prefix("function ") {
+            rest
+        } else if let Some(rest) = line.strip_prefix("const ") {
+            rest
+        } else {
+            continue;
+        };
+        let name = candidate
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .next()
+            .unwrap_or_default();
+        if METHODS.contains(&name) {
+            found.insert(name.to_owned());
+        }
+    }
+    Ok(found.into_iter().collect())
+}
+
 fn server_action_exports(text: &str) -> Result<Vec<String>> {
     let mut names = BTreeSet::new();
     for line in text.lines().map(str::trim) {
@@ -835,6 +878,7 @@ mod tests {
             .unwrap();
         assert_eq!(page.kind, RouteKind::Page);
         assert_eq!(page.layouts, vec!["layout", "dashboard/layout"]);
+        assert_eq!(page.methods, vec!["GET", "HEAD"]);
         assert_eq!(page.cache.dynamic, DynamicPolicy::ForceStatic);
         assert_eq!(page.cache.revalidate_seconds, Some(60));
 
@@ -844,6 +888,7 @@ mod tests {
             .find(|route| route.pattern == "/api/echo")
             .unwrap();
         assert_eq!(handler.kind, RouteKind::Handler);
+        assert_eq!(handler.methods, vec!["POST"]);
 
         let client = graph
             .modules
@@ -887,6 +932,27 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("ambiguous route patterns"), "{error}");
+    }
+
+    #[test]
+    fn route_handlers_must_export_http_methods() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app/api/empty");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            app.join("route.ts"),
+            "export function helper(){}
+",
+        )
+        .unwrap();
+
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("must export at least one HTTP method"),
+            "{error}"
+        );
     }
 
     #[test]

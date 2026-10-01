@@ -74,6 +74,7 @@ pub struct RouteEntry {
     pub source: PathBuf,
     pub layouts: Vec<String>,
     pub module: String,
+    pub methods: Vec<String>,
     pub cache: CachePolicy,
 }
 
@@ -135,6 +136,8 @@ pub enum ManifestError {
     DuplicateAsset(String),
     #[error("asset URL path must be absolute and safe: {0}")]
     InvalidAssetPath(String),
+    #[error("route {route} has invalid method set")]
+    InvalidRouteMethods { route: String },
 }
 
 #[derive(Debug)]
@@ -243,6 +246,11 @@ impl CompiledManifest {
                     module: module.id.clone(),
                 });
             }
+            if !is_valid_route_methods(route) {
+                return Err(ManifestError::InvalidRouteMethods {
+                    route: route.id.clone(),
+                });
+            }
             for layout in &route.layouts {
                 if !layouts.contains_key(layout) {
                     return Err(ManifestError::MissingLayout {
@@ -311,6 +319,27 @@ impl CompiledManifest {
     }
 }
 
+fn is_valid_route_methods(route: &RouteEntry) -> bool {
+    if route.methods.is_empty() {
+        return false;
+    }
+    let mut seen = BTreeSet::new();
+    for method in &route.methods {
+        if method.is_empty()
+            || !method
+                .chars()
+                .all(|character| character.is_ascii_uppercase())
+            || !seen.insert(method)
+        {
+            return false;
+        }
+    }
+    match route.kind {
+        RouteKind::Page => route.methods == ["GET", "HEAD"],
+        RouteKind::Handler => true,
+    }
+}
+
 fn is_safe_asset_url(path: &str) -> bool {
     path.starts_with('/')
         && !path.is_empty()
@@ -336,6 +365,7 @@ mod tests {
                 source: PathBuf::from("shop/[id]/page.tsx"),
                 layouts: vec!["layout".into()],
                 module: "shop/_id_/page".into(),
+                methods: vec!["GET".into(), "HEAD".into()],
                 cache: CachePolicy::default(),
             }],
             layouts: vec![LayoutRef {

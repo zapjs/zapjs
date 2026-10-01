@@ -19,7 +19,7 @@ pub enum RequestTarget<'a> {
     },
     NotFound,
     MethodNotAllowed {
-        allowed: &'static [Method],
+        allowed: Vec<Method>,
     },
 }
 
@@ -44,7 +44,7 @@ pub fn plan_request<'a>(
     if let Some(asset) = manifest.asset(path) {
         if !ASSET_METHODS.contains(method) {
             return Ok(RequestTarget::MethodNotAllowed {
-                allowed: ASSET_METHODS,
+                allowed: ASSET_METHODS.to_vec(),
             });
         }
         return Ok(RequestTarget::StaticAsset(asset));
@@ -58,7 +58,7 @@ pub fn plan_request<'a>(
         RouteKind::Page => {
             if !PAGE_METHODS.contains(method) {
                 return Ok(RequestTarget::MethodNotAllowed {
-                    allowed: PAGE_METHODS,
+                    allowed: PAGE_METHODS.to_vec(),
                 });
             }
             Ok(RequestTarget::Page {
@@ -66,11 +66,25 @@ pub fn plan_request<'a>(
                 params: matched.params,
             })
         }
-        RouteKind::Handler => Ok(RequestTarget::RouteHandler {
-            route: matched.route,
-            params: matched.params,
-        }),
+        RouteKind::Handler => {
+            let allowed = allowed_methods(matched.route);
+            if !allowed.contains(method) {
+                return Ok(RequestTarget::MethodNotAllowed { allowed });
+            }
+            Ok(RequestTarget::RouteHandler {
+                route: matched.route,
+                params: matched.params,
+            })
+        }
     }
+}
+
+fn allowed_methods(route: &RouteEntry) -> Vec<Method> {
+    route
+        .methods
+        .iter()
+        .filter_map(|method| Method::from_bytes(method.as_bytes()).ok())
+        .collect()
 }
 
 fn request_path(path: &str) -> Option<&str> {
@@ -99,6 +113,7 @@ mod tests {
                     source: PathBuf::from("shop/[id]/page.tsx"),
                     layouts: vec!["layout".into()],
                     module: "page".into(),
+                    methods: vec!["GET".into(), "HEAD".into()],
                     cache: CachePolicy::default(),
                 },
                 RouteEntry {
@@ -108,6 +123,7 @@ mod tests {
                     source: PathBuf::from("api/echo/route.ts"),
                     layouts: Vec::new(),
                     module: "handler".into(),
+                    methods: vec!["POST".into()],
                     cache: CachePolicy::default(),
                 },
             ],
@@ -176,11 +192,19 @@ mod tests {
     fn rejects_methods_and_unsafe_paths_before_dispatch() {
         let manifest = compiled();
         match plan_request(&manifest, &Method::POST, "/shop/1").unwrap() {
-            RequestTarget::MethodNotAllowed { allowed } => assert_eq!(allowed, PAGE_METHODS),
+            RequestTarget::MethodNotAllowed { allowed } => {
+                assert_eq!(allowed, PAGE_METHODS.to_vec())
+            }
             target => panic!("unexpected target: {target:?}"),
         }
         match plan_request(&manifest, &Method::DELETE, "/images/logo.svg").unwrap() {
-            RequestTarget::MethodNotAllowed { allowed } => assert_eq!(allowed, ASSET_METHODS),
+            RequestTarget::MethodNotAllowed { allowed } => {
+                assert_eq!(allowed, ASSET_METHODS.to_vec())
+            }
+            target => panic!("unexpected target: {target:?}"),
+        }
+        match plan_request(&manifest, &Method::GET, "/api/echo").unwrap() {
+            RequestTarget::MethodNotAllowed { allowed } => assert_eq!(allowed, vec![Method::POST]),
             target => panic!("unexpected target: {target:?}"),
         }
         assert!(plan_request(&manifest, &Method::GET, "/shop/%").is_err());
