@@ -32,9 +32,9 @@ The first Rust-only foundation crates are now present under `crates/`:
 - `zap-runtime` covers route parsing, trie lookup and unsafe path rejection.
 - `zap-splice` restores Splice as a bounded Rust transport with tested deadlines, cancellation, frame limits, crash cleanup and subprocess behavior.
 - `zap-render` runs JavaScript bundles inside a Rust-owned QuickJS context with stream consumption, explicit host calls, output limits and CPU interruption.
-- `zap-build` compiles TSX through Rust Rolldown/Oxc APIs for server IIFE and browser module targets.
+- `zap-build` discovers the application graph, writes `.zap/manifest.json` and compiles TSX through Rust Rolldown/Oxc APIs for server IIFE and browser module targets.
 
-These crates are foundation evidence only. The build crate now proves typed graph discovery, but the workspace does not yet prove full React Server Components, hydration/navigation, server-action execution, managed deployment or the landing site. The exact test and Fozzy evidence is recorded in [`../implementation.md`](../implementation.md).
+These crates are foundation evidence only. The build crate now proves typed graph discovery, atomic manifest emission and graph module bundling, but the workspace does not yet prove full React Server Components, hydration/navigation, server-action execution, managed deployment or the landing site. The exact test and Fozzy evidence is recorded in [`../implementation.md`](../implementation.md).
 
 ## Splice history
 

@@ -9,7 +9,7 @@ Verified September 30, 2026 for the Rust-owned foundation. This page records wha
 | `zap-runtime` | Parses route patterns, builds a compiled trie, enforces static/param/catch-all precedence and rejects malformed, unsafe or ambiguous URL paths. |
 | `zap-splice` | Implements bounded Rust-to-Rust unary invocation over Unix streams with version handshake, negotiated frame size, max in-flight admission, typed remote errors, cancellation, deadlines, disconnect cleanup and a real same-binary subprocess fixture. |
 | `zap-render` | Runs bundle-produced JavaScript in a Rust-owned QuickJS context with no process/filesystem/network APIs exposed by default. Tests cover string output, Web `ReadableStream` output, explicit Rust host calls, output limits and CPU interruption. |
-| `zap-build` | Builds the first Rust-owned application graph manifest and bundles TypeScript/TSX through Rust libraries using Rolldown/Oxc. Tests cover route/layout/action/client-module/asset/cache discovery, ambiguous route rejection, server IIFE output and browser module output from TSX fixtures without invoking an external JavaScript runtime. |
+| `zap-build` | Builds the first Rust-owned application graph manifest, writes it atomically under `.zap/manifest.json` and bundles graph modules through Rust Rolldown/Oxc APIs. Tests cover route/layout/action/client-module/asset/cache discovery, ambiguous route rejection, server IIFE output, browser module output and graph-to-artifact emission without invoking an external JavaScript runtime. |
 
 ## Commands run
 
@@ -22,7 +22,7 @@ Results:
 - `zap-runtime`: 3 tests passed.
 - `zap-splice`: 7 tests passed, 1 ignored subprocess helper invoked by the parent test.
 - `zap-render`: 5 tests passed.
-- `zap-build`: 4 tests passed.
+- `zap-build`: 5 tests passed.
 
 ## Fozzy validation
 
@@ -51,7 +51,7 @@ The host run, trace verification, replay and CI all passed. The recorded trace r
 The foundation still needs:
 
 1. real React HTML SSR and Flight through the Rust-owned renderer using production React bundles;
-2. complete graph-to-bundle integration that turns the new Rust manifest into matching React server bundles, browser chunks, client references and action IDs;
+2. production React graph integration that turns the Rust manifest artifacts into matching Flight payloads, client references, hydration assets and executable action IDs;
 3. Aegis verification for initial render, hydration, nested/dynamic navigation, pending/error boundaries and server actions;
 4. Rust-owned route handlers/server functions with explicit input, context, authorization and error boundaries;
 5. optional Splice streaming with credit-based backpressure if a worker boundary needs streaming;

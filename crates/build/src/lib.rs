@@ -6,6 +6,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -287,6 +288,142 @@ impl GraphOptions {
             out_dir: PathBuf::from(".zap"),
         }
     }
+
+    pub fn manifest_path(&self) -> PathBuf {
+        self.out_dir.join("manifest.json")
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ApplicationBuildOptions {
+    pub graph: GraphOptions,
+    pub aliases: Vec<(String, String)>,
+    pub server_conditions: Vec<String>,
+    pub browser_conditions: Vec<String>,
+    pub minify: bool,
+}
+
+impl ApplicationBuildOptions {
+    pub fn new(root: &Path) -> Self {
+        Self {
+            graph: GraphOptions::new(root),
+            aliases: Vec::new(),
+            server_conditions: Vec::new(),
+            browser_conditions: Vec::new(),
+            minify: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BuiltBundleTarget {
+    Server,
+    Browser,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuiltBundle {
+    pub module: String,
+    pub target: BuiltBundleTarget,
+    pub output: PathBuf,
+    pub files: Vec<PathBuf>,
+    pub bytes: usize,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ApplicationBuildOutput {
+    pub graph: ApplicationGraph,
+    pub manifest: PathBuf,
+    pub bundles: Vec<BuiltBundle>,
+}
+
+pub async fn build_application(
+    options: &ApplicationBuildOptions,
+) -> Result<ApplicationBuildOutput> {
+    let graph = build_application_graph(&options.graph)?;
+    let root = options
+        .graph
+        .root
+        .canonicalize()
+        .context("resolve application root")?;
+    let app_root = absolute(&root, &options.graph.app_dir);
+    let mut bundles = Vec::new();
+
+    for module in &graph.modules {
+        let entry = app_root.join(&module.path);
+        let output = absolute(&root, &module.server_bundle);
+        let mut bundle_options = BundleOptions::new(
+            &root,
+            &entry,
+            &output,
+            Target::Server {
+                global: bundle_global(&module.id),
+            },
+        );
+        bundle_options.aliases = options.aliases.clone();
+        bundle_options.conditions = options.server_conditions.clone();
+        bundle_options.minify = options.minify;
+        let built = bundle(&bundle_options)
+            .await
+            .with_context(|| format!("build server bundle for module {}", module.path.display()))?;
+        bundles.push(BuiltBundle {
+            module: module.id.clone(),
+            target: BuiltBundleTarget::Server,
+            output,
+            files: built.files,
+            bytes: built.bytes,
+            warnings: built.warnings,
+        });
+
+        if let Some(browser_chunk) = &module.browser_chunk {
+            let output = absolute(&root, browser_chunk);
+            let mut bundle_options = BundleOptions::new(&root, &entry, &output, Target::Browser);
+            bundle_options.aliases = options.aliases.clone();
+            bundle_options.conditions = options.browser_conditions.clone();
+            bundle_options.minify = options.minify;
+            let built = bundle(&bundle_options).await.with_context(|| {
+                format!("build browser bundle for module {}", module.path.display())
+            })?;
+            bundles.push(BuiltBundle {
+                module: module.id.clone(),
+                target: BuiltBundleTarget::Browser,
+                output,
+                files: built.files,
+                bytes: built.bytes,
+                warnings: built.warnings,
+            });
+        }
+    }
+
+    let manifest = absolute(&root, &options.graph.manifest_path());
+    write_manifest_atomically(&graph, &manifest)?;
+    Ok(ApplicationBuildOutput {
+        graph,
+        manifest,
+        bundles,
+    })
+}
+
+pub fn write_manifest_atomically(graph: &ApplicationGraph, path: &Path) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("application manifest needs a parent directory")?;
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let temporary = path.with_extension("json.tmp");
+    {
+        let mut file = fs::File::create(&temporary)
+            .with_context(|| format!("create {}", temporary.display()))?;
+        file.write_all(graph.to_manifest_json()?.as_bytes())
+            .with_context(|| format!("write {}", temporary.display()))?;
+        file.write_all(b"\n")
+            .with_context(|| format!("finish {}", temporary.display()))?;
+        file.sync_all()
+            .with_context(|| format!("sync {}", temporary.display()))?;
+    }
+    fs::rename(&temporary, path)
+        .with_context(|| format!("replace {} with {}", path.display(), temporary.display()))?;
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -578,6 +715,19 @@ fn stable_action_id(path: &Path) -> String {
     format!("action:{}", module_id(path))
 }
 
+fn bundle_global(module_id: &str) -> String {
+    let mut global = String::from("ZapModule_");
+    for value in module_id.bytes() {
+        let character = value as char;
+        if character.is_ascii_alphanumeric() || character == '_' {
+            global.push(character);
+        } else {
+            global.push('_');
+        }
+    }
+    global
+}
+
 fn discover_assets(public_root: &Path) -> Result<Vec<AssetRef>> {
     let mut files = Vec::new();
     collect_files(public_root, &mut files)?;
@@ -727,6 +877,53 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("ambiguous route patterns"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn build_application_writes_manifest_and_bundles_graph_outputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            app.join("page.tsx"),
+            "export const dynamic = 'force-dynamic';
+export default function Page(){ return 'home'; }
+",
+        )
+        .unwrap();
+        fs::write(
+            app.join("client.tsx"),
+            "'use client';
+export function Counter(){ return '1'; }
+",
+        )
+        .unwrap();
+
+        let mut options = ApplicationBuildOptions::new(temp.path());
+        options.minify = false;
+        let output = build_application(&options).await.unwrap();
+
+        assert!(output.manifest.ends_with(Path::new(".zap/manifest.json")));
+        assert!(output.manifest.is_file());
+        let manifest = fs::read_to_string(&output.manifest).unwrap();
+        assert!(manifest.contains("ForceDynamic"));
+        assert!(manifest.contains(".zap/server/page.js"));
+
+        let server_outputs = output
+            .bundles
+            .iter()
+            .filter(|bundle| bundle.target == BuiltBundleTarget::Server)
+            .count();
+        let browser_outputs = output
+            .bundles
+            .iter()
+            .filter(|bundle| bundle.target == BuiltBundleTarget::Browser)
+            .count();
+        assert_eq!(server_outputs, output.graph.modules.len());
+        assert_eq!(browser_outputs, 1);
+        assert!(temp.path().join(".zap/server/page.js").is_file());
+        assert!(temp.path().join(".zap/server/client.js").is_file());
+        assert!(temp.path().join(".zap/browser/client.js").is_file());
     }
 
     #[tokio::test]
