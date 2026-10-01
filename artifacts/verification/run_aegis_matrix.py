@@ -11,14 +11,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import random
 import shutil
 import socket
 import subprocess
-import sys
 import tempfile
 import time
-import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -157,8 +154,11 @@ def wait_eval(addr: str, code: str, label: str, timeout: float = 8.0) -> Any:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="artifacts/verification/aegis-matrix-latest.json")
+    parser.add_argument("--cycles", type=int, default=3, help="navigation/action cycles to run through shop and docs before the final failing route")
     parser.add_argument("--keep-temp", action="store_true")
     args = parser.parse_args()
+    if args.cycles < 1:
+        raise SystemExit("--cycles must be at least 1")
 
     if not AEGIS.exists():
         raise SystemExit(f"Aegis CLI not found at {AEGIS}")
@@ -200,16 +200,17 @@ def main() -> int:
         assert_eval(aegis_addr, "document.querySelector('[data-root-action]').click(); '__ZAP_ASSERT_OK__';", "click root action")
         wait_eval(aegis_addr, "if (!document.body.innerText.includes('saved:root:10')) throw new Error(document.body.innerText);", "root action response")
 
-        assert_eval(aegis_addr, "document.querySelector('#to-shop').click(); '__ZAP_ASSERT_OK__';", "click shop link")
-        wait_eval(aegis_addr, "if (!(location.pathname === '/shop/cafe' && document.body.innerText.includes('Product cafe') && document.body.innerText.includes('Color blue'))) throw new Error(location.href + ' :: ' + document.body.innerText);", "shop navigation")
-        wait_eval(aegis_addr, "if (!(document.querySelector('[data-shop-action]') && document.querySelector('[data-product-action]'))) throw new Error(document.body.innerHTML);", "shop hydrated controls present")
-        assert_eval(aegis_addr, "document.querySelector('[data-shop-action]').click(); document.querySelector('[data-product-action]').click(); '__ZAP_ASSERT_OK__';", "click nested actions")
-        wait_eval(aegis_addr, "if (!(document.body.innerText.includes('saved:shop:20') && document.body.innerText.includes('saved:product:30'))) throw new Error(document.body.innerText);", "nested action responses")
+        for cycle in range(1, args.cycles + 1):
+            assert_eval(aegis_addr, "document.querySelector('#to-shop').click();", f"cycle {cycle}: click shop link")
+            wait_eval(aegis_addr, "if (!(location.pathname === '/shop/cafe' && document.body.innerText.includes('Product cafe') && document.body.innerText.includes('Color blue'))) throw new Error(location.href + ' :: ' + document.body.innerText);", f"cycle {cycle}: shop navigation")
+            wait_eval(aegis_addr, "if (!(document.querySelector('[data-shop-action]') && document.querySelector('[data-product-action]'))) throw new Error(document.body.innerHTML);", f"cycle {cycle}: shop hydrated controls present")
+            assert_eval(aegis_addr, "document.querySelector('[data-shop-action]').click(); document.querySelector('[data-product-action]').click();", f"cycle {cycle}: click nested actions")
+            wait_eval(aegis_addr, "if (!(document.body.innerText.includes('saved:shop:20') && document.body.innerText.includes('saved:product:30'))) throw new Error(document.body.innerText);", f"cycle {cycle}: nested action responses")
 
-        assert_eval(aegis_addr, "document.querySelector('#to-docs').click(); '__ZAP_ASSERT_OK__';", "click docs link")
-        wait_eval(aegis_addr, "if (!(location.pathname === '/docs/a/b/c' && document.body.innerText.includes('docs:a/b/c:view:full'))) throw new Error(location.href + ' :: ' + document.body.innerText);", "docs catch-all navigation")
+            assert_eval(aegis_addr, "document.querySelector('#to-docs').click();", f"cycle {cycle}: click docs link")
+            wait_eval(aegis_addr, "if (!(location.pathname === '/docs/a/b/c' && document.body.innerText.includes('docs:a/b/c:view:full'))) throw new Error(location.href + ' :: ' + document.body.innerText);", f"cycle {cycle}: docs catch-all navigation")
 
-        assert_eval(aegis_addr, "document.querySelector('#to-broken').click(); '__ZAP_ASSERT_OK__';", "click broken link")
+        assert_eval(aegis_addr, "document.querySelector('#to-broken').click();", "click broken link")
         wait_eval(aegis_addr, "if (!(window.__zap_states || []).some(s => s && s.state === 'error')) throw new Error(JSON.stringify(window.__zap_states || []));", "error navigation state")
 
         snapshot = api(aegis_addr, "GET", "/page")
@@ -220,15 +221,16 @@ def main() -> int:
             "date": time.strftime("%Y-%m-%d"),
             "fixture_root": str(work),
             "serve_url": serve_url,
+            "cycles": args.cycles,
             "aegis": detach_json,
             "validated": [
                 "Rust zap build emitted a React graph fixture without invoking a JavaScript runtime",
                 "Aegis loaded the app through zap serve",
                 "initial page hydration ran through the generated hydrateRoot bundle",
                 "browser action proxy posted a root action to /_zap/action and rendered the response",
-                "same-origin navigation reached a nested dynamic route with decoded query data",
-                "layout and page client references hydrated after navigation and invoked server actions",
-                "catch-all navigation rendered decoded params and query data",
+                f"same-origin navigation reached a nested dynamic route with decoded query data across {args.cycles} cycle(s)",
+                f"layout and page client references hydrated after navigation and invoked server actions across {args.cycles} cycle(s)",
+                f"catch-all navigation rendered decoded params and query data across {args.cycles} cycle(s)",
                 "failed navigation emitted an error navigation state through the Rust-generated bootstrap",
             ],
             "page_snapshot": snapshot,
