@@ -70,6 +70,7 @@ struct DeployCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DeployTarget {
     LocalPackage,
+    ManagedNative,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,21 +208,21 @@ fn run_serve(command: ServeCommand) -> Result<()> {
 }
 
 async fn run_deploy(command: DeployCommand) -> Result<()> {
+    let mut options = ApplicationBuildOptions::new(&command.graph.root);
+    apply_graph_options(&mut options.graph, command.graph.clone());
+    options.minify = command.minify;
+    let output = zap_build::build_application(&options)
+        .await
+        .with_context(|| {
+            format!(
+                "build ZapJS deployment artifacts at {}",
+                options.graph.root.display()
+            )
+        })?;
+    print_build_summary(&output);
+
     match command.target {
         DeployTarget::LocalPackage => {
-            let mut options = ApplicationBuildOptions::new(&command.graph.root);
-            apply_graph_options(&mut options.graph, command.graph.clone());
-            options.minify = command.minify;
-            let output = zap_build::build_application(&options)
-                .await
-                .with_context(|| {
-                    format!(
-                        "build ZapJS deployment artifacts at {}",
-                        options.graph.root.display()
-                    )
-                })?;
-            print_build_summary(&output);
-
             let package_dir = command
                 .out_dir
                 .clone()
@@ -232,18 +233,103 @@ async fn run_deploy(command: DeployCommand) -> Result<()> {
                 public_dir: command.graph.public_dir,
                 out_dir: Some(package_dir.clone()),
             })?;
-            let manifest = package_dir.join(".zap/manifest.json");
-            ApplicationExecutor::load_from(&package_dir, &manifest).with_context(|| {
-                format!(
-                    "verify local-package deployment at {}",
-                    package_dir.display()
-                )
-            })?;
+            verify_executor_root(&package_dir, "local-package")?;
             println!("deploy_target=local-package");
             println!("deploy_root={}", package_dir.display());
             Ok(())
         }
+        DeployTarget::ManagedNative => {
+            let deploy_dir = command
+                .out_dir
+                .clone()
+                .unwrap_or_else(|| command.graph.root.join(".zap/deploy/managed-native"));
+            run_managed_native_deploy(
+                &command.graph.root,
+                &output.deployment,
+                command.graph.public_dir,
+                &deploy_dir,
+            )?;
+            println!("deploy_target=managed-native");
+            println!("deploy_root={}", deploy_dir.display());
+            Ok(())
+        }
     }
+}
+
+fn run_managed_native_deploy(
+    root: &Path,
+    deployment_path: &Path,
+    public_dir: PublicDir,
+    deploy_dir: &Path,
+) -> Result<()> {
+    let function_root = deploy_dir.join("function");
+    let static_root = deploy_dir.join("static");
+    run_package(PackageCommand {
+        root: root.to_owned(),
+        deployment: Some(deployment_path.to_owned()),
+        public_dir: public_dir.clone(),
+        out_dir: Some(function_root.clone()),
+    })?;
+
+    let deployment = read_deployment_manifest(deployment_path)
+        .with_context(|| format!("read deployment manifest at {}", deployment_path.display()))?;
+    fs::create_dir_all(&static_root)
+        .with_context(|| format!("create static deployment root at {}", static_root.display()))?;
+    for asset in &deployment.browser_assets {
+        copy_relative_file(root, &static_root, asset, "browser asset")?;
+    }
+    let public_root = match &public_dir {
+        PublicDir::Default => root.join("public"),
+        PublicDir::Path(path) => path.clone(),
+        PublicDir::Disabled => root.join(".zap/no-public"),
+    };
+    for asset in &deployment.static_assets {
+        copy_relative_file(&public_root, &static_root, asset, "static asset")?;
+    }
+
+    let managed_manifest = serde_json::json!({
+        "schema": "zap.managed-native.v1",
+        "entrypoint": {
+            "kind": "rust-function",
+            "root": "function",
+            "manifest": "function/.zap/manifest.json",
+            "action_endpoint": deployment.action_endpoint,
+        },
+        "static": {
+            "root": "static",
+            "browser_assets": deployment.browser_assets,
+            "static_assets": deployment.static_assets,
+        },
+        "function": {
+            "deployment": "function/.zap/deployment.json",
+            "package": "function/.zap/package.json",
+            "server_bundles": deployment.server_bundles,
+        }
+    });
+    let managed_manifest_path = deploy_dir.join("zap.managed-native.json");
+    fs::write(
+        &managed_manifest_path,
+        serde_json::to_vec_pretty(&managed_manifest)?,
+    )
+    .with_context(|| {
+        format!(
+            "write managed-native manifest at {}",
+            managed_manifest_path.display()
+        )
+    })?;
+
+    verify_executor_root(&function_root, "managed-native function")?;
+    println!("managed_manifest={}", managed_manifest_path.display());
+    println!("function_root={}", function_root.display());
+    println!("static_root={}", static_root.display());
+    Ok(())
+}
+
+fn verify_executor_root(root: &Path, label: &str) -> Result<()> {
+    let manifest = root.join(".zap/manifest.json");
+    ApplicationExecutor::load_from(root, &manifest)
+        .with_context(|| format!("verify {label} deployment at {}", root.display()))?;
+    Ok(())
 }
 
 fn run_package(command: PackageCommand) -> Result<()> {
@@ -571,6 +657,7 @@ fn parse_deploy(args: impl IntoIterator<Item = OsString>) -> Result<DeployComman
                 let target = next_value(&mut args, "--target")?;
                 command.target = match target.as_str() {
                     "local-package" => DeployTarget::LocalPackage,
+                    "managed-native" => DeployTarget::ManagedNative,
                     other => bail!("unsupported deploy target `{other}`"),
                 };
             }
@@ -968,6 +1055,29 @@ mod tests {
     }
 
     #[test]
+    fn parses_managed_native_deploy_target() {
+        assert_eq!(
+            parse_command(os_args(&[
+                "zap",
+                "deploy",
+                "--target",
+                "managed-native",
+                "--root",
+                "/tmp/app",
+            ]))
+            .unwrap(),
+            Command::Deploy(DeployCommand {
+                graph: GraphCommand {
+                    root: PathBuf::from("/tmp/app"),
+                    ..GraphCommand::default()
+                },
+                target: DeployTarget::ManagedNative,
+                ..DeployCommand::default()
+            })
+        );
+    }
+
+    #[test]
     fn parses_explicit_serve_paths() {
         assert_eq!(
             parse_command(os_args(&[
@@ -1165,6 +1275,79 @@ mod tests {
                 uses_private_request_state: false,
                 context: InvocationContext {
                     request_id: Some("package-test"),
+                    authenticated: true,
+                    deadline_ms: Some(30_000),
+                },
+            })
+            .unwrap();
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(
+            String::from_utf8(response.body).unwrap(),
+            "echo:POST:/api/echo"
+        );
+    }
+
+    #[tokio::test]
+    async fn deploy_command_builds_managed_native_artifacts() {
+        let temp = minimal_app();
+        let public = temp.path().join("public");
+        std::fs::create_dir_all(&public).unwrap();
+        std::fs::write(public.join("logo.txt"), "zap").unwrap();
+        let deploy_dir = temp.path().join("dist/managed");
+
+        run_deploy(DeployCommand {
+            graph: GraphCommand {
+                root: temp.path().to_owned(),
+                public_dir: PublicDir::Default,
+                ..GraphCommand::default()
+            },
+            target: DeployTarget::ManagedNative,
+            out_dir: Some(deploy_dir.clone()),
+            minify: false,
+        })
+        .await
+        .unwrap();
+
+        assert!(deploy_dir.join("zap.managed-native.json").is_file());
+        assert!(deploy_dir.join("function/.zap/package.json").is_file());
+        assert!(deploy_dir.join("function/.zap/manifest.json").is_file());
+        assert!(
+            deploy_dir
+                .join("function/.zap/server/api/echo/route.js")
+                .is_file()
+        );
+        assert!(deploy_dir.join("static/logo.txt").is_file());
+
+        let managed_manifest: Value = serde_json::from_str(
+            &std::fs::read_to_string(deploy_dir.join("zap.managed-native.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(managed_manifest["schema"], "zap.managed-native.v1");
+        assert_eq!(managed_manifest["entrypoint"]["kind"], "rust-function");
+        assert_eq!(
+            managed_manifest["entrypoint"]["manifest"],
+            "function/.zap/manifest.json"
+        );
+        assert_eq!(managed_manifest["static"]["root"], "static");
+        assert!(
+            managed_manifest["function"]["server_bundles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry == ".zap/server/api/echo/route.js")
+        );
+
+        let executor = ApplicationExecutor::load(&deploy_dir.join("function")).unwrap();
+        let response = executor
+            .execute_request(&RequestExecutionInput {
+                method: &Method::POST,
+                path: "/api/echo",
+                headers: Vec::new(),
+                body: Vec::new(),
+                declared_body_bytes: Some(0),
+                uses_private_request_state: false,
+                context: InvocationContext {
+                    request_id: Some("managed-native-test"),
                     authenticated: true,
                     deadline_ms: Some(30_000),
                 },

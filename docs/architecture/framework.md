@@ -97,7 +97,7 @@ The current Rust layer includes:
 - `zap-render`: Rust-owned QuickJS execution with Web Stream, route/action `Response` support, response status/header validation, typed execution failures, explicit host calls, output limits and CPU interruption.
 - `zap-execute`: Rust artifact execution that composes manifest loading, runtime admission, execution context policy, application authorization hooks, static asset reads and page/route/action bundle execution without introducing a separate service.
 - `zap-build`: Rust-only TSX bundling through Rolldown/Oxc for server IIFE and browser module outputs, typed callable export discovery for actions and route handlers plus typed local named export-list cache metadata discovery, re-export list exclusion until explicit graph resolution exists, GET-to-HEAD route-handler method derivation, generated GET fallback for HEAD route-handler bundles, duplicate graph module ID rejection, unsupported platform-module rejection, ambient platform-global rejection across direct, optional, literal and statically computed bracketed, probe and destructured references, static template module-specifier scanning, local type-only import/export elision, dependency-only helper/type module exclusion, non-static dynamic-import rejection, regex-literal and non-reference identifier false-positive protection and strict cache export and policy validation.
-- `zap-cli`: native `zap check`, `zap build`, `zap package`, `zap deploy --target local-package` and `zap serve` commands over the Rust graph/build/package/execution path with explicit app/public/output/deployment/manifest/address options and summaries.
+- `zap-cli`: native `zap check`, `zap build`, `zap package`, `zap deploy --target local-package`, `zap deploy --target managed-native` and `zap serve` commands over the Rust graph/build/package/execution path with explicit app/public/output/deployment/manifest/address options and summaries.
 
 This is foundation work, not a full production framework claim.
 
@@ -110,7 +110,7 @@ ZapJS can make a production claim only after these gates are executable and reco
 3. hydration metadata/bootstrap injection, initial browser hydrate-hook execution, same-origin client navigation, pending/error navigation boundaries and browser-to-Rust server actions are verified in Aegis;
 4. broader nested/dynamic navigation cases are verified in Aegis;
 5. Splice adds tested streaming only if the framework needs a streaming worker boundary;
-6. local deployment artifacts are produced and verified from the Rust deployment manifest; generic package-root materialization is present, but target-host upload/lowering still requires evidence;
+6. local and managed-native deployment artifacts are produced and verified from the Rust deployment manifest; generic package-root materialization and function/static lowering are present, but provider upload still requires evidence;
 7. the remaining development and deploy commands run through the Rust toolchain;
 8. the landing site and docs are ported after the implementation supports the claims they make.
 
