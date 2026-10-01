@@ -18,11 +18,22 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-type Reply = oneshot::Sender<Result<Bytes, Error>>;
-struct Pending {
-    reply: Reply,
+struct UnaryPending {
+    reply: oneshot::Sender<Result<Bytes, Error>>,
     _permit: OwnedSemaphorePermit,
 }
+
+struct StreamPending {
+    chunks: mpsc::Sender<Bytes>,
+    terminal: oneshot::Sender<Result<(), Error>>,
+    _permit: OwnedSemaphorePermit,
+}
+
+enum Pending {
+    Unary(UnaryPending),
+    Stream(StreamPending),
+}
+
 struct Core {
     pending: Mutex<HashMap<u64, Pending>>,
     outgoing: mpsc::Sender<Bytes>,
@@ -31,6 +42,7 @@ struct Core {
     capacity: Arc<Semaphore>,
     frame_limit: usize,
     timeout_limit: Duration,
+    stream_window: usize,
 }
 
 impl Core {
@@ -40,10 +52,28 @@ impl Core {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn finish(&self, id: u64, result: Result<Bytes, Error>) {
+    fn finish_unary(&self, id: u64, result: Result<Bytes, Error>) {
         let pending = self.pending().remove(&id);
-        if let Some(pending) = pending {
+        if let Some(Pending::Unary(pending)) = pending {
             let _ = pending.reply.send(result);
+        }
+    }
+
+    fn push_stream_chunk(&self, id: u64, chunk: Bytes) -> Result<(), Error> {
+        let pending = self.pending();
+        let Some(Pending::Stream(stream)) = pending.get(&id) else {
+            return Ok(());
+        };
+        stream
+            .chunks
+            .try_send(chunk)
+            .map_err(|_| Error::Protocol("stream credit window exceeded".into()))
+    }
+
+    fn finish_stream(&self, id: u64, result: Result<(), Error>) {
+        let pending = self.pending().remove(&id);
+        if let Some(Pending::Stream(pending)) = pending {
+            let _ = pending.terminal.send(result);
         }
     }
 
@@ -51,8 +81,22 @@ impl Core {
         self.closed.cancel();
         let pending = std::mem::take(&mut *self.pending());
         for (_, request) in pending {
-            let _ = request.reply.send(Err(error.clone()));
+            match request {
+                Pending::Unary(pending) => {
+                    let _ = pending.reply.send(Err(error.clone()));
+                }
+                Pending::Stream(pending) => {
+                    let _ = pending.terminal.send(Err(error.clone()));
+                }
+            }
         }
+    }
+
+    fn send_control(&self, message: Message) -> Result<(), Error> {
+        let frame = wire::encode(&message, self.frame_limit)?;
+        self.outgoing
+            .try_send(frame)
+            .map_err(|_| Error::Disconnected)
     }
 }
 
@@ -76,20 +120,46 @@ impl Drop for RequestGuard {
         // A terminal response already removed the entry. Call-drop and timeout remove
         // their own entry exactly once, release capacity, and notify the worker.
         let pending = self.core.pending().remove(&self.id);
-        if pending.is_some() {
-            let cancel = match wire::encode(&Message::Cancel { id: self.id }, self.core.frame_limit)
-            {
-                Ok(cancel) => cancel,
-                Err(error) => {
-                    self.core.fail(error);
-                    return;
-                }
-            };
-            if self.core.outgoing.try_send(cancel).is_err() {
-                // Never silently abandon a cancellation behind a saturated writer.
-                self.core.fail(Error::Disconnected);
-            }
+        if pending.is_some()
+            && self
+                .core
+                .send_control(Message::Cancel { id: self.id })
+                .is_err()
+        {
+            // Never silently abandon a cancellation behind a saturated writer.
+            self.core.fail(Error::Disconnected);
         }
+    }
+}
+
+pub struct StreamCall {
+    core: Arc<Core>,
+    id: u64,
+    chunks: mpsc::Receiver<Bytes>,
+    terminal: Option<oneshot::Receiver<Result<(), Error>>>,
+    deadline: tokio::time::Instant,
+    _guard: RequestGuard,
+}
+
+impl StreamCall {
+    /// Return the next response chunk. `Ok(None)` means the worker ended the stream cleanly.
+    pub async fn next(&mut self) -> Result<Option<Bytes>, Error> {
+        if let Some(chunk) = tokio::time::timeout_at(self.deadline, self.chunks.recv())
+            .await
+            .map_err(|_| Error::Deadline)?
+        {
+            self.core.send_control(Message::StreamCredit {
+                id: self.id,
+                additional: 1,
+            })?;
+            return Ok(Some(chunk));
+        }
+        let terminal = self.terminal.take().ok_or(Error::Disconnected)?;
+        tokio::time::timeout_at(self.deadline, terminal)
+            .await
+            .map_err(|_| Error::Deadline)?
+            .map_err(|_| Error::Disconnected)??;
+        Ok(None)
     }
 }
 
@@ -105,6 +175,7 @@ impl Client {
             capacity: Arc::new(Semaphore::new(config.max_in_flight)),
             frame_limit,
             timeout_limit: config.max_request_timeout,
+            stream_window: config.stream_window,
         });
         let (mut writer, mut reader) = socket.split();
         let write_core = core.clone();
@@ -138,11 +209,20 @@ impl Client {
                         frame = reader.next() => frame.ok_or(Error::Disconnected)?.map_err(Error::io)?,
                     };
                     match wire::decode(&frame)? {
-                        Message::Result { id, result } => read_core.finish(id, result.map_err(Error::Remote)),
+                        Message::Result { id, result } => {
+                            read_core.finish_unary(id, result.map_err(Error::Remote));
+                        }
+                        Message::StreamChunk { id, chunk } => {
+                            read_core.push_stream_chunk(id, chunk)?;
+                        }
+                        Message::StreamEnd { id, result } => {
+                            read_core.finish_stream(id, result.map_err(Error::Remote));
+                        }
                         _ => return Err(Error::Protocol("unexpected worker message".into())),
                     }
                 }
-            }.await;
+            }
+            .await;
             read_core.fail(result.err().unwrap_or(Error::Disconnected));
         });
         Ok(Self(Arc::new(Owner(core))))
@@ -167,12 +247,7 @@ impl Client {
             .clone()
             .try_acquire_owned()
             .map_err(|_| Error::Overloaded)?;
-        let id = core
-            .sequence
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                value.checked_add(1)
-            })
-            .map_err(|_| Error::Protocol("request ID space exhausted".into()))?;
+        let id = next_request_id(core)?;
         let message = wire::encode(
             &Message::Invoke {
                 id,
@@ -190,10 +265,10 @@ impl Client {
             }
             pending.insert(
                 id,
-                Pending {
+                Pending::Unary(UnaryPending {
                     reply,
                     _permit: permit,
-                },
+                }),
             );
         }
         let guard = RequestGuard {
@@ -201,7 +276,7 @@ impl Client {
             id,
         };
         if core.outgoing.try_send(message).is_err() {
-            core.finish(id, Err(Error::Overloaded));
+            core.finish_unary(id, Err(Error::Overloaded));
             return Err(Error::Overloaded);
         }
         let result = tokio::time::timeout_at(deadline, response)
@@ -212,8 +287,80 @@ impl Client {
         result
     }
 
+    pub async fn stream(
+        &self,
+        function: impl Into<String>,
+        payload: Bytes,
+        timeout: Duration,
+    ) -> Result<StreamCall, Error> {
+        let core = &self.0 .0;
+        if timeout.is_zero() {
+            return Err(Error::Deadline);
+        }
+        let deadline = tokio::time::Instant::now() + timeout.min(core.timeout_limit);
+        if core.closed.is_cancelled() {
+            return Err(Error::Disconnected);
+        }
+        let permit = core
+            .capacity
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Error::Overloaded)?;
+        let id = next_request_id(core)?;
+        let message = wire::encode(
+            &Message::StreamInvoke {
+                id,
+                function: function.into(),
+                payload,
+                timeout_ms: timeout.min(core.timeout_limit).as_millis().max(1) as u64,
+                initial_credit: core.stream_window as u32,
+            },
+            core.frame_limit,
+        )?;
+        let (chunks_tx, chunks_rx) = mpsc::channel(core.stream_window);
+        let (terminal_tx, terminal_rx) = oneshot::channel();
+        {
+            let mut pending = core.pending();
+            if core.closed.is_cancelled() {
+                return Err(Error::Disconnected);
+            }
+            pending.insert(
+                id,
+                Pending::Stream(StreamPending {
+                    chunks: chunks_tx,
+                    terminal: terminal_tx,
+                    _permit: permit,
+                }),
+            );
+        }
+        let guard = RequestGuard {
+            core: core.clone(),
+            id,
+        };
+        if core.outgoing.try_send(message).is_err() {
+            core.finish_stream(id, Err(Error::Overloaded));
+            return Err(Error::Overloaded);
+        }
+        Ok(StreamCall {
+            core: core.clone(),
+            id,
+            chunks: chunks_rx,
+            terminal: Some(terminal_rx),
+            deadline,
+            _guard: guard,
+        })
+    }
+
     /// Close the entire connection, including every in-flight request.
     pub fn close(&self) {
         self.0 .0.fail(Error::Disconnected);
     }
+}
+
+fn next_request_id(core: &Core) -> Result<u64, Error> {
+    core.sequence
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .map_err(|_| Error::Protocol("request ID space exhausted".into()))
 }

@@ -2,23 +2,25 @@
 //! isolation or binary replacement. Direct Rust calls remain the ordinary in-process
 //! path; this transport exists for framework-owned worker boundaries.
 //!
-//! Version 2 deliberately advertises only bounded unary invocation and cancellation.
-//! The frame contract is intentionally narrow and rejects peers that do not speak it.
-//! Handlers must be asynchronous and yield: cancellation cannot preempt blocking Rust.
+//! Version 3 advertises bounded unary invocation, cancellation and credit-based
+//! response streaming. The frame contract is intentionally narrow and rejects peers
+//! that do not speak it. Handlers must be asynchronous and yield: cancellation
+//! cannot preempt blocking Rust.
 
 mod client;
 mod server;
 mod wire;
 
-pub use client::Client;
+pub use client::{Client, StreamCall};
 use serde::{Deserialize, Serialize};
-pub use server::{serve, Invocation};
+pub use server::{serve, serve_stream, Invocation, StreamInvocation};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub max_frame_bytes: usize,
     pub max_in_flight: usize,
+    pub stream_window: usize,
     pub handshake_timeout: Duration,
     pub max_request_timeout: Duration,
 }
@@ -28,6 +30,7 @@ impl Default for Config {
         Self {
             max_frame_bytes: 1024 * 1024,
             max_in_flight: 64,
+            stream_window: 16,
             handshake_timeout: Duration::from_secs(5),
             max_request_timeout: Duration::from_secs(30),
         }
@@ -38,6 +41,7 @@ impl Config {
     fn validate(&self) -> Result<(), Error> {
         if !(512..=16 * 1024 * 1024).contains(&self.max_frame_bytes)
             || !(1..=4096).contains(&self.max_in_flight)
+            || !(1..=1024).contains(&self.stream_window)
             || self.handshake_timeout.is_zero()
             || self.max_request_timeout.is_zero()
             || self.handshake_timeout > Duration::from_secs(3600)

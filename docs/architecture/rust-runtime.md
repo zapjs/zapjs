@@ -30,7 +30,7 @@ Performance choices require measurements of the complete path: cold start, warm 
 The first Rust-only foundation crates are now present under `crates/`:
 
 - `zap-runtime` owns the shared application manifest schema, graph validation, route parsing, trie lookup, request target planning, terminal HTTP response mapping, client-reference identity validation, static asset source-path validation and unsafe path rejection.
-- `zap-splice` restores Splice as a bounded Rust transport with tested deadlines, cancellation, frame limits, crash cleanup and subprocess behavior.
+- `zap-splice` restores Splice as a bounded Rust transport with tested deadlines, cancellation, frame limits, credit-based response streaming, crash cleanup and subprocess behavior.
 - `zap-render` runs JavaScript bundles inside a Rust-owned QuickJS context with page, route-handler and server-action entrypoints, route/action `Response` status/header validation and body adaptation, typed route/action error-boundary outcomes, stream consumption, explicit host calls, output limits and CPU interruption.
 - `zap-build` discovers the application graph, writes `.zap/manifest.json`, emits page server bundles with the `ZapRender.render` contract and a generated Web-stream React SSR adapter only for JSX page entries, route-handler server bundles with the `ZapRoute.handle` contract and server-action bundles with the `ZapAction.invoke` contract, emits per-callable-export server-action IDs and per-export client-reference IDs, records route-scoped client references and hydration chunk inputs from static page/layout imports, records callable route-handler methods with GET-to-HEAD derivation and compiles TSX through Rust Rolldown/Oxc crates for server IIFE and browser module targets.
 - `zap-execute` loads the built manifest, applies runtime admission and execution context policy, runs application authorization hooks, serves static assets, executes page, route-handler and server-action bundles through the Rust renderer, injects the browser bootstrap module script and handles the generated `/_zap/action` endpoint without introducing a separate service.
@@ -39,4 +39,4 @@ These crates are foundation evidence only. The runtime crate now owns the manife
 
 ## Splice history
 
-The original Splice source is preserved in Git commit `c6b2491`. Its MessagePack framing and Rust worker boundary are relevant, but the implementation and documentation cannot be restored uncritically. The corrected implementation keeps the intended Rust boundary while testing its actual guarantees.
+The original Splice source is preserved in Git commit `c6b2491`. Its MessagePack framing and Rust worker boundary are relevant, but the implementation and documentation cannot be restored uncritically. The corrected implementation keeps the intended Rust boundary while testing its actual guarantees, including bounded unary calls and credit-based response streaming.

@@ -1,17 +1,23 @@
 use bytes::Bytes;
+use futures_util::{stream, Stream};
 use std::{
     future::Future,
+    pin::Pin,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
+    task::{Context, Poll},
     time::Duration,
 };
 use tokio::{
     net::{UnixListener, UnixStream},
     task::JoinHandle,
 };
-use zap_splice::{serve, Client, Config, Error, ErrorKind, Invocation, RemoteError};
+use zap_splice::{
+    serve, serve_stream, Client, Config, Error, ErrorKind, Invocation, RemoteError,
+    StreamInvocation,
+};
 
 async fn connection<H, F>(config: Config, handler: H) -> (Client, JoinHandle<Result<(), Error>>)
 where
@@ -21,6 +27,21 @@ where
     let (host, worker) = UnixStream::pair().unwrap();
     let server_config = config.clone();
     let server = tokio::spawn(serve(worker, server_config, handler));
+    (Client::connect(host, config).await.unwrap(), server)
+}
+
+async fn stream_connection<H, F, S>(
+    config: Config,
+    handler: H,
+) -> (Client, JoinHandle<Result<(), Error>>)
+where
+    H: Fn(StreamInvocation) -> F + Send + Sync + 'static,
+    F: Future<Output = Result<S, RemoteError>> + Send + 'static,
+    S: Stream<Item = Result<Bytes, RemoteError>> + Send + Unpin + 'static,
+{
+    let (host, worker) = UnixStream::pair().unwrap();
+    let server_config = config.clone();
+    let server = tokio::spawn(serve_stream(worker, server_config, handler));
     (Client::connect(host, config).await.unwrap(), server)
 }
 
@@ -356,4 +377,113 @@ fn subprocess_worker() {
         .await
         .unwrap();
     });
+}
+
+struct CountingStream {
+    produced: Arc<AtomicUsize>,
+    next: usize,
+    total: usize,
+}
+
+impl Stream for CountingStream {
+    type Item = Result<Bytes, RemoteError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.next >= self.total {
+            return Poll::Ready(None);
+        }
+        let value = self.next as u8;
+        self.next += 1;
+        self.produced.fetch_add(1, Ordering::SeqCst);
+        Poll::Ready(Some(Ok(Bytes::from(vec![value]))))
+    }
+}
+
+#[tokio::test]
+async fn streaming_responses_are_credit_bounded_and_release_capacity() {
+    let produced = Arc::new(AtomicUsize::new(0));
+    let handler_produced = produced.clone();
+    let (client, server) = stream_connection(
+        Config {
+            max_in_flight: 1,
+            stream_window: 2,
+            ..Config::default()
+        },
+        move |_call| {
+            let produced = handler_produced.clone();
+            async move {
+                Ok(CountingStream {
+                    produced,
+                    next: 0,
+                    total: 5,
+                })
+            }
+        },
+    )
+    .await;
+
+    let mut first = client
+        .stream("numbers", Bytes::new(), Duration::from_secs(1))
+        .await
+        .unwrap();
+    wait_count(&produced, 2).await;
+    assert!(matches!(
+        client
+            .stream("overflow", Bytes::new(), Duration::from_secs(1))
+            .await,
+        Err(Error::Overloaded)
+    ));
+
+    assert_eq!(first.next().await.unwrap().unwrap().as_ref(), &[0]);
+    wait_count(&produced, 3).await;
+    assert_eq!(first.next().await.unwrap().unwrap().as_ref(), &[1]);
+    assert_eq!(first.next().await.unwrap().unwrap().as_ref(), &[2]);
+    assert_eq!(first.next().await.unwrap().unwrap().as_ref(), &[3]);
+    assert_eq!(first.next().await.unwrap().unwrap().as_ref(), &[4]);
+    assert!(first.next().await.unwrap().is_none());
+
+    let mut second = client
+        .stream("numbers", Bytes::new(), Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert_eq!(second.next().await.unwrap().unwrap().as_ref(), &[0]);
+    drop(second);
+    drop(client);
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn streaming_errors_are_typed_and_do_not_poison_connection() {
+    let (client, server) = stream_connection(Config::default(), |call| async move {
+        if call.function == "fail" {
+            Ok(stream::iter(vec![Err(RemoteError::application(
+                "stream failed",
+            ))]))
+        } else {
+            Ok(stream::iter(vec![Ok(Bytes::from_static(b"ok"))]))
+        }
+    })
+    .await;
+
+    let mut failing = client
+        .stream("fail", Bytes::new(), Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert!(matches!(
+        failing.next().await,
+        Err(Error::Remote(RemoteError {
+            kind: ErrorKind::Application,
+            ..
+        }))
+    ));
+
+    let mut ok = client
+        .stream("ok", Bytes::new(), Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert_eq!(ok.next().await.unwrap().unwrap().as_ref(), b"ok");
+    assert!(ok.next().await.unwrap().is_none());
+
+    drop(client);
+    server.await.unwrap().unwrap();
 }

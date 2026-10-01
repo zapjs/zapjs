@@ -30,7 +30,7 @@ Personalized responses must remain private. Public cache fills must reject reque
 
 ## Splice
 
-Splice is an internal Rust worker boundary. The current version supports bounded unary calls, negotiated frame limits, deadlines, cancellation, typed remote errors and crash cleanup. It does not yet advertise streaming.
+Splice is an internal Rust worker boundary. The current version supports bounded unary calls, credit-based response streaming, negotiated frame limits, deadlines, cancellation, typed remote errors, capacity release and crash cleanup.
 
 The framework owns any Splice worker lifecycle it chooses to use.
 
@@ -39,7 +39,7 @@ The framework owns any Splice worker lifecycle it chooses to use.
 The current Rust crates prove foundation behavior and initial Rust request admission:
 
 - route matching, manifest-backed request target planning, terminal HTTP response mapping, manifest source/bundle path and route/action source identity validation, route/action module-kind validation, client/server bundle boundary validation, static asset source-path validation, route-handler method admission, GET-to-HEAD route-handler admission, server-action admission, request id/auth/deadline policy admission, cache/privacy admission, cache-control header decisions, declared body-limit admission, bounded UTF-8 request-body delivery to renderer payloads and unsafe or ambiguous URL path rejection;
-- bounded Splice transport behavior;
+- bounded Splice unary and credit-based streaming transport behavior;
 - embedded JavaScript execution with page HTML, page Flight, Web `Request`/`URL` route-handler and server-action entrypoints, route/action `Response` status/header validation, redirect/json helpers and body adaptation, typed route/action error-boundary outcomes, streams, explicit host calls, absence of ambient platform capabilities, output limits and CPU interruption;
 - Rust artifact execution that loads the built manifest, admits requests/actions through `zap-runtime`, enforces execution context policy and application authorization hooks, serves static assets and manifest-owned browser assets, runs page HTML, page Flight, route-handler and server-action bundles through `zap-render`, injects hydration metadata and the browser bootstrap module script into page HTML, passes the generated action proxy to hydrate hooks, handles same-origin client navigation with stale-response suppression, replaces target head/body content, exposes pending/error navigation boundaries and handles the generated `/_zap/action` endpoint;
 - Rust-only TSX bundling for browser and server outputs, generated Web `Request`/`URL` route-handler adapters, manifest-owned browser action-proxy emission, including unsupported platform-module rejection, ambient platform-global rejection across direct, optional, literal and statically computed bracketed, probe and destructured references, static template module-specifier scanning, local type-only import/export elision, dependency-only helper/type module exclusion, non-static dynamic-import rejection and regex-literal/non-reference identifier false-positive protection;

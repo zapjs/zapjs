@@ -6,7 +6,7 @@ use std::io::Cursor;
 use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-const VERSION: u16 = 2;
+const VERSION: u16 = 3;
 pub(crate) type Socket = Framed<UnixStream, LengthDelimitedCodec>;
 
 #[derive(Serialize, Deserialize)]
@@ -26,6 +26,25 @@ pub(crate) enum Message {
         id: u64,
         result: Result<Bytes, RemoteError>,
     },
+    StreamInvoke {
+        id: u64,
+        function: String,
+        payload: Bytes,
+        timeout_ms: u64,
+        initial_credit: u32,
+    },
+    StreamChunk {
+        id: u64,
+        chunk: Bytes,
+    },
+    StreamEnd {
+        id: u64,
+        result: Result<(), RemoteError>,
+    },
+    StreamCredit {
+        id: u64,
+        additional: u32,
+    },
     Cancel {
         id: u64,
     },
@@ -36,11 +55,15 @@ pub(crate) fn encode(message: &Message, limit: usize) -> Result<Bytes, Error> {
     let raw_size = match message {
         Message::Invoke {
             function, payload, ..
+        }
+        | Message::StreamInvoke {
+            function, payload, ..
         } => function.len().saturating_add(payload.len()),
         Message::Result {
             result: Ok(payload),
             ..
         } => payload.len(),
+        Message::StreamChunk { chunk: payload, .. } => payload.len(),
         Message::Result {
             result: Err(error), ..
         } => error.message.len(),

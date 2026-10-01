@@ -63,7 +63,7 @@ The embedded JavaScript context receives only the Web primitives and host operat
 
 ## Splice contract
 
-Splice version 2 is a bounded Rust-to-Rust transport for trusted worker boundaries. The restored implementation currently supports unary invocation, typed remote errors, negotiated frame limits, bounded in-flight requests, deadlines, cancellation and connection-failure cleanup. It deliberately does not advertise streaming until credit-based stream backpressure is implemented and tested.
+Splice version 3 is a bounded Rust-to-Rust transport for trusted worker boundaries. The restored implementation supports unary invocation, credit-based response streaming, typed remote errors, negotiated frame limits, bounded in-flight requests, deadlines, cancellation and connection-failure cleanup.
 
 The framework owns socket creation, subprocess supervision, worker replacement, authentication assumptions and deployment policy. A disconnected worker cancels in-flight calls; requests are not silently retried unless a higher framework layer explicitly makes an idempotent retry decision.
 
@@ -109,7 +109,7 @@ ZapJS can make a production claim only after these gates are executable and reco
 2. the Rust graph emits matching server bundles, browser chunks, client references, action IDs and route manifests;
 3. hydration metadata/bootstrap injection, initial browser hydrate-hook execution, same-origin client navigation, pending/error navigation boundaries and browser-to-Rust server actions are verified in Aegis;
 4. broader nested/dynamic navigation cases are verified in Aegis;
-5. Splice adds tested streaming only if the framework needs a streaming worker boundary;
+5. Splice uses tested credit-based streaming when the framework needs a streaming worker boundary;
 6. local and managed-native deployment artifacts are produced and verified from the Rust deployment manifest; generic package-root materialization and function/static lowering are present, but provider upload still requires evidence;
 7. the remaining development and deploy commands run through the Rust toolchain;
 8. the landing site and docs are ported after the implementation supports the claims they make.
