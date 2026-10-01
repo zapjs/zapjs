@@ -49,6 +49,10 @@ Host-backed recorded validation:
 
 The host run, trace verification, replay and CI all passed. The recorded trace reported no memory leaks in Fozzy's trace summary.
 
+## Browser validation
+
+Aegis validation on October 1, 2026 exercised a temporary real React package app through `zap build` and `zap serve`: initial page load produced a Flight-backed `hydrateRoot` page, same-origin navigation moved from `/` to `/shop/cafe?color=blue`, the dynamic target route rendered decoded params and query data, target hydration reached idle without script or unhandled-rejection errors, and the target client component processed a real click from `product:5` to `product:6`.
+
 ## Remaining production gates
 
 The foundation still needs:
