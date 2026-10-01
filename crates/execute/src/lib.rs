@@ -362,8 +362,16 @@ impl ApplicationExecutor {
                 let request_json = target
                     .renderer_request_json(input.path, &input.headers, &input.body)?
                     .expect("page targets produce renderer payloads");
+                let wants_flight = wants_flight_response(&input.headers);
                 let body = if input.method == Method::HEAD {
                     String::new()
+                } else if wants_flight {
+                    Renderer::new(bundle)
+                        .flight(&request_json)
+                        .map_err(|source| ExecuteError::RenderArtifact {
+                            path: bundle_path.clone(),
+                            source,
+                        })?
                 } else {
                     let rendered =
                         Renderer::new(bundle)
@@ -380,9 +388,17 @@ impl ApplicationExecutor {
                         self.manifest.browser_bootstrap(),
                     )?
                 };
+                let content_type = if wants_flight {
+                    "text/x-component; charset=utf-8"
+                } else {
+                    "text/html; charset=utf-8"
+                };
                 Ok(ExecutionResponse::new(StatusCode::OK)
                     .with_headers(cache.response_headers())
-                    .with_headers([("content-type".into(), "text/html; charset=utf-8".into())])
+                    .with_headers([
+                        ("content-type".into(), content_type.into()),
+                        ("vary".into(), "RSC, Accept".into()),
+                    ])
                     .with_body(body.into_bytes()))
             }
             RequestTarget::RouteHandler {
@@ -516,6 +532,16 @@ fn escape_json_for_html_script(value: &str) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
+fn wants_flight_response(headers: &[(String, String)]) -> bool {
+    headers.iter().any(|(name, value)| {
+        (name.eq_ignore_ascii_case("rsc") && value.trim() == "1")
+            || (name.eq_ignore_ascii_case("accept")
+                && value
+                    .split(',')
+                    .any(|media| media.trim().starts_with("text/x-component")))
+    })
+}
+
 fn has_sensitive_headers(headers: &[(String, String)]) -> bool {
     headers.iter().any(|(name, _)| {
         name.eq_ignore_ascii_case("cookie") || name.eq_ignore_ascii_case("authorization")
@@ -628,6 +654,30 @@ mod tests {
             String::from_utf8(query_page.body)
                 .unwrap()
                 .starts_with("<main>GET:/:rust search:en-US</main>"),
+        );
+
+        let flight_page = executor
+            .execute_request(&RequestExecutionInput {
+                headers: vec![
+                    ("rsc".into(), "1".into()),
+                    ("accept".into(), "text/x-component".into()),
+                ],
+                ..RequestExecutionInput::new(&Method::GET, "/")
+            })
+            .unwrap();
+        assert_eq!(flight_page.status, StatusCode::OK);
+        assert!(flight_page.headers.contains(&(
+            "content-type".into(),
+            "text/x-component; charset=utf-8".into()
+        )));
+        assert!(
+            flight_page
+                .headers
+                .contains(&("vary".into(), "RSC, Accept".into()))
+        );
+        assert_eq!(
+            String::from_utf8(flight_page.body).unwrap(),
+            "flight:GET:/:1"
         );
 
         let client_asset = executor
@@ -961,7 +1011,7 @@ mod tests {
         fs::write(root.join("public/logo.txt"), "zap").unwrap();
         fs::write(
             root.join(".zap/server/page.js"),
-            r#"globalThis.ZapRender = { render(request) { const q = request.searchParams && request.searchParams.q ? `:${request.searchParams.q[0]}` : ""; const lang = request.headers && request.headers["accept-language"] ? `:${request.headers["accept-language"]}` : ""; return `<main>${request.method}:${request.path}${q}${lang}</main>`; } };"#,
+            r#"globalThis.ZapRender = { render(request) { const q = request.searchParams && request.searchParams.q ? `:${request.searchParams.q[0]}` : ""; const lang = request.headers && request.headers["accept-language"] ? `:${request.headers["accept-language"]}` : ""; return `<main>${request.method}:${request.path}${q}${lang}</main>`; }, flight(request) { return `flight:${request.method}:${request.path}:${request.headers["rsc"] || "0"}`; } };"#,
         )
         .unwrap();
         fs::write(

@@ -1232,11 +1232,22 @@ function zapPageProps(request) {{
   }};
 }}
 
-export async function render(request) {{
+async function renderPageOutput(request) {{
   if (typeof renderPage !== "function") {{
     throw new TypeError("Zap page module must export a default function");
   }}
-  return await normalizeZapOutput(await renderPage(zapPageProps(request)));
+  return await renderPage(zapPageProps(request));
+}}
+
+export async function render(request) {{
+  return await normalizeZapOutput(await renderPageOutput(request));
+}}
+
+export async function flight(request) {{
+  if (typeof renderPage.flight === "function") {{
+    return await normalizeZapOutput(await renderPage.flight(zapPageProps(request)));
+  }}
+  return await normalizeZapOutput(await renderPageOutput(request));
 }}
 "#
     );
@@ -3513,6 +3524,9 @@ export const Label = 'count';
         assert!(browser_bootstrap_source.contains("addEventListener(\"popstate\""));
         assert!(browser_bootstrap_source.contains("document.addEventListener(\"click\""));
         assert!(browser_bootstrap_source.contains("__zap_hydrated"));
+        let page_entry_source =
+            fs::read_to_string(temp.path().join(".zap/entries/server/page.js")).unwrap();
+        assert!(page_entry_source.contains("export async function flight"));
         let action_proxy_source = fs::read_to_string(&action_proxy).unwrap();
         assert!(action_proxy_source.contains("action:actions#save"));
         assert!(action_proxy_source.contains("export async function invokeAction"));
@@ -3554,10 +3568,11 @@ export const Label = 'count';
             .renderer_request_json("/", &[], b"")
             .unwrap()
             .unwrap();
-        let rendered = Renderer::new(fs::read_to_string(page_bundle).unwrap())
-            .render(&page_request)
-            .unwrap();
+        let page_renderer = Renderer::new(fs::read_to_string(page_bundle).unwrap());
+        let rendered = page_renderer.render(&page_request).unwrap();
         assert_eq!(rendered, r#"<main data-path="/">home:/</main>"#);
+        let flight = page_renderer.flight(&page_request).unwrap();
+        assert_eq!(flight, r#"<main data-path="/">home:/</main>"#);
         let product_match = compiled.resolve("/shop/caf%C3%A9").unwrap().unwrap();
         let product_bundle = compiled
             .module(&product_match.route.module)
