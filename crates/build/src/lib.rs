@@ -1654,6 +1654,13 @@ async function hydrateZapDocument(targetDocument = document) {
   return state;
 }
 
+function replaceZapDocument(nextDocument) {
+  if (!nextDocument.body) throw new Error("Zap navigation response did not include a body");
+  if (nextDocument.head) document.head.replaceWith(nextDocument.head);
+  document.body.replaceWith(nextDocument.body);
+  document.title = nextDocument.title;
+}
+
 async function navigateZap(url, options = {}) {
   const nextUrl = new URL(url, globalThis.location && globalThis.location.href || zapBaseUrl());
   const sequence = ++zapNavigationSeq;
@@ -1673,9 +1680,7 @@ async function navigateZap(url, options = {}) {
     const html = await response.text();
     if (sequence !== zapNavigationSeq) return undefined;
     const nextDocument = new DOMParser().parseFromString(html, "text/html");
-    if (!nextDocument.body) throw new Error("Zap navigation response did not include a body");
-    document.title = nextDocument.title;
-    document.body.replaceWith(nextDocument.body);
+    replaceZapDocument(nextDocument);
     if (options.replace) {
       history.replaceState({ __zap: true }, "", nextUrl.href);
     } else {
@@ -3721,6 +3726,14 @@ export const Label = 'count';
         assert!(browser_bootstrap_source.contains("zapChunkUrl(reference.browser_chunk)"));
         assert!(browser_bootstrap_source.contains("actions: actionModule"));
         assert!(browser_bootstrap_source.contains("__zap_navigate"));
+        assert!(browser_bootstrap_source.contains("replaceZapDocument"));
+        assert!(browser_bootstrap_source.contains("document.head.replaceWith(nextDocument.head)"));
+        assert_eq!(
+            browser_bootstrap_source
+                .matches("event.preventDefault();")
+                .count(),
+            1
+        );
         assert!(browser_bootstrap_source.contains("zapNavigationSeq"));
         assert!(browser_bootstrap_source.contains("AbortController"));
         assert!(browser_bootstrap_source.contains("signal: controller && controller.signal"));
