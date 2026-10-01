@@ -34,6 +34,8 @@ pub struct RouteResponse {
     pub body: String,
 }
 
+pub type ActionResponse = RouteResponse;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RouteResponseMetadata {
     pub status: u16,
@@ -101,6 +103,10 @@ impl Renderer {
         Ok(self.handle_route_response(request_json)?.body)
     }
 
+    pub fn invoke_action(&self, invocation_json: &str) -> Result<String, RenderError> {
+        Ok(self.invoke_action_response(invocation_json)?.body)
+    }
+
     pub fn handle_route_response(&self, request_json: &str) -> Result<RouteResponse, RenderError> {
         let bytes = Rc::new(RefCell::new(Vec::new()));
         let sink = bytes.clone();
@@ -116,6 +122,30 @@ impl Renderer {
         let body = String::from_utf8(bytes)
             .map_err(|error| RenderError(format!("Route output is not UTF-8: {error}")))?;
         Ok(RouteResponse {
+            status: metadata.status,
+            headers: metadata.headers,
+            body,
+        })
+    }
+
+    pub fn invoke_action_response(
+        &self,
+        invocation_json: &str,
+    ) -> Result<ActionResponse, RenderError> {
+        let bytes = Rc::new(RefCell::new(Vec::new()));
+        let sink = bytes.clone();
+        let metadata = self.action_response_stream(
+            invocation_json,
+            Arc::new(AtomicBool::new(false)),
+            move |chunk| {
+                sink.borrow_mut().extend(chunk);
+                Ok(())
+            },
+        )?;
+        let bytes = std::mem::take(&mut *bytes.borrow_mut());
+        let body = String::from_utf8(bytes)
+            .map_err(|error| RenderError(format!("Action output is not UTF-8: {error}")))?;
+        Ok(ActionResponse {
             status: metadata.status,
             headers: metadata.headers,
             body,
@@ -166,17 +196,51 @@ impl Renderer {
     where
         F: FnMut(Vec<u8>) -> Result<(), String> + 'static,
     {
-        let json = self.entry_value_stream(
-            "__zap_route_response(ZapRoute.handle(JSON.parse(__zap_input)))",
+        self.response_metadata_stream(
+            "__zap_entry_response(ZapRoute.handle(JSON.parse(__zap_input)))",
             request_json,
             cancelled,
             sink,
-        )?;
-        let metadata: RouteResponseMetadata = serde_json::from_str(&json)
-            .map_err(|error| RenderError(format!("Route response metadata is invalid: {error}")))?;
+            "Route",
+        )
+    }
+
+    pub fn action_response_stream<F>(
+        &self,
+        invocation_json: &str,
+        cancelled: Arc<AtomicBool>,
+        sink: F,
+    ) -> Result<RouteResponseMetadata, RenderError>
+    where
+        F: FnMut(Vec<u8>) -> Result<(), String> + 'static,
+    {
+        self.response_metadata_stream(
+            "__zap_entry_response(ZapAction.invoke(JSON.parse(__zap_input)))",
+            invocation_json,
+            cancelled,
+            sink,
+            "Action",
+        )
+    }
+
+    fn response_metadata_stream<F>(
+        &self,
+        entry_expression: &'static str,
+        input_json: &str,
+        cancelled: Arc<AtomicBool>,
+        sink: F,
+        label: &str,
+    ) -> Result<RouteResponseMetadata, RenderError>
+    where
+        F: FnMut(Vec<u8>) -> Result<(), String> + 'static,
+    {
+        let json = self.entry_value_stream(entry_expression, input_json, cancelled, sink)?;
+        let metadata: RouteResponseMetadata = serde_json::from_str(&json).map_err(|error| {
+            RenderError(format!("{label} response metadata is invalid: {error}"))
+        })?;
         if !(200..=599).contains(&metadata.status) {
             return Err(RenderError(format!(
-                "Route response status is invalid: {}",
+                "{label} response status is invalid: {}",
                 metadata.status
             )));
         }
@@ -374,6 +438,12 @@ mod tests {
         ))
     }
 
+    fn action_handler(body: &str) -> Renderer {
+        Renderer::new(format!(
+            "globalThis.ZapAction={{invoke(invocation){{{body}}}}};"
+        ))
+    }
+
     #[test]
     fn renders_text_from_bundle() {
         let output = renderer("return `<h1>${request.title}</h1>`;")
@@ -422,6 +492,21 @@ mod tests {
             vec![("content-type".into(), "application/json".into())]
         );
         assert_eq!(response.body, r#"{"ok":true}"#);
+    }
+
+    #[test]
+    fn invokes_action_response_metadata_from_bundle() {
+        let response = action_handler(
+            r#"return new Response(`saved:${invocation.args[0].id}`, {status: 202, headers: {'x-zap-action': invocation.export}});"#,
+        )
+        .invoke_action_response(r#"{"export":"save","args":[{"id":7}]}"#)
+        .unwrap();
+        assert_eq!(response.status, 202);
+        assert_eq!(
+            response.headers,
+            vec![("x-zap-action".into(), "save".into())]
+        );
+        assert_eq!(response.body, "saved:7");
     }
 
     #[test]

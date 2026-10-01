@@ -278,6 +278,16 @@ pub async fn build_application(
         .filter(|route| route.kind == RouteKind::Handler)
         .map(|route| (route.module.clone(), route.methods.clone()))
         .collect::<BTreeMap<_, _>>();
+    let action_exports = graph.actions.iter().fold(
+        BTreeMap::<String, Vec<String>>::new(),
+        |mut exports, action| {
+            exports
+                .entry(action.module.clone())
+                .or_default()
+                .push(action.export.clone());
+            exports
+        },
+    );
 
     for module in &graph.modules {
         let source_entry = app_root.join(&module.path);
@@ -297,6 +307,17 @@ pub async fn build_application(
                         methods,
                     )?,
                     "ZapRoute".into(),
+                )
+            } else if let Some(exports) = action_exports.get(&module.id) {
+                (
+                    write_server_action_entry(
+                        &root,
+                        &options.graph.out_dir,
+                        module,
+                        &source_entry,
+                        exports,
+                    )?,
+                    "ZapAction".into(),
                 )
             } else {
                 (source_entry.clone(), bundle_global(&module.id))
@@ -431,6 +452,58 @@ export async function handle(request) {{
     throw new TypeError(`Zap route handler export ${{method}} must be a function`);
   }}
   return normalizeZapOutput(await handler(request));
+}}
+"#
+    );
+    fs::write(&entry, body).with_context(|| format!("write {}", entry.display()))?;
+    Ok(entry)
+}
+
+fn write_server_action_entry(
+    root: &Path,
+    out_dir: &Path,
+    module: &ModuleRef,
+    source_entry: &Path,
+    exports: &[String],
+) -> Result<PathBuf> {
+    let entry = absolute(root, out_dir)
+        .join("entries/server")
+        .join(format!("{}.js", module.id));
+    let parent = entry
+        .parent()
+        .context("generated server action entry needs a parent directory")?;
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let source = js_string(&source_entry.to_string_lossy());
+    let allowed = exports
+        .iter()
+        .map(|export| format!("\"{}\"", js_string(export)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let body = format!(
+        r#"import * as actionModule from "{source}";
+
+const allowedExports = [{allowed}];
+
+function normalizeZapOutput(value) {{
+  if (value == null) return "";
+  if (typeof Response !== "undefined" && value instanceof Response) return value;
+  if (typeof value === "string") return value;
+  if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
+  return new Response(JSON.stringify(value), {{headers: {{'content-type': 'application/json'}}}});
+}}
+
+export async function invoke(invocation) {{
+  const exportName = String(invocation && invocation.export || "");
+  if (!allowedExports.includes(exportName)) {{
+    throw new TypeError(`Zap action module does not export ${{exportName || "the requested action"}}`);
+  }}
+  const action = actionModule[exportName];
+  if (typeof action !== "function") {{
+    throw new TypeError(`Zap action export ${{exportName}} must be a function`);
+  }}
+  const args = Array.isArray(invocation && invocation.args) ? invocation.args : [];
+  return normalizeZapOutput(await action(...args));
 }}
 "#
     );
@@ -1074,6 +1147,13 @@ export function Counter(){ return '1'; }
 ",
         )
         .unwrap();
+        fs::write(
+            app.join("actions.ts"),
+            "'use server';
+export async function save(input){ return new Response(`saved:${input.id}`, {status: 203, headers: {'x-zap-action': 'save'}}); }
+",
+        )
+        .unwrap();
 
         let mut options = ApplicationBuildOptions::new(temp.path());
         options.minify = false;
@@ -1100,12 +1180,14 @@ export function Counter(){ return '1'; }
             .iter()
             .filter(|bundle| bundle.target == BuiltBundleTarget::Browser)
             .count();
-        assert_eq!(server_outputs, 2);
+        assert_eq!(server_outputs, 3);
         assert_eq!(browser_outputs, 1);
         let page_bundle = temp.path().join(".zap/server/page.js");
         let route_bundle = temp.path().join(".zap/server/api/echo/route.js");
+        let action_bundle = temp.path().join(".zap/server/actions.js");
         assert!(page_bundle.is_file());
         assert!(route_bundle.is_file());
+        assert!(action_bundle.is_file());
         assert!(!temp.path().join(".zap/server/client.js").exists());
         assert!(temp.path().join(".zap/browser/client.js").is_file());
         assert!(temp.path().join(".zap/entries/server/page.js").is_file());
@@ -1114,6 +1196,7 @@ export function Counter(){ return '1'; }
                 .join(".zap/entries/server/api/echo/route.js")
                 .is_file()
         );
+        assert!(temp.path().join(".zap/entries/server/actions.js").is_file());
         let rendered = Renderer::new(fs::read_to_string(page_bundle).unwrap())
             .render(r#"{"path":"/"}"#)
             .unwrap();
@@ -1124,6 +1207,12 @@ export function Counter(){ return '1'; }
         assert_eq!(handled.status, 202);
         assert_eq!(handled.headers, vec![("x-zap-route".into(), "echo".into())]);
         assert_eq!(handled.body, "echo:POST:/api/echo");
+        let action = Renderer::new(fs::read_to_string(action_bundle).unwrap())
+            .invoke_action_response(r#"{"export":"save","args":[{"id":7}]}"#)
+            .unwrap();
+        assert_eq!(action.status, 203);
+        assert_eq!(action.headers, vec![("x-zap-action".into(), "save".into())]);
+        assert_eq!(action.body, "saved:7");
     }
 
     #[tokio::test]

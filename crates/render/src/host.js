@@ -131,7 +131,7 @@ globalThis.__zap_consume = async result => {
   }
 };
 
-globalThis.__zap_route_response = async result => {
+globalThis.__zap_entry_response = async result => {
   result = await result;
   if (result instanceof Response) {
     await __zap_consume(result.body);
