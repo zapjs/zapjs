@@ -23,7 +23,7 @@ Before replacing that working path, verify these boundaries with executable code
 7. Development, production build, installation and verification execute through Rust-owned tooling. Dependency acquisition must retain version and integrity checks.
 8. Port the website and its factual documentation only after the actual architecture supports the behaviors it advertises.
 
-Performance choices require measurements of the complete path: cold start, warm render/request latency, memory, concurrency, throughput and cancellation. No embedded JavaScript engine or process protocol is declared the fastest without that evidence.
+Performance choices require measurements of the complete path: cold start, warm render/request latency, memory, concurrency, throughput and cancellation. No embedded JavaScript engine or process protocol gets a speed claim without that evidence.
 
 ## Current implementation
 

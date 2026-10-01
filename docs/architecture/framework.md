@@ -75,7 +75,7 @@ Vercel remains a candidate target because it documents a Rust runtime and native
 
 ## Performance policy
 
-The fastest architecture is the one that removes request-time work and measures the remaining path. ZapJS optimizes in this order:
+The architecture starts by removing request-time work and measuring the remaining path. ZapJS optimizes in this order:
 
 1. prerender and cache public output correctly;
 2. reduce browser JavaScript through server/client boundaries;
