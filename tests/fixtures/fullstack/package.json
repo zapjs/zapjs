@@ -1,0 +1,8 @@
+{
+  "name": "zap-framework-validation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "zap dev", "build": "zap build", "preview": "zap preview" },
+  "dependencies": { "@zap-js/client": "0.3.0", "react": "19.3.0", "react-dom": "19.3.0" }
+}

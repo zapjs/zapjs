@@ -1,43 +1,9 @@
 [workspace]
-members = [
-    "packages/server",
-    "packages/server/internal/core",
-    "packages/server/internal/macros",
-    "packages/server/internal/codegen",
-    "packages/server/splice",
-    "packages/server/splice-bin",
-    "tests/e2e-splice/test-server"
-]
+members = ["packages/native", "packages/native/fixtures/addon/native"]
 resolver = "2"
 
-[workspace.dependencies]
-# Zero-copy string operations
-memchr = "2.7"
-# SIMD optimizations
-ahash = { version = "0.8", features = ["compile-time-rng"] }
-# Fast hashing
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
-# HTTP types
-http = "1.0"
-# HTTP parsing optimizations
-bytes = { version = "1.5", features = ["serde"] }
-# SIMD string operations  
-simdutf8 = "0.1"
-
-[workspace.dependencies.tokio]
-version = "1.0"
-features = ["full"]
-
-# Test dependencies
-[workspace.dependencies.tokio-test]
-version = "0.4"
-
 [profile.release]
-lto = "fat"
+lto = "thin"
 codegen-units = 1
-panic = "abort"
-opt-level = 3
-
-[profile.bench]
-inherits = "release"
-debug = true
+# Unwind is required to report panics from bounded native work as rejected promises.
+panic = "unwind"

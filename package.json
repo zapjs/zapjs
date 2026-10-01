@@ -1,18 +1,15 @@
 {
   "name": "zapjs",
-  "version": "0.1.1",
+  "version": "0.3.0",
   "private": true,
-  "description": "High-performance fullstack React framework powered by Rust",
+  "description": "Integrated React framework with managed deployment and optional Rust functions",
   "workspaces": [
-    "packages/server",
     "packages/client"
   ],
   "scripts": {
-    "build": "cargo build --release --workspace",
-    "build:binaries": "node scripts/build-binaries.js",
-    "test": "cargo test --workspace",
-    "clean": "rm -rf target packages/*/dist packages/*/internal/*/dist packages/platforms/*/bin",
-    "format": "prettier --write 'packages/**/*.{js,json}'"
+    "build": "bun run --cwd packages/client build",
+    "test": "bun test packages/client/src && cargo test --workspace",
+    "verify": "node scripts/verify.mjs"
   },
   "keywords": [
     "react",
@@ -20,21 +17,9 @@
     "framework",
     "typescript",
     "fullstack",
-    "server-functions",
-    "performance",
-    "web-server",
-    "router",
-    "file-routing",
-    "next",
-    "remix",
-    "vite",
+    "rsc",
     "ssr",
-    "ssg",
-    "middleware",
-    "rpc",
-    "websocket",
-    "hot-reload",
-    "hmr"
+    "managed-deployment"
   ],
   "author": "saint0x",
   "license": "MIT",
@@ -43,7 +28,7 @@
     "url": "https://github.com/saint0x/zapjs.git"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.15.0"
   },
   "devDependencies": {
     "prettier": "^3.0.0"

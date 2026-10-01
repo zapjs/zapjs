@@ -1,106 +1,67 @@
-<div align="center">
-  <br />
-  <br />
-  <img src="public/zapjs-logo-full.png" alt="ZapJS" width="600" style="margin-left: 20px;" />
-  <br />
-  <br />
-  
-  <h3>High-performance fullstack React framework with Rust-powered backend</h3>
-  <p>File-based routing, automatic TypeScript bindings, and zero-config development</p>
-  <br />
-</div>
+# ZapJS
 
-## Architecture
+ZapJS is an integrated React framework with file-based routing, React Server Components, streaming HTML, server actions, and managed deployment. Optional Rust functions compile to native modules loaded inside the hosting function.
 
-```
-Client (React) → File Routes → TypeScript Handlers
-                                    ↓
-                              IPC Protocol
-                                    ↓
-                          Rust HTTP Server (9ns routing)
+One application owns its pages, layouts, route handlers, client components, and native libraries. The host provides HTTP termination and function lifecycle.
+
+## Development
+
+Requires Node.js 22.15 or later and Bun for repository development. The generated native application pins Rust 1.92.0; JavaScript-only applications do not need a Rust compiler.
+
+```sh
+bun install
+bun run build
+node packages/client/dist/cli/index.js new my-app --no-install
 ```
 
-## API
+The `0.3.0` framework package is under development in this repository. Until it is published, install a locally packed `packages/client` tarball in generated applications instead of resolving that version from the registry.
 
-### Client
-```javascript
-import { router, websockets, streaming, middleware, errors, logger, types } from '@zap-js/client'
-```
-
-### Server
-```javascript
-import { rpc, types } from '@zap-js/server'
-```
-
-### File Routes
-```
-routes/
-├── index.tsx          → /
-├── blog/[slug].tsx    → /blog/:slug
-├── api/users.ts       → /api/users     # export GET, POST, etc.
-├── _layout.tsx        → Nested layout
-└── ws/chat.ts         → WebSocket endpoint
-```
-
-### Route Handlers
-```javascript
-// routes/api/users.ts
-import { rpc } from '@zap-js/server'
-
-export async function GET(req) {
-  const users = await rpc.call('getUsers')
-  return Response.json(users)
-}
-
-// routes/blog/[slug].tsx
-import { router } from '@zap-js/client'
-
-export default function BlogPost() {
-  const { slug } = router.useParams()
-  return <article>...</article>
-}
-```
-
-## Features
-
-
-- **Type-safe RPC** with automatic TypeScript generation
-- **Nested layouts** with `_layout.tsx` files
-- **Route middleware** for auth, logging, data preloading
-- **SSG support** via `generateStaticParams`
-- **WebSocket routes** with typed handlers
-- **Hot module reload** with Rust rebuild detection
-- **Production builds** with code splitting and optimization
-
-## Quick Start
-
-```bash
-zap new my-app
+```sh
+npm pack ./packages/client --ignore-scripts
 cd my-app
-npm run dev     # Start dev server on :3000
-npm run build   # Production build
+npm install ../zap-js-client-0.3.0.tgz
 ```
 
-## CLI Commands
-
-```bash
-zap new <name>    # Create new project
-zap dev          # Development server with HMR
-zap build        # Production build
-zap routes       # Display route tree
-zap codegen      # Generate TypeScript from Rust exports
+```sh
+zap dev
+zap build
 ```
 
-## Documentation
+`zap build` generates Vercel Build Output API artifacts in `.vercel/output`. `zap preview` runs the compiled application locally for validation. `zap build --adapter node` emits the internal portable output without producing a managed deployment package.
 
-- **[Complete API Reference](docs/API.md)** - Full SDK documentation for client and server APIs
-- **[Getting Started](docs/getting-started.md)** - Step-by-step setup guide
-- **[Architecture Overview](docs/ARCHITECTURE.md)** - System design and data flow
-- **[Usage Guide](docs/USAGE.md)** - Common patterns and examples
-- **[File Routing](docs/guides/file-routing.md)** - File-based routing guide
-- **[API Routes](docs/guides/api-routes.md)** - Building API endpoints
-- **[Deployment](docs/guides/deployment.md)** - Production deployment guide
+## Application structure
 
-## License
+```text
+app/
+  layout.tsx           Root HTML document
+  page.tsx             Server-rendered home page
+  products/[id]/page.tsx
+  api/health/route.ts   Web Request/Response handlers
+  counter.tsx          Interactive component with 'use client'
+native/                Optional Rust cdylib with napi-rs exports
+public/                Static files
+zap.runtime.ts         Optional server-side cache and authorization configuration
+```
 
-MIT © ZapJS
+Client components import navigation APIs from `@zap-js/client`. Server components, actions, and route handlers import request APIs from `@zap-js/client/server`. Server actions use `'use server'` and must authorize their own application operations. Native exports are server-only imports from `zap:native`.
+
+## Repository
+
+- `packages/client/src/compiler`: canonical route graph and React build integration.
+- `packages/client/src/framework`: rendering, navigation, request context, and caching.
+- `packages/client/src/adapters`: host request bridge and deployment output.
+- `packages/client/src/native`: native compilation and generated bindings.
+- `packages/native`: bounded Rust work and cooperative cancellation.
+- `tests/fixtures/fullstack`: integrated application used for verification.
+
+## Validation
+
+```sh
+bun run verify
+```
+
+Redis integration tests require `redis-server` and `redis-cli`. Browser acceptance uses Aegis. Fozzy scenarios under `tests/scenarios` execute actual host commands and produce recorded verification traces.
+
+The obsolete process architecture has been replaced. See [verification evidence and supported limits](docs/implementation.md) before deploying an application; local tests alone do not establish support for every platform or every Next.js feature.
+
+See the [architecture](docs/architecture/framework.md) for the framework contract and performance acceptance criteria.

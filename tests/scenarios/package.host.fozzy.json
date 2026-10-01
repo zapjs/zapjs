@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "name": "zap-package-production-host",
+  "steps": [
+    { "type": "proc_spawn", "cmd": "node", "args": ["scripts/build.mjs"], "expect_exit": 0 },
+    { "type": "proc_spawn", "cmd": "node", "args": ["tests/production/package.mjs"], "expect_exit": 0 }
+  ]
+}

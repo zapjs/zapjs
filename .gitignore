@@ -72,3 +72,12 @@ bin/
 # Reports
 BUNDLE_SIZE_REPORT.md
 PUBLISH_CHECKLIST.md
+
+# Local deterministic-run caches and captured verification output
+.fozzy/
+artifacts/verification/
+
+# Managed application output and native modules
+.zap/
+.vercel/
+*.node
