@@ -1,7 +1,7 @@
 use crate::routing::{Param, Route as RuntimeRoute, RouteError, Router};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs, io,
     path::{Path, PathBuf},
 };
@@ -122,6 +122,16 @@ pub enum ManifestError {
     EmptyServerBundle { module: String },
     #[error("client module {module} is missing a browser chunk")]
     MissingBrowserChunk { module: String },
+    #[error("duplicate module identifier: {0}")]
+    DuplicateModule(String),
+    #[error("duplicate layout identifier: {0}")]
+    DuplicateLayout(String),
+    #[error("duplicate action identifier: {0}")]
+    DuplicateAction(String),
+    #[error("duplicate asset URL path: {0}")]
+    DuplicateAsset(String),
+    #[error("asset URL path must be absolute and safe: {0}")]
+    InvalidAssetPath(String),
 }
 
 #[derive(Debug)]
@@ -129,6 +139,7 @@ pub struct CompiledManifest {
     manifest: ApplicationManifest,
     router: Router,
     route_indexes: BTreeMap<String, usize>,
+    asset_indexes: BTreeMap<String, usize>,
 }
 
 #[derive(Debug)]
@@ -153,16 +164,46 @@ impl CompiledManifest {
     }
 
     pub fn new(manifest: ApplicationManifest) -> Result<Self, ManifestError> {
+        let mut module_ids = BTreeSet::new();
+        for module in &manifest.modules {
+            if !module_ids.insert(module.id.clone()) {
+                return Err(ManifestError::DuplicateModule(module.id.clone()));
+            }
+        }
         let modules = manifest
             .modules
             .iter()
             .map(|module| (module.id.clone(), module))
             .collect::<BTreeMap<_, _>>();
+
+        let mut layout_ids = BTreeSet::new();
+        for layout in &manifest.layouts {
+            if !layout_ids.insert(layout.id.clone()) {
+                return Err(ManifestError::DuplicateLayout(layout.id.clone()));
+            }
+        }
         let layouts = manifest
             .layouts
             .iter()
             .map(|layout| (layout.id.clone(), layout))
             .collect::<BTreeMap<_, _>>();
+
+        let mut action_ids = BTreeSet::new();
+        for action in &manifest.actions {
+            if !action_ids.insert(action.id.clone()) {
+                return Err(ManifestError::DuplicateAction(action.id.clone()));
+            }
+        }
+
+        let mut asset_paths = BTreeSet::new();
+        for asset in &manifest.assets {
+            if !is_safe_asset_url(&asset.url_path) {
+                return Err(ManifestError::InvalidAssetPath(asset.url_path.clone()));
+            }
+            if !asset_paths.insert(asset.url_path.clone()) {
+                return Err(ManifestError::DuplicateAsset(asset.url_path.clone()));
+            }
+        }
 
         for module in &manifest.modules {
             if module.server_bundle.as_os_str().is_empty() {
@@ -215,16 +256,29 @@ impl CompiledManifest {
             .enumerate()
             .map(|(index, route)| (route.id.clone(), index))
             .collect();
+        let asset_indexes = manifest
+            .assets
+            .iter()
+            .enumerate()
+            .map(|(index, asset)| (asset.url_path.clone(), index))
+            .collect();
 
         Ok(Self {
             manifest,
             router,
             route_indexes,
+            asset_indexes,
         })
     }
 
     pub fn manifest(&self) -> &ApplicationManifest {
         &self.manifest
+    }
+
+    pub fn asset(&self, path: &str) -> Option<&AssetRef> {
+        self.asset_indexes
+            .get(path)
+            .map(|index| &self.manifest.assets[*index])
     }
 
     pub fn resolve(&self, path: &str) -> Result<Option<ManifestMatch<'_>>, ManifestError> {
@@ -237,6 +291,18 @@ impl CompiledManifest {
             params: matched.params,
         }))
     }
+}
+
+fn is_safe_asset_url(path: &str) -> bool {
+    path.starts_with('/')
+        && !path.is_empty()
+        && path.len() <= 16 * 1024
+        && !path.contains(['?', '#', '\\'])
+        && !path
+            .trim_matches('/')
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .any(|part| part == "." || part == ".." || part.contains('%'))
 }
 
 #[cfg(test)]
@@ -285,5 +351,27 @@ mod tests {
         manifest.routes[0].module = "missing".into();
         let error = CompiledManifest::new(manifest).unwrap_err().to_string();
         assert!(error.contains("missing module"), "{error}");
+    }
+
+    #[test]
+    fn rejects_duplicate_and_unsafe_manifest_entries() {
+        let mut duplicate_module = manifest();
+        duplicate_module
+            .modules
+            .push(duplicate_module.modules[0].clone());
+        assert!(matches!(
+            CompiledManifest::new(duplicate_module).unwrap_err(),
+            ManifestError::DuplicateModule(_)
+        ));
+
+        let mut unsafe_asset = manifest();
+        unsafe_asset.assets.push(AssetRef {
+            source: PathBuf::from("secret"),
+            url_path: "/../secret".into(),
+        });
+        assert!(matches!(
+            CompiledManifest::new(unsafe_asset).unwrap_err(),
+            ManifestError::InvalidAssetPath(_)
+        ));
     }
 }

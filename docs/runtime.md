@@ -36,9 +36,9 @@ Normal application deployment must not require a user-operated Splice service. T
 
 ## Current limits
 
-The current Rust crates prove only foundation behavior:
+The current Rust crates prove foundation behavior and initial Rust request admission:
 
-- route matching and unsafe path rejection;
+- route matching, manifest-backed request target planning and unsafe path rejection;
 - bounded Splice transport behavior;
 - embedded JavaScript execution with streams, host calls, output limits and CPU interruption;
 - Rust-only TSX bundling for browser and server outputs.
