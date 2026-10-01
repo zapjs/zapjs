@@ -72,6 +72,7 @@ pub async fn bundle(options: &BundleOptions) -> Result<BundleOutput> {
         .file_name()
         .and_then(|v| v.to_str())
         .context("bundle output must have a UTF-8 filename")?;
+    validate_local_module_graph(&root, &entry)?;
     let server = matches!(options.target, Target::Server { .. });
     let global = match &options.target {
         Target::Server { global } => {
@@ -168,6 +169,163 @@ pub async fn bundle(options: &BundleOptions) -> Result<BundleOutput> {
         bytes,
         warnings,
     })
+}
+
+const NODE_BUILTINS: &[&str] = &[
+    "assert",
+    "async_hooks",
+    "buffer",
+    "child_process",
+    "cluster",
+    "console",
+    "constants",
+    "crypto",
+    "dgram",
+    "diagnostics_channel",
+    "dns",
+    "domain",
+    "events",
+    "fs",
+    "http",
+    "http2",
+    "https",
+    "inspector",
+    "module",
+    "net",
+    "os",
+    "path",
+    "perf_hooks",
+    "process",
+    "punycode",
+    "querystring",
+    "readline",
+    "repl",
+    "stream",
+    "string_decoder",
+    "sys",
+    "timers",
+    "tls",
+    "trace_events",
+    "tty",
+    "url",
+    "util",
+    "v8",
+    "vm",
+    "wasi",
+    "worker_threads",
+    "zlib",
+];
+
+fn validate_local_module_graph(root: &Path, entry: &Path) -> Result<()> {
+    let mut visited = BTreeSet::new();
+    validate_local_module(root, entry, &mut visited)
+}
+
+fn validate_local_module(root: &Path, path: &Path, visited: &mut BTreeSet<PathBuf>) -> Result<()> {
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("resolve source module {}", path.display()))?;
+    if !path.starts_with(root) || !visited.insert(path.clone()) {
+        return Ok(());
+    }
+    let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    for specifier in module_specifiers(&text) {
+        if is_unavailable_platform_specifier(&specifier) {
+            bail!(
+                "bundle cannot depend on unavailable platform module {specifier:?} in {}",
+                path.display()
+            );
+        }
+        if specifier.starts_with('.') || specifier.starts_with('/') {
+            let resolved = resolve_local_specifier(&path, &specifier).with_context(|| {
+                format!("resolve local module {specifier:?} from {}", path.display())
+            })?;
+            validate_local_module(root, &resolved, visited)?;
+        }
+    }
+    Ok(())
+}
+
+fn module_specifiers(text: &str) -> Vec<String> {
+    let mut specifiers = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if line.starts_with("import ") || line.starts_with("export ") {
+            if let Some(specifier) = quoted_after(line, " from ") {
+                specifiers.push(specifier);
+            } else if let Some(rest) = line.strip_prefix("import") {
+                if let Some(specifier) = first_quoted(rest) {
+                    specifiers.push(specifier);
+                }
+            }
+        }
+        let mut remainder = line;
+        while let Some(index) = remainder.find("import(") {
+            remainder = &remainder[index + "import(".len()..];
+            if let Some(specifier) = first_quoted(remainder) {
+                specifiers.push(specifier);
+            }
+        }
+        let mut remainder = line;
+        while let Some(index) = remainder.find("require(") {
+            remainder = &remainder[index + "require(".len()..];
+            if let Some(specifier) = first_quoted(remainder) {
+                specifiers.push(specifier);
+            }
+        }
+    }
+    specifiers
+}
+
+fn quoted_after(line: &str, needle: &str) -> Option<String> {
+    let index = line.find(needle)?;
+    first_quoted(&line[index + needle.len()..])
+}
+
+fn first_quoted(text: &str) -> Option<String> {
+    let text = text.trim_start();
+    let quote = text.chars().next()?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+    let rest = &text[quote.len_utf8()..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_owned())
+}
+
+fn is_unavailable_platform_specifier(specifier: &str) -> bool {
+    let specifier = specifier.strip_prefix("node:").unwrap_or(specifier);
+    let Some((head, _)) = specifier.split_once('/') else {
+        return NODE_BUILTINS.contains(&specifier);
+    };
+    NODE_BUILTINS.contains(&head)
+}
+
+fn resolve_local_specifier(importer: &Path, specifier: &str) -> Result<PathBuf> {
+    let base = if specifier.starts_with('/') {
+        PathBuf::from(specifier)
+    } else {
+        importer
+            .parent()
+            .context("source module needs a parent directory")?
+            .join(specifier)
+    };
+    for candidate in local_module_candidates(&base) {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    bail!("local module not found: {}", base.display())
+}
+
+fn local_module_candidates(base: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![base.to_owned()];
+    for extension in ["ts", "tsx", "js", "jsx"] {
+        candidates.push(base.with_extension(extension));
+    }
+    for extension in ["ts", "tsx", "js", "jsx"] {
+        candidates.push(base.join(format!("index.{extension}")));
+    }
+    candidates
 }
 
 fn absolute(root: &Path, path: &Path) -> PathBuf {
@@ -1407,10 +1565,60 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
 
     #[tokio::test]
     async fn rejects_unavailable_platform_modules() {
+        let cases = [
+            (
+                "node_prefix.ts",
+                "import fs from 'node:fs'; export const value = fs.readFileSync;",
+            ),
+            (
+                "bare_builtin.ts",
+                "import fs from 'fs'; export const value = fs.readFileSync;",
+            ),
+            (
+                "builtin_subpath.ts",
+                "import { readFile } from 'fs/promises'; export const value = readFile;",
+            ),
+            (
+                "dynamic_import.ts",
+                "export async function load(){ return import('child_process'); }",
+            ),
+            (
+                "commonjs_require.ts",
+                "const os = require('os'); export const value = os.platform;",
+            ),
+        ];
+        for (name, source) in cases {
+            let temp = tempfile::tempdir().unwrap();
+            fs::write(temp.path().join(name), source).unwrap();
+            let output = temp.path().join("dist/client.js");
+            let error = bundle(&BundleOptions::new(
+                temp.path(),
+                Path::new(name),
+                &output,
+                Target::Browser,
+            ))
+            .await
+            .unwrap_err();
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("bundle cannot depend on unavailable platform module"),
+                "{name}: {error:?}"
+            );
+            assert!(!output.exists(), "{name}");
+        }
+
         let temp = tempfile::tempdir().unwrap();
         fs::write(
             temp.path().join("entry.ts"),
-            "import fs from 'node:fs'; export const value = fs.readFileSync;",
+            "import './nested/module'; export const value = 1;",
+        )
+        .unwrap();
+        fs::create_dir_all(temp.path().join("nested")).unwrap();
+        fs::write(
+            temp.path().join("nested/module.ts"),
+            "import path from 'path'; export const value = path.sep;",
         )
         .unwrap();
         let output = temp.path().join("dist/client.js");
@@ -1426,7 +1634,7 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
         assert!(
             error
                 .to_string()
-                .contains("bundle cannot depend on unavailable modules"),
+                .contains("bundle cannot depend on unavailable platform module"),
             "{error:?}"
         );
         assert!(!output.exists());
