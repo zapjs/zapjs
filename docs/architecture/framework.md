@@ -110,7 +110,7 @@ ZapJS can make a production claim only after these gates are executable and reco
 3. hydration metadata/bootstrap injection, initial browser hydrate-hook execution, same-origin client navigation, pending/error navigation boundaries and browser-to-Rust server actions are verified in Aegis;
 4. broader nested/dynamic navigation cases are verified in Aegis;
 5. Splice uses tested credit-based streaming when the framework needs a streaming worker boundary;
-6. local, managed-native and provider filesystem deployment artifacts are produced and verified from the Rust deployment manifest; generic package-root materialization, function/static lowering, provider upload receipts and bounded serve-boundary error responses are present;
+6. local, managed-native and provider filesystem deployment artifacts are produced and verified from the Rust deployment manifest; generic package-root materialization, function/static lowering, provider upload receipts and bounded serve-boundary error responses are present; process-backed serving covers all three artifact roots;
 7. the remaining development and deploy commands run through the Rust toolchain;
 8. the landing site and docs are ported after the implementation supports the claims they make.
 

@@ -17,6 +17,40 @@ impl Drop for ChildGuard {
 }
 
 #[test]
+fn local_package_artifact_serves_from_real_zap_process() {
+    let temp = TempDir::new("zap-cli-local-package-process");
+    write_minimal_app(temp.path());
+    let package_root = temp.path().join("dist/local-package");
+
+    let binary = env!("CARGO_BIN_EXE_zap");
+    let deploy = Command::new(binary)
+        .args([
+            "deploy",
+            "--target",
+            "local-package",
+            "--root",
+            temp.path().to_str().unwrap(),
+            "--out",
+            package_root.to_str().unwrap(),
+            "--no-minify",
+        ])
+        .output()
+        .expect("run zap local-package deploy");
+    assert!(
+        deploy.status.success(),
+        "local-package deploy failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&deploy.stdout),
+        String::from_utf8_lossy(&deploy.stderr)
+    );
+
+    assert!(package_root.join(".zap/package.json").is_file());
+    assert!(package_root.join(".zap/deployment.json").is_file());
+    assert!(package_root.join(".zap/manifest.json").is_file());
+    assert!(package_root.join("public/logo.txt").is_file());
+    assert_served_framework(binary, &package_root);
+}
+
+#[test]
 fn managed_native_artifact_serves_from_real_zap_process() {
     let temp = TempDir::new("zap-cli-process");
     write_minimal_app(temp.path());
