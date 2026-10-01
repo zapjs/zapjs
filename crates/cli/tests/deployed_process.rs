@@ -201,6 +201,19 @@ fn assert_served_framework_responses(address: &str) {
         flight.contains(r#""content":"home""#),
         "Flight response did not carry page content:\n{flight}"
     );
+
+    let failed_page = http_exchange(
+        address,
+        b"GET /broken HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        failed_page.starts_with("HTTP/1.1 500 Internal Server Error"),
+        "render failures must return a bounded 500 response:\n{failed_page}"
+    );
+    assert!(
+        failed_page.ends_with("Internal Server Error"),
+        "500 response must not leak renderer internals:\n{failed_page}"
+    );
 }
 
 fn http_exchange(address: &str, request: &[u8]) -> String {
@@ -217,11 +230,17 @@ fn http_exchange(address: &str, request: &[u8]) -> String {
 fn write_minimal_app(root: &Path) {
     let app = root.join("app/api/echo");
     fs::create_dir_all(&app).expect("create app route");
+    fs::create_dir_all(root.join("app/broken")).expect("create broken route");
     fs::write(
         root.join("app/page.tsx"),
         "export default function Page(){ return 'home'; }\n",
     )
     .expect("write page");
+    fs::write(
+        root.join("app/broken/page.tsx"),
+        "export default function Broken(){ throw new Error('broken page'); }\n",
+    )
+    .expect("write broken page");
     fs::write(
         app.join("route.ts"),
         "export function POST(request){ return `echo:${request.method}:${request.path}`; }\n",
