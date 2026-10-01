@@ -1516,6 +1516,7 @@ fn parse_cache_policy(text: &str) -> Result<CachePolicy> {
 
 fn exported_const_values(text: &str) -> Vec<(String, JsToken)> {
     let tokens = js_tokens(text);
+    let local_consts = const_values(&tokens);
     let mut values = Vec::new();
     let mut index = 0;
     while index < tokens.len() {
@@ -1523,22 +1524,56 @@ fn exported_const_values(text: &str) -> Vec<(String, JsToken)> {
             index += 1;
             continue;
         }
-        if !matches!(tokens.get(index + 1), Some(JsToken::Ident(value)) if value == "const") {
+        match tokens.get(index + 1) {
+            Some(JsToken::Ident(value)) if value == "const" => {
+                let Some(JsToken::Ident(name)) = tokens.get(index + 2) else {
+                    index += 1;
+                    continue;
+                };
+                if !matches!(tokens.get(index + 3), Some(JsToken::Punct('='))) {
+                    index += 1;
+                    continue;
+                }
+                if let Some(value) = tokens.get(index + 4) {
+                    values.push((name.clone(), value.clone()));
+                }
+                index += 5;
+                continue;
+            }
+            Some(JsToken::Punct('{')) => {
+                for (local, exported) in exported_named_specifier_pairs(&tokens, index + 1) {
+                    if let Some(value) = local_consts.get(&local) {
+                        values.push((exported, value.clone()));
+                    }
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    values
+}
+
+fn const_values(tokens: &[JsToken]) -> BTreeMap<String, JsToken> {
+    let mut values = BTreeMap::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        if !matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "const") {
             index += 1;
             continue;
         }
-        let Some(JsToken::Ident(name)) = tokens.get(index + 2) else {
+        let Some(JsToken::Ident(name)) = tokens.get(index + 1) else {
             index += 1;
             continue;
         };
-        if !matches!(tokens.get(index + 3), Some(JsToken::Punct('='))) {
+        if !matches!(tokens.get(index + 2), Some(JsToken::Punct('='))) {
             index += 1;
             continue;
         }
-        if let Some(value) = tokens.get(index + 4) {
-            values.push((name.clone(), value.clone()));
+        if let Some(value) = tokens.get(index + 3) {
+            values.insert(name.clone(), value.clone());
         }
-        index += 5;
+        index += 4;
     }
     values
 }
@@ -1606,6 +1641,13 @@ fn exported_declaration_names(text: &str) -> Vec<String> {
 }
 
 fn exported_named_specifiers(tokens: &[JsToken], open_brace: usize) -> Vec<String> {
+    exported_named_specifier_pairs(tokens, open_brace)
+        .into_iter()
+        .map(|(_, exported)| exported)
+        .collect()
+}
+
+fn exported_named_specifier_pairs(tokens: &[JsToken], open_brace: usize) -> Vec<(String, String)> {
     let mut names = Vec::new();
     let mut index = open_brace + 1;
     while index < tokens.len() {
@@ -1624,7 +1666,7 @@ fn exported_named_specifiers(tokens: &[JsToken], open_brace: usize) -> Vec<Strin
                         index += 2;
                     }
                 }
-                names.push(exported);
+                names.push((local.clone(), exported));
             }
             _ => {}
         }
@@ -1856,6 +1898,19 @@ export default function Page(){}
             .unwrap_err()
             .to_string();
         assert!(error.contains("invalid revalidate value"), "{error}");
+
+        fs::write(
+            app.join("page.tsx"),
+            "const mode = 'force-static';
+const seconds = 45;
+export { mode as dynamic, seconds as revalidate };
+export default function Page(){}
+",
+        )
+        .unwrap();
+        let graph = build_application_graph(&GraphOptions::new(temp.path())).unwrap();
+        assert_eq!(graph.routes[0].cache.dynamic, DynamicPolicy::ForceStatic);
+        assert_eq!(graph.routes[0].cache.revalidate_seconds, Some(45));
     }
 
     #[test]
