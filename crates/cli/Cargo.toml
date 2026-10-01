@@ -11,8 +11,11 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+http = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 zap-build = { path = "../build" }
+zap-execute = { path = "../execute" }
+zap-runtime = { path = "../runtime" }
 
 [dev-dependencies]
 tempfile = "3"

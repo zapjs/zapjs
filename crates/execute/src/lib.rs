@@ -371,6 +371,7 @@ impl ApplicationExecutor {
                         rendered,
                         input.path,
                         hydration,
+                        self.manifest.action_proxy(),
                         self.manifest.browser_bootstrap(),
                     )?
                 };
@@ -427,6 +428,7 @@ fn append_hydration_bootstrap(
     html: String,
     path: &str,
     hydration: &RouteHydration,
+    action_proxy: Option<&Path>,
     browser_bootstrap: Option<&Path>,
 ) -> Result<String, ExecuteError> {
     if hydration.browser_chunks.is_empty() && hydration.client_references.is_empty() {
@@ -452,6 +454,7 @@ fn append_hydration_bootstrap(
         .collect::<Vec<_>>();
     let payload = serde_json::json!({
         "path": path,
+        "action_proxy": action_proxy.map(browser_asset_url),
         "browser_chunks": chunks,
         "client_references": references,
     });
@@ -578,6 +581,7 @@ mod tests {
             .unwrap();
         let hydration: serde_json::Value = serde_json::from_str(hydration_json).unwrap();
         assert_eq!(hydration["path"], "/");
+        assert_eq!(hydration["action_proxy"], "/.zap/browser/actions.js");
         assert_eq!(
             hydration["browser_chunks"],
             serde_json::json!([

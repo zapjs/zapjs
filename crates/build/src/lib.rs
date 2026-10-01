@@ -1449,18 +1449,19 @@ if (hydrationElement) {
   const importChunks = chunks.filter((chunk) => chunkUrl(chunk) !== currentUrl);
   const imported = await Promise.all(importChunks.map((chunk) => import(chunk)));
   const modulesByChunk = new Map(importChunks.map((chunk, index) => [chunkUrl(chunk), imported[index]]));
+  const actionModule = typeof hydration.action_proxy === "string" ? modulesByChunk.get(chunkUrl(hydration.action_proxy)) : undefined;
   const hooks = [];
   for (const reference of references) {
     const module = modulesByChunk.get(chunkUrl(reference.browser_chunk));
     const exported = module && module[reference.export];
     if (exported && typeof exported.hydrate === "function") {
-      hooks.push(exported.hydrate({ hydration, reference, module }));
+      hooks.push(exported.hydrate({ hydration, reference, module, actions: actionModule }));
     } else if (module && typeof module.hydrate === "function") {
-      hooks.push(module.hydrate({ hydration, reference, module }));
+      hooks.push(module.hydrate({ hydration, reference, module, actions: actionModule }));
     }
   }
   await Promise.all(hooks);
-  globalThis.__zap_hydrated = { hydration, chunks, importChunks, references };
+  globalThis.__zap_hydrated = { hydration, chunks, importChunks, references, actions: actionModule };
 }
 "#;
     fs::write(&bootstrap, body).with_context(|| format!("write {}", bootstrap.display()))?;
@@ -3391,6 +3392,7 @@ export const Label = 'count';
         assert!(browser_bootstrap_source.contains("importChunks"));
         assert!(browser_bootstrap_source.contains("import.meta.url"));
         assert!(browser_bootstrap_source.contains("chunkUrl(reference.browser_chunk)"));
+        assert!(browser_bootstrap_source.contains("actions: actionModule"));
         assert!(browser_bootstrap_source.contains("__zap_hydrated"));
         let action_proxy_source = fs::read_to_string(&action_proxy).unwrap();
         assert!(action_proxy_source.contains("action:actions#save"));

@@ -1,13 +1,27 @@
 use anyhow::{Context, Result, bail};
-use std::{env, ffi::OsString, path::PathBuf, process::ExitCode};
+use http::{Method, StatusCode};
+use std::{
+    collections::BTreeMap,
+    env,
+    ffi::OsString,
+    io::{BufRead, BufReader, Read, Write},
+    net::{TcpListener, TcpStream},
+    path::PathBuf,
+    process::ExitCode,
+};
 use zap_build::{
     ApplicationBuildOptions, BuiltBundleTarget, GraphOptions, build_application_graph,
 };
+use zap_execute::{
+    ActionEndpointInput, ApplicationExecutor, ExecutionResponse, RequestExecutionInput,
+};
+use zap_runtime::request::InvocationContext;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
     Build(BuildCommand),
     Check(GraphCommand),
+    Serve(ServeCommand),
     Help,
 }
 
@@ -23,6 +37,14 @@ struct GraphCommand {
     root: PathBuf,
     app_dir: Option<PathBuf>,
     public_dir: PublicDir,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ServeCommand {
+    root: PathBuf,
+    manifest: Option<PathBuf>,
+    public_dir: PublicDir,
+    addr: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +74,17 @@ impl Default for GraphCommand {
     }
 }
 
+impl Default for ServeCommand {
+    fn default() -> Self {
+        Self {
+            root: PathBuf::from("."),
+            manifest: None,
+            public_dir: PublicDir::Default,
+            addr: "127.0.0.1:3000".into(),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     match run(env::args_os()).await {
@@ -71,6 +104,7 @@ async fn run(args: impl IntoIterator<Item = OsString>) -> Result<()> {
         }
         Command::Build(command) => run_build(command).await,
         Command::Check(command) => run_check(command),
+        Command::Serve(command) => run_serve(command),
     }
 }
 
@@ -91,6 +125,35 @@ async fn run_build(command: BuildCommand) -> Result<()> {
             )
         })?;
     print_build_summary(&output);
+    Ok(())
+}
+
+fn run_serve(command: ServeCommand) -> Result<()> {
+    let manifest = command
+        .manifest
+        .clone()
+        .unwrap_or_else(|| command.root.join(".zap/manifest.json"));
+    let public_dir = match &command.public_dir {
+        PublicDir::Default => command.root.join("public"),
+        PublicDir::Path(path) => path.clone(),
+        PublicDir::Disabled => command.root.join(".zap/no-public"),
+    };
+    let executor = ApplicationExecutor::load_from(&command.root, &manifest)
+        .with_context(|| format!("load ZapJS artifacts from {}", command.root.display()))?
+        .with_public_dir(public_dir);
+    let listener = TcpListener::bind(&command.addr)
+        .with_context(|| format!("bind ZapJS server at {}", command.addr))?;
+    println!("listening=http://{}", listener.local_addr()?);
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                if let Err(error) = handle_connection(&executor, stream) {
+                    eprintln!("request error: {error:#}");
+                }
+            }
+            Err(error) => eprintln!("accept error: {error}"),
+        }
+    }
     Ok(())
 }
 
@@ -137,6 +200,14 @@ fn parse_command(args: impl IntoIterator<Item = OsString>) -> Result<Command> {
                 parse_graph(args, "check").map(Command::Check)
             }
         }
+        "serve" => {
+            let args = args.collect::<Vec<_>>();
+            if has_help(&args) {
+                Ok(Command::Help)
+            } else {
+                parse_serve(args).map(Command::Serve)
+            }
+        }
         "help" | "--help" | "-h" => Ok(Command::Help),
         other => bail!("unknown command `{other}`"),
     }
@@ -156,6 +227,22 @@ fn parse_build(args: impl IntoIterator<Item = OsString>) -> Result<BuildCommand>
             "--out" => command.out_dir = Some(next_path(&mut args, "--out")?),
             "--no-minify" => command.minify = false,
             other => bail!("unknown build option `{other}`"),
+        }
+    }
+    Ok(command)
+}
+
+fn parse_serve(args: impl IntoIterator<Item = OsString>) -> Result<ServeCommand> {
+    let mut command = ServeCommand::default();
+    let mut args = args.into_iter();
+    while let Some(flag) = args.next() {
+        match flag.to_string_lossy().as_ref() {
+            "--root" => command.root = next_path(&mut args, "--root")?,
+            "--manifest" => command.manifest = Some(next_path(&mut args, "--manifest")?),
+            "--public" => command.public_dir = PublicDir::Path(next_path(&mut args, "--public")?),
+            "--no-public" => command.public_dir = PublicDir::Disabled,
+            "--addr" => command.addr = next_value(&mut args, "--addr")?,
+            other => bail!("unknown serve option `{other}`"),
         }
     }
     Ok(command)
@@ -194,9 +281,160 @@ fn next_path(args: &mut impl Iterator<Item = OsString>, flag: &str) -> Result<Pa
     Ok(PathBuf::from(value))
 }
 
+fn next_value(args: &mut impl Iterator<Item = OsString>, flag: &str) -> Result<String> {
+    let Some(value) = args.next() else {
+        bail!("{flag} requires a value");
+    };
+    if value.to_string_lossy().starts_with('-') {
+        bail!("{flag} requires a value, got `{}`", value.to_string_lossy());
+    }
+    Ok(value.to_string_lossy().into_owned())
+}
+
+#[derive(Debug)]
+struct HttpRequest {
+    method: Method,
+    path: String,
+    headers: BTreeMap<String, String>,
+    body: Vec<u8>,
+}
+
+fn handle_connection(executor: &ApplicationExecutor, mut stream: TcpStream) -> Result<()> {
+    let request = read_http_request(&mut stream)?;
+    let response = execute_http_request(executor, &request)?;
+    write_http_response(&mut stream, response)?;
+    Ok(())
+}
+
+fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
+    let mut reader = BufReader::new(stream);
+    let mut request_line = String::new();
+    reader
+        .read_line(&mut request_line)
+        .context("read request line")?;
+    let parts = request_line.split_whitespace().collect::<Vec<_>>();
+    if parts.len() != 3 {
+        bail!("malformed HTTP request line");
+    }
+    let method = Method::from_bytes(parts[0].as_bytes())
+        .with_context(|| format!("unsupported HTTP method `{}`", parts[0]))?;
+    let path = parts[1].split_once('?').map_or(parts[1], |(path, _)| path);
+    if !path.starts_with('/') {
+        bail!("HTTP request target must be absolute-path");
+    }
+
+    let mut headers = BTreeMap::new();
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).context("read request header")?;
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        let Some((name, value)) = trimmed.split_once(':') else {
+            bail!("malformed HTTP header");
+        };
+        headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
+    }
+
+    let content_length = headers
+        .get("content-length")
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .context("parse content-length")?
+        .unwrap_or(0);
+    let mut body = vec![0; content_length];
+    if content_length > 0 {
+        reader.read_exact(&mut body).context("read request body")?;
+    }
+
+    Ok(HttpRequest {
+        method,
+        path: path.to_owned(),
+        headers,
+        body,
+    })
+}
+
+fn execute_http_request(
+    executor: &ApplicationExecutor,
+    request: &HttpRequest,
+) -> Result<ExecutionResponse> {
+    let host = request.headers.get("host").map(String::as_str);
+    let expected_origin = host.map(|host| format!("http://{host}"));
+    let origin = request.headers.get("origin").map(String::as_str);
+    let request_id = format!("serve:{}:{}", request.method, request.path);
+    let context = InvocationContext {
+        request_id: Some(request_id.as_str()),
+        authenticated: true,
+        deadline_ms: Some(30_000),
+    };
+
+    if request.path == "/_zap/action" {
+        executor
+            .execute_action_endpoint(&ActionEndpointInput {
+                method: &request.method,
+                path: &request.path,
+                origin,
+                expected_origin: expected_origin.as_deref(),
+                body: &request.body,
+                context,
+            })
+            .context("execute action endpoint")
+    } else {
+        executor
+            .execute_request(&RequestExecutionInput {
+                method: &request.method,
+                path: &request.path,
+                declared_body_bytes: Some(request.body.len() as u64),
+                uses_private_request_state: false,
+                context,
+            })
+            .context("execute request")
+    }
+}
+
+fn write_http_response(stream: &mut TcpStream, response: ExecutionResponse) -> Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 {} {}\r\n",
+        response.status.as_u16(),
+        status_reason(response.status)
+    )
+    .context("write response status")?;
+    let mut has_content_length = false;
+    let mut has_connection = false;
+    for (name, value) in &response.headers {
+        if name.eq_ignore_ascii_case("content-length") {
+            has_content_length = true;
+        }
+        if name.eq_ignore_ascii_case("connection") {
+            has_connection = true;
+        }
+        write!(stream, "{name}: {value}\r\n").context("write response header")?;
+    }
+    if !has_content_length {
+        write!(stream, "content-length: {}\r\n", response.body.len())
+            .context("write content-length")?;
+    }
+    if !has_connection {
+        write!(stream, "connection: close\r\n").context("write connection header")?;
+    }
+    write!(stream, "\r\n").context("finish response headers")?;
+    stream
+        .write_all(&response.body)
+        .context("write response body")?;
+    stream.flush().context("flush response")?;
+    Ok(())
+}
+
+fn status_reason(status: StatusCode) -> &'static str {
+    status.canonical_reason().unwrap_or("Unknown")
+}
+
 fn print_usage() {
     println!(
-        "ZapJS\n\nUSAGE:\n    zap build [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--no-minify]\n    zap check [--root <path>] [--app <path>] [--public <path>|--no-public]\n\nCOMMANDS:\n    build    Build a ZapJS application with the Rust-owned compiler\n    check    Validate the ZapJS application graph without writing build artifacts\n    help     Print this help\n"
+        "ZapJS\n\nUSAGE:\n    zap build [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--no-minify]\n    zap check [--root <path>] [--app <path>] [--public <path>|--no-public]\n    zap serve [--root <path>] [--manifest <path>] [--public <path>|--no-public] [--addr <host:port>]\n\nCOMMANDS:\n    build    Build a ZapJS application with the Rust-owned compiler\n    check    Validate the ZapJS application graph without writing build artifacts\n    serve    Serve built ZapJS artifacts with the Rust executor\n    help     Print this help\n"
     );
 }
 
@@ -319,6 +557,31 @@ mod tests {
     }
 
     #[test]
+    fn parses_explicit_serve_paths() {
+        assert_eq!(
+            parse_command(os_args(&[
+                "zap",
+                "serve",
+                "--root",
+                "/tmp/app",
+                "--manifest",
+                "dist/manifest.json",
+                "--public",
+                "static",
+                "--addr",
+                "127.0.0.1:8080",
+            ]))
+            .unwrap(),
+            Command::Serve(ServeCommand {
+                root: PathBuf::from("/tmp/app"),
+                manifest: Some(PathBuf::from("dist/manifest.json")),
+                public_dir: PublicDir::Path(PathBuf::from("static")),
+                addr: "127.0.0.1:8080".into(),
+            })
+        );
+    }
+
+    #[test]
     fn parses_disabled_public_assets() {
         assert_eq!(
             parse_command(os_args(&["zap", "build", "--no-public"])).unwrap(),
@@ -337,6 +600,13 @@ mod tests {
                 ..GraphCommand::default()
             })
         );
+        assert_eq!(
+            parse_command(os_args(&["zap", "serve", "--no-public"])).unwrap(),
+            Command::Serve(ServeCommand {
+                public_dir: PublicDir::Disabled,
+                ..ServeCommand::default()
+            })
+        );
     }
 
     #[test]
@@ -347,6 +617,10 @@ mod tests {
         );
         assert_eq!(
             parse_command(os_args(&["zap", "check", "--help"])).unwrap(),
+            Command::Help
+        );
+        assert_eq!(
+            parse_command(os_args(&["zap", "serve", "--help"])).unwrap(),
             Command::Help
         );
     }
@@ -373,6 +647,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("unknown check option"), "{error}");
+        let error = parse_command(os_args(&["zap", "serve", "--watch"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown serve option"), "{error}");
     }
 
     #[tokio::test]
