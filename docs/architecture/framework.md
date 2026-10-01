@@ -7,7 +7,7 @@ Status: Rust-owned implementation in progress.
 
 ZapJS is a Next.js-style integrated React framework whose runtime and tooling are owned by Rust. The user model is still one application: pages, layouts, route handlers, server actions, client assets, server rendering, navigation, cache metadata and deployment output are produced together.
 
-third-party JavaScript source may be bundled as input, but ZapJS does not use a JavaScript server runtime, JavaScript package-manager workflow, compatibility layer, HTTP adapter, or separately operated backend service as the product runtime.
+Third-party JavaScript source may be bundled as input, but ZapJS does not use a JavaScript server runtime, JavaScript package-manager workflow, compatibility layer, HTTP adapter, or separately operated backend service as the product runtime.
 
 React remains real React. Server rendering, React Server Components, hydration and navigation require JavaScript execution, so Rust embeds and controls a JavaScript engine with explicit host capabilities. Rust owns request admission, routing, I/O, resource limits, cancellation, explicit host operations, build orchestration, deployment packaging and validation.
 
@@ -59,7 +59,7 @@ Rust owns:
 - streaming response backpressure;
 - typed error boundaries at routing, rendering and function boundaries.
 
-The embedded JavaScript context receives only the host operations ZapJS installs. It has no process, filesystem or network API by default. Host calls are named, typed at the framework boundary and bounded by deadline/output limits.
+The embedded JavaScript context receives only the Web primitives and host operations ZapJS installs. It has no process, filesystem, network, browser storage, DOM, socket or package-loader API by default. Host calls are named, typed at the framework boundary and bounded by deadline/output limits.
 
 ## Splice contract
 
