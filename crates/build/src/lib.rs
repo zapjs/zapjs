@@ -145,6 +145,9 @@ pub async fn bundle(options: &BundleOptions) -> Result<BundleOutput> {
         ) {
             bail!("bundle cannot depend on unavailable modules: {warning}");
         }
+        if kind == "MODULE_LEVEL_DIRECTIVE" {
+            continue;
+        }
         warnings.push(warning.to_diagnostic().convert_to_string(false));
     }
     let mut files = Vec::new();
@@ -4679,6 +4682,18 @@ export const Label = 'count';
         options.aliases = write_react_runtime(temp.path());
         options.minify = false;
         let output = build_application(&options).await.unwrap();
+        assert!(
+            output
+                .bundles
+                .iter()
+                .all(|bundle| bundle.warnings.is_empty()),
+            "module-level directives consumed by ZapJS should not leak as bundler warnings: {:?}",
+            output
+                .bundles
+                .iter()
+                .flat_map(|bundle| bundle.warnings.iter())
+                .collect::<Vec<_>>()
+        );
 
         assert!(output.manifest.ends_with(Path::new(".zap/manifest.json")));
         assert!(output.manifest.is_file());
