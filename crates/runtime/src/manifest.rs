@@ -116,6 +116,8 @@ pub struct ApplicationManifest {
     pub actions: Vec<ActionRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_proxy: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_bootstrap: Option<PathBuf>,
     pub client_references: Vec<ClientReference>,
     pub assets: Vec<AssetRef>,
 }
@@ -177,6 +179,8 @@ pub enum ManifestError {
     InvalidActionId { action: String },
     #[error("action proxy has an unsafe bundle path: {path}")]
     InvalidActionProxyPath { path: PathBuf },
+    #[error("browser bootstrap has an unsafe bundle path: {path}")]
+    InvalidBrowserBootstrapPath { path: PathBuf },
     #[error("client reference {reference} references missing module {module}")]
     MissingClientReferenceModule { reference: String, module: String },
     #[error("client reference {reference} references non-client module {module}")]
@@ -308,6 +312,13 @@ impl CompiledManifest {
             if !is_safe_manifest_path(action_proxy) {
                 return Err(ManifestError::InvalidActionProxyPath {
                     path: action_proxy.clone(),
+                });
+            }
+        }
+        if let Some(browser_bootstrap) = &manifest.browser_bootstrap {
+            if !is_safe_manifest_path(browser_bootstrap) {
+                return Err(ManifestError::InvalidBrowserBootstrapPath {
+                    path: browser_bootstrap.clone(),
                 });
             }
         }
@@ -606,6 +617,10 @@ impl CompiledManifest {
         self.manifest.action_proxy.as_deref()
     }
 
+    pub fn browser_bootstrap(&self) -> Option<&Path> {
+        self.manifest.browser_bootstrap.as_deref()
+    }
+
     pub fn client_reference(&self, id: &str) -> Option<&ClientReference> {
         self.client_reference_indexes
             .get(id)
@@ -632,6 +647,9 @@ impl CompiledManifest {
         }
         if let Some(action_proxy) = &self.manifest.action_proxy {
             browser_chunks.insert(action_proxy.clone());
+        }
+        if let Some(browser_bootstrap) = &self.manifest.browser_bootstrap {
+            browser_chunks.insert(browser_bootstrap.clone());
         }
         Ok(RouteHydration {
             client_references,
@@ -780,6 +798,7 @@ mod tests {
                 path: PathBuf::from("shop/[id]/actions.ts"),
             }],
             action_proxy: Some(PathBuf::from(".zap/browser/actions.js")),
+            browser_bootstrap: Some(PathBuf::from(".zap/browser/bootstrap.js")),
             client_references: vec![ClientReference {
                 id: "client:shop/_id_/counter#Counter".into(),
                 module: "shop/_id_/counter".into(),
@@ -818,11 +837,16 @@ mod tests {
             compiled.action_proxy().unwrap(),
             Path::new(".zap/browser/actions.js")
         );
+        assert_eq!(
+            compiled.browser_bootstrap().unwrap(),
+            Path::new(".zap/browser/bootstrap.js")
+        );
         let hydration = compiled.route_hydration(matched.route).unwrap();
         assert_eq!(
             hydration.browser_chunks,
             vec![
                 PathBuf::from(".zap/browser/actions.js"),
+                PathBuf::from(".zap/browser/bootstrap.js"),
                 PathBuf::from(".zap/browser/shop/_id_/counter.js")
             ]
         );
@@ -984,6 +1008,13 @@ mod tests {
         assert!(matches!(
             CompiledManifest::new(unsafe_action_proxy).unwrap_err(),
             ManifestError::InvalidActionProxyPath { .. }
+        ));
+
+        let mut unsafe_browser_bootstrap = manifest();
+        unsafe_browser_bootstrap.browser_bootstrap = Some(PathBuf::from("../bootstrap.js"));
+        assert!(matches!(
+            CompiledManifest::new(unsafe_browser_bootstrap).unwrap_err(),
+            ManifestError::InvalidBrowserBootstrapPath { .. }
         ));
 
         let mut duplicate_client_reference = manifest();

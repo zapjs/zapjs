@@ -1165,6 +1165,10 @@ pub async fn build_application(
     graph.action_proxy = action_proxy
         .as_ref()
         .map(|_| options.graph.out_dir.join("browser/actions.js"));
+    let browser_bootstrap = write_browser_bootstrap(&root, &options.graph.out_dir, &graph)?;
+    graph.browser_bootstrap = browser_bootstrap
+        .as_ref()
+        .map(|_| options.graph.out_dir.join("browser/bootstrap.js"));
     let manifest = absolute(&root, &options.graph.manifest_path());
     write_manifest_atomically(&graph, &manifest)?;
     let deployment = absolute(&root, &options.graph.deployment_path());
@@ -1419,6 +1423,48 @@ export async function invokeAction(action, args = [], options = {{}}) {{
     Ok(Some(proxy))
 }
 
+fn write_browser_bootstrap(
+    root: &Path,
+    out_dir: &Path,
+    graph: &ApplicationGraph,
+) -> Result<Option<PathBuf>> {
+    let has_browser_work = !graph.client_references.is_empty() || graph.action_proxy.is_some();
+    if !has_browser_work {
+        return Ok(None);
+    }
+
+    let bootstrap = absolute(root, out_dir).join("browser/bootstrap.js");
+    let parent = bootstrap
+        .parent()
+        .context("generated browser bootstrap needs a parent directory")?;
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let body = r#"const hydrationElement = document.getElementById("__zap_hydration");
+if (hydrationElement) {
+  const hydration = JSON.parse(hydrationElement.textContent || "{}");
+  const chunks = Array.isArray(hydration.browser_chunks) ? hydration.browser_chunks : [];
+  const references = Array.isArray(hydration.client_references) ? hydration.client_references : [];
+  const currentUrl = new URL(import.meta.url, globalThis.location && globalThis.location.href || "http://zap.local/").href;
+  const importChunks = chunks.filter((chunk) => new URL(chunk, globalThis.location && globalThis.location.href || currentUrl).href !== currentUrl);
+  const imported = await Promise.all(importChunks.map((chunk) => import(chunk)));
+  const modulesByChunk = new Map(importChunks.map((chunk, index) => [chunk, imported[index]]));
+  const hooks = [];
+  for (const reference of references) {
+    const module = modulesByChunk.get(reference.browser_chunk);
+    const exported = module && module[reference.export];
+    if (exported && typeof exported.hydrate === "function") {
+      hooks.push(exported.hydrate({ hydration, reference, module }));
+    } else if (module && typeof module.hydrate === "function") {
+      hooks.push(module.hydrate({ hydration, reference, module }));
+    }
+  }
+  await Promise.all(hooks);
+  globalThis.__zap_hydrated = { hydration, chunks, importChunks, references };
+}
+"#;
+    fs::write(&bootstrap, body).with_context(|| format!("write {}", bootstrap.display()))?;
+    Ok(Some(bootstrap))
+}
+
 fn js_string(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -1466,6 +1512,9 @@ fn deployment_manifest_json(graph: &ApplicationGraph, manifest_path: &Path) -> R
     if let Some(action_proxy) = &graph.action_proxy {
         browser_assets.insert(action_proxy.clone());
     }
+    if let Some(browser_bootstrap) = &graph.browser_bootstrap {
+        browser_assets.insert(browser_bootstrap.clone());
+    }
     let browser_assets = browser_assets.into_iter().collect::<Vec<_>>();
 
     let static_assets = graph
@@ -1485,6 +1534,7 @@ fn deployment_manifest_json(graph: &ApplicationGraph, manifest_path: &Path) -> R
         "manifest": manifest_path,
         "action_endpoint": action_endpoint,
         "action_proxy": graph.action_proxy,
+        "browser_bootstrap": graph.browser_bootstrap,
         "server_bundles": server_bundles,
         "browser_assets": browser_assets,
         "static_assets": static_assets,
@@ -1788,6 +1838,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
         modules: module_refs,
         actions,
         action_proxy: None,
+        browser_bootstrap: None,
         client_references,
         assets,
     };
@@ -3233,6 +3284,7 @@ export const Label = 'count';
         assert_eq!(deployment["manifest"], ".zap/manifest.json");
         assert_eq!(deployment["action_endpoint"], "/_zap/action");
         assert_eq!(deployment["action_proxy"], ".zap/browser/actions.js");
+        assert_eq!(deployment["browser_bootstrap"], ".zap/browser/bootstrap.js");
         assert_eq!(deployment["routes"], 3);
         assert_eq!(deployment["actions"], 1);
         assert_eq!(deployment["client_references"], 2);
@@ -3252,6 +3304,12 @@ export const Label = 'count';
             deployment["browser_assets"]
                 .as_array()
                 .unwrap()
+                .contains(&serde_json::json!(".zap/browser/bootstrap.js"))
+        );
+        assert!(
+            deployment["browser_assets"]
+                .as_array()
+                .unwrap()
                 .contains(&serde_json::json!(".zap/browser/client.js"))
         );
         assert_eq!(
@@ -3266,6 +3324,7 @@ export const Label = 'count';
             hydration.browser_chunks,
             vec![
                 PathBuf::from(".zap/browser/actions.js"),
+                PathBuf::from(".zap/browser/bootstrap.js"),
                 PathBuf::from(".zap/browser/client.js")
             ]
         );
@@ -3299,6 +3358,7 @@ export const Label = 'count';
         let get_route_bundle = temp.path().join(".zap/server/api/ping/route.js");
         let action_bundle = temp.path().join(".zap/server/actions.js");
         let action_proxy = temp.path().join(".zap/browser/actions.js");
+        let browser_bootstrap = temp.path().join(".zap/browser/bootstrap.js");
         let output_action_proxy = output.action_proxy.as_deref().unwrap();
         assert!(output_action_proxy.ends_with(Path::new(".zap/browser/actions.js")));
         assert_eq!(
@@ -3306,14 +3366,29 @@ export const Label = 'count';
             Some(Path::new(".zap/browser/actions.js"))
         );
         assert_eq!(
+            output.graph.browser_bootstrap.as_deref(),
+            Some(Path::new(".zap/browser/bootstrap.js"))
+        );
+        assert_eq!(
             compiled.action_proxy(),
             Some(Path::new(".zap/browser/actions.js"))
+        );
+        assert_eq!(
+            compiled.browser_bootstrap(),
+            Some(Path::new(".zap/browser/bootstrap.js"))
         );
         assert!(page_bundle.is_file());
         assert!(route_bundle.is_file());
         assert!(get_route_bundle.is_file());
         assert!(action_bundle.is_file());
         assert!(action_proxy.is_file());
+        assert!(browser_bootstrap.is_file());
+        let browser_bootstrap_source = fs::read_to_string(&browser_bootstrap).unwrap();
+        assert!(browser_bootstrap_source.contains("__zap_hydration"));
+        assert!(browser_bootstrap_source.contains("import(chunk)"));
+        assert!(browser_bootstrap_source.contains("importChunks"));
+        assert!(browser_bootstrap_source.contains("import.meta.url"));
+        assert!(browser_bootstrap_source.contains("__zap_hydrated"));
         let action_proxy_source = fs::read_to_string(&action_proxy).unwrap();
         assert!(action_proxy_source.contains("action:actions#save"));
         assert!(action_proxy_source.contains("export async function invokeAction"));

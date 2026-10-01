@@ -794,6 +794,7 @@ mod tests {
                 path: PathBuf::from("actions.ts"),
             }],
             action_proxy: None,
+            browser_bootstrap: None,
             client_references: Vec::new(),
             assets: vec![AssetRef {
                 source: PathBuf::from("images/logo.svg"),

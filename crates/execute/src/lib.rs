@@ -302,6 +302,9 @@ impl ApplicationExecutor {
         if self.manifest.action_proxy() == Some(requested.as_path()) {
             return Some(requested);
         }
+        if self.manifest.browser_bootstrap() == Some(requested.as_path()) {
+            return Some(requested);
+        }
         None
     }
 
@@ -562,7 +565,11 @@ mod tests {
         assert_eq!(hydration["path"], "/");
         assert_eq!(
             hydration["browser_chunks"],
-            serde_json::json!(["/.zap/browser/actions.js", "/.zap/browser/client.js"])
+            serde_json::json!([
+                "/.zap/browser/actions.js",
+                "/.zap/browser/bootstrap.js",
+                "/.zap/browser/client.js"
+            ])
         );
         assert_eq!(hydration["client_references"].as_array().unwrap().len(), 1);
         assert_eq!(
@@ -609,6 +616,18 @@ mod tests {
         assert_eq!(
             String::from_utf8(action_asset.body).unwrap(),
             "export const actions = {};"
+        );
+
+        let bootstrap_asset = executor
+            .execute_request(&RequestExecutionInput::new(
+                &Method::GET,
+                "/.zap/browser/bootstrap.js",
+            ))
+            .unwrap();
+        assert_eq!(bootstrap_asset.status, StatusCode::OK);
+        assert_eq!(
+            String::from_utf8(bootstrap_asset.body).unwrap(),
+            "globalThis.__zap_bootstrap = true;"
         );
 
         let browser_wrong_method = executor
@@ -919,6 +938,11 @@ mod tests {
             "export const actions = {};",
         )
         .unwrap();
+        fs::write(
+            root.join(".zap/browser/bootstrap.js"),
+            "globalThis.__zap_bootstrap = true;",
+        )
+        .unwrap();
         let manifest = ApplicationManifest {
             routes: vec![
                 RouteEntry {
@@ -982,6 +1006,7 @@ mod tests {
                 path: PathBuf::from("actions.ts"),
             }],
             action_proxy: Some(PathBuf::from(".zap/browser/actions.js")),
+            browser_bootstrap: Some(PathBuf::from(".zap/browser/bootstrap.js")),
             client_references: vec![ClientReference {
                 id: "client:client#Counter".into(),
                 module: "client".into(),
