@@ -835,11 +835,15 @@ fn parse_cache_policy(text: &str) -> Result<CachePolicy> {
     let mut policy = CachePolicy::default();
     for line in text.lines().map(str::trim) {
         if let Some(value) = line.strip_prefix("export const dynamic") {
-            if value.contains("force-static") {
-                policy.dynamic = DynamicPolicy::ForceStatic;
-            } else if value.contains("force-dynamic") {
-                policy.dynamic = DynamicPolicy::ForceDynamic;
-            }
+            let Some(value) = export_literal(value) else {
+                continue;
+            };
+            policy.dynamic = match value {
+                "auto" => DynamicPolicy::Auto,
+                "force-static" => DynamicPolicy::ForceStatic,
+                "force-dynamic" => DynamicPolicy::ForceDynamic,
+                other => bail!("invalid dynamic value: {other}"),
+            };
         }
         if let Some(value) = line.strip_prefix("export const revalidate") {
             let Some((_, rhs)) = value.split_once('=') else {
@@ -857,6 +861,17 @@ fn parse_cache_policy(text: &str) -> Result<CachePolicy> {
         }
     }
     Ok(policy)
+}
+
+fn export_literal(value: &str) -> Option<&str> {
+    let (_, rhs) = value.split_once('=')?;
+    let rhs = rhs.trim().trim_end_matches(';').trim();
+    rhs.strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))
+        .or_else(|| {
+            rhs.strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+        })
 }
 
 fn route_handler_methods(text: &str) -> Result<Vec<String>> {
@@ -1068,6 +1083,25 @@ mod tests {
         assert_eq!(graph.actions[1].export, "save");
         assert_eq!(graph.assets[0].url_path, "/images/logo.svg");
         graph.to_manifest_json().unwrap();
+    }
+
+    #[test]
+    fn application_graph_rejects_invalid_cache_exports() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            app.join("page.tsx"),
+            "export const dynamic = 'force-staticity';
+export default function Page(){}
+",
+        )
+        .unwrap();
+
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("invalid dynamic value"), "{error}");
     }
 
     #[test]

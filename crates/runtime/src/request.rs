@@ -368,10 +368,10 @@ fn route_cache_decision(policy: &CachePolicy) -> RouteCacheDecision {
         },
         DynamicPolicy::ForceDynamic => RouteCacheDecision::PrivateNoStore,
         DynamicPolicy::Auto => match policy.revalidate_seconds {
+            Some(0) | None => RouteCacheDecision::PrivateNoStore,
             Some(seconds) => RouteCacheDecision::Public {
                 revalidate_seconds: Some(seconds),
             },
-            None => RouteCacheDecision::PrivateNoStore,
         },
     }
 }
@@ -751,6 +751,13 @@ mod tests {
             }
             target => panic!("unexpected target: {target:?}"),
         }
+        assert_eq!(
+            route_cache_decision(&CachePolicy {
+                dynamic: DynamicPolicy::Auto,
+                revalidate_seconds: Some(0),
+            }),
+            RouteCacheDecision::PrivateNoStore
+        );
     }
 
     #[test]
