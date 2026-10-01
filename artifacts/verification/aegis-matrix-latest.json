@@ -2,14 +2,14 @@
   "schema": "zap.aegis_matrix.v1",
   "ok": true,
   "date": "2026-10-01",
-  "fixture_root": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-matrix-2yqjnvra",
-  "serve_url": "http://127.0.0.1:54685",
+  "fixture_root": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-matrix-a7hnua2i",
+  "serve_url": "http://127.0.0.1:55585",
   "cycles": 3,
   "aegis": {
-    "addr": "127.0.0.1:54686",
-    "log_path": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-54686.log",
+    "addr": "127.0.0.1:55587",
+    "log_path": "/var/folders/xn/zb2_wvj508d9vx1cr7grpzlm0000gn/T/zapjs-aegis-55587.log",
     "mode": "detached_serve",
-    "pid": 50289,
+    "pid": 54174,
     "profile": "default",
     "runtime_executable": "/Users/deepsaint/Applications/Aegis.app/Contents/MacOS/aegis_cli"
   },
@@ -25,7 +25,7 @@
   ],
   "page_snapshot": {
     "title": null,
-    "url": "http://127.0.0.1:54685/docs/a/b/c?view=full",
+    "url": "http://127.0.0.1:55585/docs/a/b/c?view=full",
     "canonical_url": null,
     "visible_text": "<[object Object]>rootshopdocsbrokenZap navigation failed: 500 docs:a/b/c:view:full",
     "content_scopes": {
@@ -40,19 +40,19 @@
       {
         "index": 0,
         "text": "shop",
-        "href": "http://127.0.0.1:54685/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:55585/shop/cafe?color=blue",
         "title": null
       },
       {
         "index": 1,
         "text": "docs",
-        "href": "http://127.0.0.1:54685/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:55585/docs/a/b/c?view=full",
         "title": null
       },
       {
         "index": 2,
         "text": "broken",
-        "href": "http://127.0.0.1:54685/broken",
+        "href": "http://127.0.0.1:55585/broken",
         "title": null
       }
     ],
@@ -60,19 +60,19 @@
       {
         "index": 2,
         "text": "broken",
-        "href": "http://127.0.0.1:54685/broken",
+        "href": "http://127.0.0.1:55585/broken",
         "title": null
       },
       {
         "index": 0,
         "text": "shop",
-        "href": "http://127.0.0.1:54685/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:55585/shop/cafe?color=blue",
         "title": null
       },
       {
         "index": 1,
         "text": "docs",
-        "href": "http://127.0.0.1:54685/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:55585/docs/a/b/c?view=full",
         "title": null
       }
     ],
@@ -103,7 +103,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:54685/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:55585/shop/cafe?color=blue",
         "actions": [
           "click",
           "open",
@@ -122,7 +122,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:54685/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:55585/docs/a/b/c?view=full",
         "actions": [
           "click",
           "open",
@@ -141,7 +141,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:54685/broken",
+        "href": "http://127.0.0.1:55585/broken",
         "actions": [
           "click",
           "open",
@@ -180,7 +180,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:54685/broken",
+        "href": "http://127.0.0.1:55585/broken",
         "actions": [
           "click",
           "open",
@@ -199,7 +199,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:54685/shop/cafe?color=blue",
+        "href": "http://127.0.0.1:55585/shop/cafe?color=blue",
         "actions": [
           "click",
           "open",
@@ -218,7 +218,7 @@
         "label": null,
         "placeholder": null,
         "control_type": "link",
-        "href": "http://127.0.0.1:54685/docs/a/b/c?view=full",
+        "href": "http://127.0.0.1:55585/docs/a/b/c?view=full",
         "actions": [
           "click",
           "open",

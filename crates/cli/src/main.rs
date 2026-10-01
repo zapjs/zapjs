@@ -23,6 +23,7 @@ use zap_runtime::request::{AdmissionLimits, InvocationContext};
 enum Command {
     Build(BuildCommand),
     Check(GraphCommand),
+    Dev(DevCommand),
     Package(PackageCommand),
     Deploy(DeployCommand),
     Serve(ServeCommand),
@@ -49,6 +50,14 @@ struct ServeCommand {
     manifest: Option<PathBuf>,
     public_dir: PublicDir,
     addr: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DevCommand {
+    graph: GraphCommand,
+    out_dir: Option<PathBuf>,
+    addr: String,
+    minify: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +121,17 @@ impl Default for ServeCommand {
     }
 }
 
+impl Default for DevCommand {
+    fn default() -> Self {
+        Self {
+            graph: GraphCommand::default(),
+            out_dir: None,
+            addr: "127.0.0.1:3000".into(),
+            minify: true,
+        }
+    }
+}
+
 impl Default for PackageCommand {
     fn default() -> Self {
         Self {
@@ -153,6 +173,7 @@ async fn run(args: impl IntoIterator<Item = OsString>) -> Result<()> {
         }
         Command::Build(command) => run_build(command).await,
         Command::Check(command) => run_check(command),
+        Command::Dev(command) => run_dev(command).await,
         Command::Package(command) => run_package(command),
         Command::Deploy(command) => run_deploy(command).await,
         Command::Serve(command) => run_serve(command),
@@ -177,6 +198,32 @@ async fn run_build(command: BuildCommand) -> Result<()> {
         })?;
     print_build_summary(&output);
     Ok(())
+}
+
+async fn run_dev(command: DevCommand) -> Result<()> {
+    let mut options = ApplicationBuildOptions::new(&command.graph.root);
+    apply_graph_options(&mut options.graph, command.graph.clone());
+    if let Some(out_dir) = &command.out_dir {
+        options.graph.out_dir = out_dir.clone();
+    }
+    options.minify = command.minify;
+
+    let output = zap_build::build_application(&options)
+        .await
+        .with_context(|| {
+            format!(
+                "build ZapJS development artifacts at {}",
+                options.graph.root.display()
+            )
+        })?;
+    print_build_summary(&output);
+
+    run_serve(ServeCommand {
+        root: command.graph.root,
+        manifest: Some(output.manifest),
+        public_dir: command.graph.public_dir,
+        addr: command.addr,
+    })
 }
 
 fn run_serve(command: ServeCommand) -> Result<()> {
@@ -665,6 +712,14 @@ fn parse_command(args: impl IntoIterator<Item = OsString>) -> Result<Command> {
                 parse_graph(args, "check").map(Command::Check)
             }
         }
+        "dev" => {
+            let args = args.collect::<Vec<_>>();
+            if has_help(&args) {
+                Ok(Command::Help)
+            } else {
+                parse_dev(args).map(Command::Dev)
+            }
+        }
         "package" => {
             let args = args.collect::<Vec<_>>();
             if has_help(&args) {
@@ -708,6 +763,26 @@ fn parse_build(args: impl IntoIterator<Item = OsString>) -> Result<BuildCommand>
             "--out" => command.out_dir = Some(next_path(&mut args, "--out")?),
             "--no-minify" => command.minify = false,
             other => bail!("unknown build option `{other}`"),
+        }
+    }
+    Ok(command)
+}
+
+fn parse_dev(args: impl IntoIterator<Item = OsString>) -> Result<DevCommand> {
+    let mut command = DevCommand::default();
+    let mut args = args.into_iter();
+    while let Some(flag) = args.next() {
+        match flag.to_string_lossy().as_ref() {
+            "--root" => command.graph.root = next_path(&mut args, "--root")?,
+            "--app" => command.graph.app_dir = Some(next_path(&mut args, "--app")?),
+            "--public" => {
+                command.graph.public_dir = PublicDir::Path(next_path(&mut args, "--public")?)
+            }
+            "--no-public" => command.graph.public_dir = PublicDir::Disabled,
+            "--out" => command.out_dir = Some(next_path(&mut args, "--out")?),
+            "--addr" => command.addr = next_value(&mut args, "--addr")?,
+            "--no-minify" => command.minify = false,
+            other => bail!("unknown dev option `{other}`"),
         }
     }
     Ok(command)
@@ -1114,7 +1189,7 @@ fn status_reason(status: StatusCode) -> &'static str {
 
 fn print_usage() {
     println!(
-        "ZapJS\n\nUSAGE:\n    zap build [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--no-minify]\n    zap check [--root <path>] [--app <path>] [--public <path>|--no-public]\n    zap package [--root <path>] [--deployment <path>] [--public <path>|--no-public] [--out <path>]\n    zap deploy [--target <local-package|managed-native|provider-fs>] [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--no-minify]\n    zap serve [--root <path>] [--manifest <path>] [--public <path>|--no-public] [--addr <host:port>]\n\nCOMMANDS:\n    build      Build a ZapJS application with the Rust-owned compiler\n    check      Validate the ZapJS application graph without writing build artifacts\n    package    Materialize a deployable artifact tree from the Rust deployment manifest\n    deploy     Build and upload deployable ZapJS artifacts\n    serve      Serve built ZapJS artifacts with the Rust executor\n    help       Print this help\n"
+        "ZapJS\n\nUSAGE:\n    zap build [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--no-minify]\n    zap check [--root <path>] [--app <path>] [--public <path>|--no-public]\n    zap dev [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--addr <host:port>] [--no-minify]\n    zap package [--root <path>] [--deployment <path>] [--public <path>|--no-public] [--out <path>]\n    zap deploy [--target <local-package|managed-native|provider-fs>] [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--no-minify]\n    zap serve [--root <path>] [--manifest <path>] [--public <path>|--no-public] [--addr <host:port>]\n\nCOMMANDS:\n    build      Build a ZapJS application with the Rust-owned compiler\n    check      Validate the ZapJS application graph without writing build artifacts\n    dev        Build and serve ZapJS artifacts with the Rust toolchain\n    package    Materialize a deployable artifact tree from the Rust deployment manifest\n    deploy     Build and upload deployable ZapJS artifacts\n    serve      Serve built ZapJS artifacts with the Rust executor\n    help       Print this help\n"
     );
 }
 
@@ -1232,6 +1307,38 @@ mod tests {
                 root: PathBuf::from("/tmp/app"),
                 app_dir: Some(PathBuf::from("src/app")),
                 public_dir: PublicDir::Path(PathBuf::from("static")),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_explicit_dev_paths() {
+        assert_eq!(
+            parse_command(os_args(&[
+                "zap",
+                "dev",
+                "--root",
+                "/tmp/app",
+                "--app",
+                "src/app",
+                "--public",
+                "static",
+                "--out",
+                "dist/dev",
+                "--addr",
+                "127.0.0.1:8080",
+                "--no-minify",
+            ]))
+            .unwrap(),
+            Command::Dev(DevCommand {
+                graph: GraphCommand {
+                    root: PathBuf::from("/tmp/app"),
+                    app_dir: Some(PathBuf::from("src/app")),
+                    public_dir: PublicDir::Path(PathBuf::from("static")),
+                },
+                out_dir: Some(PathBuf::from("dist/dev")),
+                addr: "127.0.0.1:8080".into(),
+                minify: false,
             })
         );
     }
@@ -1387,6 +1494,16 @@ mod tests {
             })
         );
         assert_eq!(
+            parse_command(os_args(&["zap", "dev", "--no-public"])).unwrap(),
+            Command::Dev(DevCommand {
+                graph: GraphCommand {
+                    public_dir: PublicDir::Disabled,
+                    ..GraphCommand::default()
+                },
+                ..DevCommand::default()
+            })
+        );
+        assert_eq!(
             parse_command(os_args(&["zap", "package", "--no-public"])).unwrap(),
             Command::Package(PackageCommand {
                 public_dir: PublicDir::Disabled,
@@ -1423,6 +1540,10 @@ mod tests {
             Command::Help
         );
         assert_eq!(
+            parse_command(os_args(&["zap", "dev", "--help"])).unwrap(),
+            Command::Help
+        );
+        assert_eq!(
             parse_command(os_args(&["zap", "package", "--help"])).unwrap(),
             Command::Help
         );
@@ -1446,6 +1567,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("--app requires a path"), "{error}");
+        let error = parse_command(os_args(&["zap", "dev", "--addr"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--addr requires a value"), "{error}");
     }
 
     #[test]
@@ -1458,6 +1583,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("unknown check option"), "{error}");
+        let error = parse_command(os_args(&["zap", "dev", "--watch"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown dev option"), "{error}");
         let error = parse_command(os_args(&["zap", "package", "--watch"]))
             .unwrap_err()
             .to_string();

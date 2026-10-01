@@ -17,6 +17,25 @@ impl Drop for ChildGuard {
 }
 
 #[test]
+fn dev_builds_and_serves_from_real_zap_process() {
+    let temp = TempDir::new("zap-cli-dev-process");
+    write_minimal_app(temp.path());
+
+    let binary = env!("CARGO_BIN_EXE_zap");
+    assert_served_framework_from_command(
+        binary,
+        &[
+            "dev",
+            "--root",
+            temp.path().to_str().unwrap(),
+            "--addr",
+            "127.0.0.1:0",
+            "--no-minify",
+        ],
+    );
+}
+
+#[test]
 fn local_package_artifact_serves_from_real_zap_process() {
     let temp = TempDir::new("zap-cli-local-package-process");
     write_minimal_app(temp.path());
@@ -151,14 +170,21 @@ fn provider_fs_upload_serves_from_real_zap_process() {
 }
 
 fn assert_served_framework(binary: &str, function_root: &Path) {
-    let mut child = Command::new(binary)
-        .args([
+    assert_served_framework_from_command(
+        binary,
+        &[
             "serve",
             "--root",
             function_root.to_str().unwrap(),
             "--addr",
             "127.0.0.1:0",
-        ])
+        ],
+    );
+}
+
+fn assert_served_framework_from_command(binary: &str, args: &[&str]) {
+    let mut child = Command::new(binary)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -168,20 +194,25 @@ fn assert_served_framework(binary: &str, function_root: &Path) {
     let stdout = child.stdout.take().expect("serve stdout");
     let mut guard = ChildGuard(child);
     let mut reader = BufReader::new(stdout);
-    let mut listening = String::new();
-    reader
-        .read_line(&mut listening)
-        .expect("read serve address");
-    let address = listening
-        .trim()
-        .strip_prefix("listening=http://")
-        .expect("serve printed listening address")
-        .to_owned();
+    let address = read_listening_address(&mut reader);
 
     assert_served_framework_responses(&address);
 
     let _ = guard.0.kill();
     assert!(guard.0.wait().expect("wait for serve").success() == false);
+}
+
+fn read_listening_address(reader: &mut impl BufRead) -> String {
+    for _ in 0..64 {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .expect("read serve startup output");
+        if let Some(address) = line.trim().strip_prefix("listening=http://") {
+            return address.to_owned();
+        }
+    }
+    panic!("serve process did not print a listening address");
 }
 
 fn assert_served_framework_responses(address: &str) {
@@ -275,7 +306,8 @@ fn assert_served_framework_responses(address: &str) {
         "unexpected cached page response:\n{cached_page}"
     );
     assert!(
-        cached_page.contains("cache-control: public, max-age=0, s-maxage=60, stale-while-revalidate"),
+        cached_page
+            .contains("cache-control: public, max-age=0, s-maxage=60, stale-while-revalidate"),
         "cached page response missed public revalidation policy:\n{cached_page}"
     );
     assert!(
