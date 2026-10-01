@@ -1147,25 +1147,9 @@ fn export_literal(value: &str) -> Option<&str> {
 fn route_handler_methods(text: &str) -> Result<Vec<String>> {
     const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
     let mut found = BTreeSet::new();
-    for line in text.lines().map(str::trim) {
-        let Some(line) = line.strip_prefix("export ").map(str::trim_start) else {
-            continue;
-        };
-        let candidate = if let Some(rest) = line.strip_prefix("async function ") {
-            rest
-        } else if let Some(rest) = line.strip_prefix("function ") {
-            rest
-        } else if let Some(rest) = line.strip_prefix("const ") {
-            rest
-        } else {
-            continue;
-        };
-        let name = candidate
-            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
-            .next()
-            .unwrap_or_default();
-        if METHODS.contains(&name) {
-            found.insert(name.to_owned());
+    for name in exported_declaration_names(text) {
+        if METHODS.contains(&name.as_str()) {
+            found.insert(name);
         }
     }
     if found.contains("GET") {
@@ -1176,29 +1160,43 @@ fn route_handler_methods(text: &str) -> Result<Vec<String>> {
 
 fn server_action_exports(text: &str) -> Result<Vec<String>> {
     let mut names = BTreeSet::new();
-    for line in text.lines().map(str::trim) {
-        let Some(line) = line.strip_prefix("export ").map(str::trim_start) else {
-            continue;
-        };
-        let candidate = if let Some(rest) = line.strip_prefix("async function ") {
-            rest
-        } else if let Some(rest) = line.strip_prefix("function ") {
-            rest
-        } else if let Some(rest) = line.strip_prefix("const ") {
-            rest
-        } else {
-            continue;
-        };
-        let name = candidate
-            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
-            .next()
-            .unwrap_or_default();
+    for name in exported_declaration_names(text) {
         if name.is_empty() || name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             bail!("invalid server action export name: {name}");
         }
-        names.insert(name.to_owned());
+        names.insert(name);
     }
     Ok(names.into_iter().collect())
+}
+
+fn exported_declaration_names(text: &str) -> Vec<String> {
+    let tokens = js_tokens(text);
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        if !matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "export") {
+            index += 1;
+            continue;
+        }
+        index += 1;
+        if matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "async") {
+            index += 1;
+        }
+        match tokens.get(index) {
+            Some(JsToken::Ident(value)) if value == "function" => {
+                if let Some(JsToken::Ident(name)) = tokens.get(index + 1) {
+                    names.push(name.clone());
+                }
+            }
+            Some(JsToken::Ident(value)) if matches!(value.as_str(), "const" | "let" | "var") => {
+                if let Some(JsToken::Ident(name)) = tokens.get(index + 1) {
+                    names.push(name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 fn stable_action_id(path: &Path, export: &str) -> String {
@@ -1468,7 +1466,8 @@ export default function Page(){}
         fs::create_dir_all(&app).unwrap();
         fs::write(
             app.join("route.ts"),
-            "export function GET(){}
+            "export async
+function GET(){}
 ",
         )
         .unwrap();
@@ -1505,6 +1504,24 @@ const hidden = 1;
             .unwrap_err()
             .to_string();
         assert!(error.contains("must export at least one"), "{error}");
+
+        fs::write(
+            app.join("actions.ts"),
+            "'use server';
+export async
+function save(){}
+export const
+remove = async () => {};
+",
+        )
+        .unwrap();
+        let graph = build_application_graph(&GraphOptions::new(temp.path())).unwrap();
+        let exports: Vec<_> = graph
+            .actions
+            .iter()
+            .map(|action| action.export.clone())
+            .collect();
+        assert_eq!(exports, vec!["remove", "save"]);
     }
 
     #[tokio::test]
