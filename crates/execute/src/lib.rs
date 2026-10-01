@@ -5,14 +5,16 @@ use serde_json::Value;
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use thiserror::Error;
 use zap_render::{RenderError, Renderer};
 use zap_runtime::{
     manifest::{CompiledManifest, ManifestError},
     request::{
-        ActionInput, AdmissionLimits, AdmissionOutcome, ImmediateResponse, RequestInput,
-        RequestPlanError, RequestTarget, admit_action_input, admit_request_input,
+        ActionAdmission, ActionInput, AdmissionLimits, AdmissionOutcome, ExecutionContext,
+        ExecutionPolicy, ImmediateResponse, InvocationContext, RequestInput, RequestPlanError,
+        RequestTarget, admit_action_execution, admit_request_execution,
     },
 };
 
@@ -57,12 +59,36 @@ impl ExecutionResponse {
     }
 }
 
+pub trait ExecutionAuthorizer: Send + Sync {
+    fn authorize_request(
+        &self,
+        _target: &RequestTarget<'_>,
+        _context: &ExecutionContext,
+    ) -> Option<ExecutionResponse> {
+        None
+    }
+
+    fn authorize_action(
+        &self,
+        _admission: &ActionAdmission<'_>,
+        _context: &ExecutionContext,
+    ) -> Option<ExecutionResponse> {
+        None
+    }
+}
+
+#[derive(Debug, Default)]
+struct AllowAllAuthorizer;
+
+impl ExecutionAuthorizer for AllowAllAuthorizer {}
+
 #[derive(Debug, Clone)]
 pub struct RequestExecutionInput<'a> {
     pub method: &'a Method,
     pub path: &'a str,
     pub declared_body_bytes: Option<u64>,
     pub uses_private_request_state: bool,
+    pub context: InvocationContext<'a>,
 }
 
 impl<'a> RequestExecutionInput<'a> {
@@ -72,6 +98,11 @@ impl<'a> RequestExecutionInput<'a> {
             path,
             declared_body_bytes: None,
             uses_private_request_state: false,
+            context: InvocationContext {
+                request_id: None,
+                authenticated: false,
+                deadline_ms: None,
+            },
         }
     }
 }
@@ -84,6 +115,7 @@ pub struct ActionExecutionInput<'a> {
     pub expected_origin: Option<&'a str>,
     pub declared_body_bytes: Option<u64>,
     pub args: Vec<Value>,
+    pub context: InvocationContext<'a>,
 }
 
 pub struct ApplicationExecutor {
@@ -91,6 +123,8 @@ pub struct ApplicationExecutor {
     public_dir: PathBuf,
     manifest: CompiledManifest,
     limits: AdmissionLimits,
+    execution_policy: ExecutionPolicy,
+    authorizer: Arc<dyn ExecutionAuthorizer>,
 }
 
 impl ApplicationExecutor {
@@ -109,6 +143,8 @@ impl ApplicationExecutor {
             root,
             manifest,
             limits: AdmissionLimits::default(),
+            execution_policy: ExecutionPolicy::default(),
+            authorizer: Arc::new(AllowAllAuthorizer),
         })
     }
 
@@ -122,11 +158,21 @@ impl ApplicationExecutor {
         self
     }
 
+    pub fn with_execution_policy(mut self, policy: ExecutionPolicy) -> Self {
+        self.execution_policy = policy;
+        self
+    }
+
+    pub fn with_authorizer(mut self, authorizer: Arc<dyn ExecutionAuthorizer>) -> Self {
+        self.authorizer = authorizer;
+        self
+    }
+
     pub fn execute_request(
         &self,
         input: &RequestExecutionInput<'_>,
     ) -> Result<ExecutionResponse, ExecuteError> {
-        match admit_request_input(
+        match admit_request_execution(
             &self.manifest,
             &RequestInput {
                 method: input.method,
@@ -135,9 +181,19 @@ impl ApplicationExecutor {
                 uses_private_request_state: input.uses_private_request_state,
             },
             &self.limits,
+            &input.context,
+            &self.execution_policy,
         )? {
             AdmissionOutcome::Respond(response) => Ok(immediate_response(response)),
-            AdmissionOutcome::Dispatch(target) => self.dispatch_request(input, target),
+            AdmissionOutcome::Dispatch(plan) => {
+                if let Some(response) = self
+                    .authorizer
+                    .authorize_request(&plan.target, &plan.context)
+                {
+                    return Ok(response);
+                }
+                self.dispatch_request(input, plan.target)
+            }
         }
     }
 
@@ -145,7 +201,7 @@ impl ApplicationExecutor {
         &self,
         input: &ActionExecutionInput<'_>,
     ) -> Result<ExecutionResponse, ExecuteError> {
-        match admit_action_input(
+        match admit_action_execution(
             &self.manifest,
             &ActionInput {
                 method: input.method,
@@ -155,9 +211,18 @@ impl ApplicationExecutor {
                 declared_body_bytes: input.declared_body_bytes,
             },
             &self.limits,
+            &input.context,
+            &self.execution_policy,
         )? {
             AdmissionOutcome::Respond(response) => Ok(immediate_response(response)),
-            AdmissionOutcome::Dispatch(admission) => {
+            AdmissionOutcome::Dispatch(plan) => {
+                if let Some(response) = self
+                    .authorizer
+                    .authorize_action(&plan.target, &plan.context)
+                {
+                    return Ok(response);
+                }
+                let admission = plan.target;
                 let invocation = &admission.target.invocation;
                 let bundle_path = self.root.join(&invocation.server_bundle);
                 let bundle = read_artifact_string(&bundle_path)?;
@@ -332,6 +397,11 @@ mod tests {
                 expected_origin: Some("https://example.com"),
                 declared_body_bytes: None,
                 args: vec![serde_json::json!({"id": 7})],
+                context: InvocationContext {
+                    request_id: Some("action-1"),
+                    authenticated: true,
+                    deadline_ms: Some(1000),
+                },
             })
             .unwrap();
         assert_eq!(action.status, StatusCode::CREATED);
@@ -359,6 +429,94 @@ mod tests {
             wrong_method.headers,
             vec![("allow".into(), "GET, HEAD".into())]
         );
+    }
+
+    #[test]
+    fn execution_policy_denies_missing_authenticated_context_before_dispatch() {
+        let temp = tempfile::tempdir().unwrap();
+        write_fixture(temp.path());
+        let executor =
+            ApplicationExecutor::load_from(temp.path(), temp.path().join(".zap/manifest.json"))
+                .unwrap()
+                .with_execution_policy(ExecutionPolicy {
+                    require_request_id: false,
+                    require_authenticated: true,
+                    max_deadline_ms: 1000,
+                });
+
+        let denied = executor
+            .execute_request(&RequestExecutionInput::new(&Method::GET, "/"))
+            .unwrap();
+        assert_eq!(denied.status, StatusCode::UNAUTHORIZED);
+        assert!(denied.body.is_empty());
+    }
+
+    #[test]
+    fn authorizer_can_deny_requests_and_actions_before_artifact_execution() {
+        #[derive(Debug)]
+        struct DenyAll;
+        impl ExecutionAuthorizer for DenyAll {
+            fn authorize_request(
+                &self,
+                _target: &RequestTarget<'_>,
+                context: &ExecutionContext,
+            ) -> Option<ExecutionResponse> {
+                assert_eq!(context.request_id.as_deref(), Some("request-1"));
+                Some(ExecutionResponse::new(StatusCode::FORBIDDEN).with_body("request denied"))
+            }
+
+            fn authorize_action(
+                &self,
+                _admission: &ActionAdmission<'_>,
+                context: &ExecutionContext,
+            ) -> Option<ExecutionResponse> {
+                assert_eq!(context.request_id.as_deref(), Some("action-1"));
+                Some(ExecutionResponse::new(StatusCode::FORBIDDEN).with_body("action denied"))
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        write_fixture(temp.path());
+        let executor =
+            ApplicationExecutor::load_from(temp.path(), temp.path().join(".zap/manifest.json"))
+                .unwrap()
+                .with_execution_policy(ExecutionPolicy {
+                    require_request_id: true,
+                    require_authenticated: true,
+                    max_deadline_ms: 1000,
+                })
+                .with_authorizer(Arc::new(DenyAll));
+
+        let request = executor
+            .execute_request(&RequestExecutionInput {
+                context: InvocationContext {
+                    request_id: Some("request-1"),
+                    authenticated: true,
+                    deadline_ms: Some(500),
+                },
+                ..RequestExecutionInput::new(&Method::GET, "/")
+            })
+            .unwrap();
+        assert_eq!(request.status, StatusCode::FORBIDDEN);
+        assert_eq!(String::from_utf8(request.body).unwrap(), "request denied");
+
+        let action = executor
+            .execute_action(&ActionExecutionInput {
+                method: &Method::POST,
+                action_id: "action:actions#save",
+                origin: Some("https://example.com"),
+                expected_origin: Some("https://example.com"),
+                declared_body_bytes: None,
+                args: vec![serde_json::json!({"id": 7})],
+                context: InvocationContext {
+                    request_id: Some("action-1"),
+                    authenticated: true,
+                    deadline_ms: Some(500),
+                },
+            })
+            .unwrap();
+        assert_eq!(action.status, StatusCode::FORBIDDEN);
+        assert_eq!(String::from_utf8(action.body).unwrap(), "action denied");
     }
 
     fn write_fixture(root: &Path) {
