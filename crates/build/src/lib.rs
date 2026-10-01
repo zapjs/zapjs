@@ -1289,7 +1289,26 @@ function normalizeZapOutput(value) {{
   throw new TypeError("Zap route output must be text, a Response or a ReadableStream");
 }}
 
-export async function handle(request) {{
+function zapRequestUrl(payload) {{
+  const path = typeof payload.path === "string" && payload.path.length > 0 ? payload.path : "/";
+  return path.startsWith("/") ? `https://zap.local${{path}}` : `https://zap.local/${{path}}`;
+}}
+
+function zapRouteRequest(payload) {{
+  const method = String(payload && payload.method || "GET").toUpperCase();
+  const init = {{ method, headers: payload && payload.headers || {{}} }};
+  if (method !== "GET" && method !== "HEAD") init.body = payload && payload.body || "";
+  const request = new Request(zapRequestUrl(payload || {{}}), init);
+  Object.defineProperties(request, {{
+    path: {{ value: payload && payload.path || "/", enumerable: true }},
+    params: {{ value: payload && payload.params || {{}}, enumerable: true }},
+    searchParams: {{ value: payload && payload.searchParams || {{}}, enumerable: true }}
+  }});
+  return request;
+}}
+
+export async function handle(payload) {{
+  const request = zapRouteRequest(payload || {{}});
   const method = String(request && request.method || "").toUpperCase();
   if (!allowedMethods.includes(method)) {{
     throw new TypeError(`Zap route handler does not export ${{method || "a request method"}}`);
@@ -3359,13 +3378,13 @@ export const Label = 'count';
         .unwrap();
         fs::write(
             app.join("api/echo/route.ts"),
-            "export function POST(request){ return new Response(`echo:${request.method}:${request.path}:${request.body}`, {status: 202, headers: {'x-zap-route': 'echo'}}); }
+            "export async function POST(request){ const body = await request.text(); return new Response(`echo:${request.method}:${request.path}:${request.headers.get('x-zap')}:${body}`, {status: 202, headers: {'x-zap-route': 'echo'}}); }
 ",
         )
         .unwrap();
         fs::write(
             app.join("api/ping/route.ts"),
-            "export function GET(request){ return new Response(`ping:${request.method}:${request.path}`, {status: 200, headers: {'x-zap-route': 'ping'}}); }
+            "export function GET(request){ return new Response(`ping:${request.method}:${request.path}:${request.url}`, {status: 200, headers: {'x-zap-route': 'ping'}}); }
 ",
         )
         .unwrap();
@@ -3527,6 +3546,9 @@ export const Label = 'count';
         let page_entry_source =
             fs::read_to_string(temp.path().join(".zap/entries/server/page.js")).unwrap();
         assert!(page_entry_source.contains("export async function flight"));
+        let route_entry_source =
+            fs::read_to_string(temp.path().join(".zap/entries/server/api/echo/route.js")).unwrap();
+        assert!(route_entry_source.contains("new Request(zapRequestUrl"));
         let action_proxy_source = fs::read_to_string(&action_proxy).unwrap();
         assert!(action_proxy_source.contains("action:actions#save"));
         assert!(action_proxy_source.contains("export async function invokeAction"));
@@ -3601,7 +3623,11 @@ export const Label = 'count';
         );
         let route_request = plan_request(&compiled, &Method::POST, "/api/echo")
             .unwrap()
-            .renderer_request_json("/api/echo", &[], br#"{"name":"zap"}"#)
+            .renderer_request_json(
+                "/api/echo",
+                &[("x-zap".into(), "route".into())],
+                br#"{"name":"zap"}"#,
+            )
             .unwrap()
             .unwrap();
         let handled = Renderer::new(fs::read_to_string(route_bundle).unwrap())
@@ -3609,7 +3635,7 @@ export const Label = 'count';
             .unwrap();
         assert_eq!(handled.status, 202);
         assert_eq!(handled.headers, vec![("x-zap-route".into(), "echo".into())]);
-        assert_eq!(handled.body, r#"echo:POST:/api/echo:{"name":"zap"}"#);
+        assert_eq!(handled.body, r#"echo:POST:/api/echo:route:{"name":"zap"}"#);
         let head_request = plan_request(&compiled, &Method::HEAD, "/api/ping")
             .unwrap()
             .renderer_request_json("/api/ping", &[], b"")
@@ -3620,7 +3646,7 @@ export const Label = 'count';
             .unwrap();
         assert_eq!(head.status, 200);
         assert_eq!(head.headers, vec![("x-zap-route".into(), "ping".into())]);
-        assert_eq!(head.body, "ping:HEAD:/api/ping");
+        assert_eq!(head.body, "ping:HEAD:/api/ping:https://zap.local/api/ping");
         let action_request = plan_action(
             &compiled,
             &Method::POST,

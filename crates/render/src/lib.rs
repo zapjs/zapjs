@@ -608,6 +608,28 @@ mod tests {
     }
 
     #[test]
+    fn exposes_web_request_primitive() {
+        let response = route_handler(
+            r#"const webRequest = new Request('https://zap.local/api/echo?tag=one', {method: 'POST', headers: {'x-zap': '1'}, body: request.body}); return new Response(`${webRequest.method}:${webRequest.url}:${webRequest.headers.get('x-zap')}:${webRequest.body}`);"#,
+        )
+        .handle_route_response(r#"{"body":"hello"}"#)
+        .unwrap();
+        assert_eq!(
+            response.body,
+            "POST:https://zap.local/api/echo?tag=one:1:hello"
+        );
+
+        let used_error = route_handler(
+            r#"const webRequest = new Request('https://zap.local/api/echo', {method: 'POST', body: 'hello'}); return webRequest.text().then(() => webRequest.text());"#,
+        )
+        .handle_route_response(r#"{}"#)
+        .unwrap_err();
+        assert!(used_error
+            .to_string()
+            .contains("Request body has already been read"));
+    }
+
+    #[test]
     fn handles_route_response_metadata_from_bundle() {
         let response = route_handler(
             r#"return new Response(JSON.stringify({ok: true}), {status: 201, headers: {'content-type': 'application/json'}});"#,

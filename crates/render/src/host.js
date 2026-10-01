@@ -88,6 +88,63 @@ function normalizeHeaderName(name) {
 }
 globalThis.Headers = Headers;
 
+class Request {
+  constructor(input, init = {}) {
+    if (input instanceof Request) {
+      this.url = input.url;
+      this.method = init.method == null ? input.method : String(init.method).toUpperCase();
+      this.headers = new Headers(init.headers == null ? input.headers : init.headers);
+      this.body = init.body == null ? input.body : normalizeBody(init.body);
+    } else {
+      this.url = String(input);
+      this.method = init.method == null ? 'GET' : String(init.method).toUpperCase();
+      this.headers = new Headers(init.headers);
+      this.body = init.body == null ? '' : normalizeBody(init.body);
+    }
+    this.bodyUsed = false;
+  }
+  clone() {
+    if (this.bodyUsed) throw new TypeError('Cannot clone a used Request body');
+    const copy = new Request(this.url, {method: this.method, headers: this.headers, body: this.body});
+    for (const key of Object.keys(this)) {
+      if (!(key in copy)) copy[key] = this[key];
+    }
+    return copy;
+  }
+  async text() {
+    return bodyText(consumeBody(this));
+  }
+  async json() {
+    return JSON.parse(await this.text());
+  }
+  async arrayBuffer() {
+    const bytes = new TextEncoder().encode(await this.text());
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+}
+
+function consumeBody(request) {
+  if (request.bodyUsed) throw new TypeError('Request body has already been read');
+  request.bodyUsed = true;
+  return request.body;
+}
+
+function normalizeBody(body) {
+  if (body == null) return '';
+  if (typeof body === 'string') return body;
+  if (body instanceof Uint8Array) return body;
+  return String(body);
+}
+
+function bodyText(body) {
+  if (typeof body === 'string') return body;
+  if (body instanceof Uint8Array) return new TextDecoder().decode(body);
+  if (body == null) return '';
+  return String(body);
+}
+
+globalThis.Request = Request;
+
 globalThis.Response = class Response {
   constructor(body = '', init = {}) {
     this.status = init.status == null ? 200 : Number(init.status);
