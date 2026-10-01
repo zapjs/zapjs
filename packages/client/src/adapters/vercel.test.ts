@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, cp, rm, readFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, cp, rm, readFile, readlink, symlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +31,12 @@ test('Vercel function runs from a relocated dependency closure with app source r
     expect(destination('text/html,text/x-component;q=0.9').dest).toBe('/zap');
     expect(destination('text/html').dest).toBe('/page.html');
     expect(destination('text/x-component').headers['x-zap-build']).toBe('test-build');
-    await cp(join(output, 'functions/zap.func'), isolated, { recursive: true });
+    // Preserve the adapter's relative links when relocating the artifact. The
+    // default copy can rewrite them to absolute paths into the soon-deleted app.
+    const functionDir = join(output, 'functions/zap.func');
+    await cp(functionDir, isolated, { recursive: true, verbatimSymlinks: true });
+    const dependencyLink = join('files', app, 'node_modules');
+    expect(await readlink(join(isolated, dependencyLink))).toBe(await readlink(join(functionDir, dependencyLink)));
     await rm(app, { recursive: true, force: true });
     const invocation = spawnSync('node', ['--input-type=module', '-e', `
       import {createServer} from 'node:http';
