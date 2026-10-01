@@ -431,17 +431,14 @@ impl CompiledManifest {
 }
 
 fn is_valid_route_methods(route: &RouteEntry) -> bool {
+    const HANDLER_METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+
     if route.methods.is_empty() {
         return false;
     }
     let mut seen = BTreeSet::new();
     for method in &route.methods {
-        if method.is_empty()
-            || !method
-                .chars()
-                .all(|character| character.is_ascii_uppercase())
-            || !seen.insert(method)
-        {
+        if !HANDLER_METHODS.contains(&method.as_str()) || !seen.insert(method) {
             return false;
         }
     }
@@ -645,6 +642,22 @@ mod tests {
         assert!(matches!(
             CompiledManifest::new(invalid_route_module).unwrap_err(),
             ManifestError::InvalidRouteModuleKind { .. }
+        ));
+
+        let mut invalid_handler_method = manifest();
+        invalid_handler_method.routes[0].kind = RouteKind::Handler;
+        invalid_handler_method.routes[0].methods = vec!["BREW".into()];
+        assert!(matches!(
+            CompiledManifest::new(invalid_handler_method).unwrap_err(),
+            ManifestError::InvalidRouteMethods { .. }
+        ));
+
+        let mut duplicate_handler_method = manifest();
+        duplicate_handler_method.routes[0].kind = RouteKind::Handler;
+        duplicate_handler_method.routes[0].methods = vec!["POST".into(), "POST".into()];
+        assert!(matches!(
+            CompiledManifest::new(duplicate_handler_method).unwrap_err(),
+            ManifestError::InvalidRouteMethods { .. }
         ));
     }
 }
