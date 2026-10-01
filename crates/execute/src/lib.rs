@@ -367,7 +367,12 @@ impl ApplicationExecutor {
                                 path: bundle_path.clone(),
                                 source,
                             })?;
-                    append_hydration_bootstrap(rendered, input.path, hydration)?
+                    append_hydration_bootstrap(
+                        rendered,
+                        input.path,
+                        hydration,
+                        self.manifest.browser_bootstrap(),
+                    )?
                 };
                 Ok(ExecutionResponse::new(StatusCode::OK)
                     .with_headers(cache.response_headers())
@@ -422,6 +427,7 @@ fn append_hydration_bootstrap(
     html: String,
     path: &str,
     hydration: &RouteHydration,
+    browser_bootstrap: Option<&Path>,
 ) -> Result<String, ExecuteError> {
     if hydration.browser_chunks.is_empty() && hydration.client_references.is_empty() {
         return Ok(html);
@@ -462,6 +468,11 @@ fn append_hydration_bootstrap(
     bootstrap.push_str("<script type=\"application/json\" id=\"__zap_hydration\">");
     bootstrap.push_str(&payload);
     bootstrap.push_str("</script>");
+    if let Some(browser_bootstrap) = browser_bootstrap {
+        bootstrap.push_str("<script type=\"module\" src=\"");
+        bootstrap.push_str(&html_attr_escape(&browser_asset_url(browser_bootstrap)));
+        bootstrap.push_str("\"></script>");
+    }
 
     if let Some(index) = html.rfind("</body>") {
         let mut output = String::with_capacity(html.len() + bootstrap.len());
@@ -554,6 +565,10 @@ mod tests {
         );
         assert!(
             page_body.contains("<link rel=\"modulepreload\" href=\"/.zap/browser/client.js\">")
+        );
+        assert!(
+            page_body
+                .contains("<script type=\"module\" src=\"/.zap/browser/bootstrap.js\"></script>")
         );
         assert!(page_body.contains("id=\"__zap_hydration\""));
         let hydration_json = page_body

@@ -1443,13 +1443,15 @@ if (hydrationElement) {
   const hydration = JSON.parse(hydrationElement.textContent || "{}");
   const chunks = Array.isArray(hydration.browser_chunks) ? hydration.browser_chunks : [];
   const references = Array.isArray(hydration.client_references) ? hydration.client_references : [];
-  const currentUrl = new URL(import.meta.url, globalThis.location && globalThis.location.href || "http://zap.local/").href;
-  const importChunks = chunks.filter((chunk) => new URL(chunk, globalThis.location && globalThis.location.href || currentUrl).href !== currentUrl);
+  const baseUrl = globalThis.location && globalThis.location.href || "http://zap.local/";
+  const currentUrl = new URL(import.meta.url, baseUrl).href;
+  const chunkUrl = (chunk) => new URL(chunk, baseUrl).href;
+  const importChunks = chunks.filter((chunk) => chunkUrl(chunk) !== currentUrl);
   const imported = await Promise.all(importChunks.map((chunk) => import(chunk)));
-  const modulesByChunk = new Map(importChunks.map((chunk, index) => [chunk, imported[index]]));
+  const modulesByChunk = new Map(importChunks.map((chunk, index) => [chunkUrl(chunk), imported[index]]));
   const hooks = [];
   for (const reference of references) {
-    const module = modulesByChunk.get(reference.browser_chunk);
+    const module = modulesByChunk.get(chunkUrl(reference.browser_chunk));
     const exported = module && module[reference.export];
     if (exported && typeof exported.hydrate === "function") {
       hooks.push(exported.hydrate({ hydration, reference, module }));
@@ -3388,6 +3390,7 @@ export const Label = 'count';
         assert!(browser_bootstrap_source.contains("import(chunk)"));
         assert!(browser_bootstrap_source.contains("importChunks"));
         assert!(browser_bootstrap_source.contains("import.meta.url"));
+        assert!(browser_bootstrap_source.contains("chunkUrl(reference.browser_chunk)"));
         assert!(browser_bootstrap_source.contains("__zap_hydrated"));
         let action_proxy_source = fs::read_to_string(&action_proxy).unwrap();
         assert!(action_proxy_source.contains("action:actions#save"));
