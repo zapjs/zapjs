@@ -1,12 +1,14 @@
 use anyhow::{Context, Result, bail};
 use http::{Method, StatusCode};
+use serde_json::Value;
 use std::{
     collections::BTreeMap,
     env,
     ffi::OsString,
+    fs,
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
-    path::PathBuf,
+    path::{Component, Path, PathBuf},
     process::ExitCode,
 };
 use zap_build::{
@@ -21,6 +23,7 @@ use zap_runtime::request::InvocationContext;
 enum Command {
     Build(BuildCommand),
     Check(GraphCommand),
+    Package(PackageCommand),
     Serve(ServeCommand),
     Help,
 }
@@ -45,6 +48,14 @@ struct ServeCommand {
     manifest: Option<PathBuf>,
     public_dir: PublicDir,
     addr: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PackageCommand {
+    root: PathBuf,
+    deployment: Option<PathBuf>,
+    public_dir: PublicDir,
+    out_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +96,17 @@ impl Default for ServeCommand {
     }
 }
 
+impl Default for PackageCommand {
+    fn default() -> Self {
+        Self {
+            root: PathBuf::from("."),
+            deployment: None,
+            public_dir: PublicDir::Default,
+            out_dir: None,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     match run(env::args_os()).await {
@@ -104,6 +126,7 @@ async fn run(args: impl IntoIterator<Item = OsString>) -> Result<()> {
         }
         Command::Build(command) => run_build(command).await,
         Command::Check(command) => run_check(command),
+        Command::Package(command) => run_package(command),
         Command::Serve(command) => run_serve(command),
     }
 }
@@ -157,6 +180,207 @@ fn run_serve(command: ServeCommand) -> Result<()> {
     Ok(())
 }
 
+fn run_package(command: PackageCommand) -> Result<()> {
+    let deployment_path = command
+        .deployment
+        .clone()
+        .unwrap_or_else(|| command.root.join(".zap/deployment.json"));
+    let out_dir = command
+        .out_dir
+        .clone()
+        .unwrap_or_else(|| command.root.join(".zap/package"));
+    let public_dir = match &command.public_dir {
+        PublicDir::Default => command.root.join("public"),
+        PublicDir::Path(path) => path.clone(),
+        PublicDir::Disabled => command.root.join(".zap/no-public"),
+    };
+
+    let deployment = read_deployment_manifest(&deployment_path)
+        .with_context(|| format!("read deployment manifest at {}", deployment_path.display()))?;
+
+    fs::create_dir_all(&out_dir)
+        .with_context(|| format!("create package output at {}", out_dir.display()))?;
+    copy_named_file(
+        &deployment_path,
+        &out_dir.join(".zap/deployment.json"),
+        "deployment manifest",
+    )?;
+    copy_relative_file(
+        &command.root,
+        &out_dir,
+        &deployment.manifest,
+        "application manifest",
+    )?;
+
+    for bundle in &deployment.server_bundles {
+        copy_relative_file(&command.root, &out_dir, bundle, "server bundle")?;
+    }
+    for asset in &deployment.browser_assets {
+        copy_relative_file(&command.root, &out_dir, asset, "browser asset")?;
+    }
+    for asset in &deployment.static_assets {
+        copy_relative_file(&public_dir, &out_dir.join("public"), asset, "static asset")?;
+    }
+
+    let package_manifest = serde_json::json!({
+        "schema": "zap.package.v1",
+        "deployment": ".zap/deployment.json",
+        "manifest": deployment.manifest,
+        "action_endpoint": deployment.action_endpoint,
+        "server_bundles": deployment.server_bundles,
+        "browser_assets": deployment.browser_assets,
+        "static_assets": deployment.static_assets,
+    });
+    let package_manifest_path = out_dir.join(".zap/package.json");
+    if let Some(parent) = package_manifest_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!("create package manifest directory at {}", parent.display())
+        })?;
+    }
+    fs::write(
+        &package_manifest_path,
+        serde_json::to_vec_pretty(&package_manifest)?,
+    )
+    .with_context(|| {
+        format!(
+            "write package manifest at {}",
+            package_manifest_path.display()
+        )
+    })?;
+
+    println!("package={}", out_dir.display());
+    println!("manifest={}", out_dir.join(&deployment.manifest).display());
+    println!(
+        "deployment={}",
+        out_dir.join(".zap/deployment.json").display()
+    );
+    println!("server_bundles={}", deployment.server_bundles.len());
+    println!("browser_assets={}", deployment.browser_assets.len());
+    println!("static_assets={}", deployment.static_assets.len());
+    Ok(())
+}
+
+#[derive(Debug)]
+struct DeploymentManifest {
+    manifest: PathBuf,
+    action_endpoint: Option<String>,
+    server_bundles: Vec<PathBuf>,
+    browser_assets: Vec<PathBuf>,
+    static_assets: Vec<PathBuf>,
+}
+
+fn read_deployment_manifest(path: &Path) -> Result<DeploymentManifest> {
+    let source = fs::read_to_string(path)
+        .with_context(|| format!("read deployment manifest at {}", path.display()))?;
+    let value: Value = serde_json::from_str(&source).context("parse deployment manifest JSON")?;
+    let object = value
+        .as_object()
+        .context("deployment manifest must be a JSON object")?;
+    let schema = object
+        .get("schema")
+        .and_then(Value::as_str)
+        .context("deployment manifest is missing schema")?;
+    if schema != "zap.deployment.v1" {
+        bail!("unsupported deployment manifest schema `{schema}`");
+    }
+
+    let manifest = required_relative_field(object.get("manifest"), "manifest")?;
+    let action_endpoint = object
+        .get("action_endpoint")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let server_bundles = object
+        .get("server_bundles")
+        .and_then(Value::as_array)
+        .context("deployment manifest is missing server_bundles")?
+        .iter()
+        .map(|entry| {
+            let path = entry
+                .get("path")
+                .context("server bundle entry is missing path")?;
+            required_relative_field(Some(path), "server bundle path")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let browser_assets = object
+        .get("browser_assets")
+        .and_then(Value::as_array)
+        .context("deployment manifest is missing browser_assets")?
+        .iter()
+        .map(|entry| required_relative_field(Some(entry), "browser asset"))
+        .collect::<Result<Vec<_>>>()?;
+    let static_assets = object
+        .get("static_assets")
+        .and_then(Value::as_array)
+        .context("deployment manifest is missing static_assets")?
+        .iter()
+        .map(|entry| {
+            let source = entry
+                .get("source")
+                .context("static asset entry is missing source")?;
+            required_relative_field(Some(source), "static asset source")
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(DeploymentManifest {
+        manifest,
+        action_endpoint,
+        server_bundles,
+        browser_assets,
+        static_assets,
+    })
+}
+
+fn required_relative_field(value: Option<&Value>, label: &str) -> Result<PathBuf> {
+    let value = value
+        .and_then(Value::as_str)
+        .with_context(|| format!("{label} must be a string"))?;
+    safe_relative_path(value, label)
+}
+
+fn safe_relative_path(value: &str, label: &str) -> Result<PathBuf> {
+    if value.is_empty() {
+        bail!("{label} must not be empty");
+    }
+    let path = PathBuf::from(value);
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => {}
+            Component::CurDir => bail!("{label} must not contain current-directory components"),
+            Component::ParentDir => bail!("{label} must not contain parent-directory components"),
+            Component::RootDir | Component::Prefix(_) => bail!("{label} must be relative"),
+        }
+    }
+    Ok(path)
+}
+
+fn copy_relative_file(
+    source_root: &Path,
+    dest_root: &Path,
+    relative: &Path,
+    label: &str,
+) -> Result<()> {
+    copy_named_file(
+        &source_root.join(relative),
+        &dest_root.join(relative),
+        label,
+    )
+}
+
+fn copy_named_file(source: &Path, dest: &Path, label: &str) -> Result<()> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create {label} directory at {}", parent.display()))?;
+    }
+    fs::copy(source, dest).with_context(|| {
+        format!(
+            "copy {label} from {} to {}",
+            source.display(),
+            dest.display()
+        )
+    })?;
+    Ok(())
+}
+
 fn run_check(command: GraphCommand) -> Result<()> {
     let mut options = GraphOptions::new(&command.root);
     apply_graph_options(&mut options, command);
@@ -198,6 +422,14 @@ fn parse_command(args: impl IntoIterator<Item = OsString>) -> Result<Command> {
                 Ok(Command::Help)
             } else {
                 parse_graph(args, "check").map(Command::Check)
+            }
+        }
+        "package" => {
+            let args = args.collect::<Vec<_>>();
+            if has_help(&args) {
+                Ok(Command::Help)
+            } else {
+                parse_package(args).map(Command::Package)
             }
         }
         "serve" => {
@@ -243,6 +475,22 @@ fn parse_serve(args: impl IntoIterator<Item = OsString>) -> Result<ServeCommand>
             "--no-public" => command.public_dir = PublicDir::Disabled,
             "--addr" => command.addr = next_value(&mut args, "--addr")?,
             other => bail!("unknown serve option `{other}`"),
+        }
+    }
+    Ok(command)
+}
+
+fn parse_package(args: impl IntoIterator<Item = OsString>) -> Result<PackageCommand> {
+    let mut command = PackageCommand::default();
+    let mut args = args.into_iter();
+    while let Some(flag) = args.next() {
+        match flag.to_string_lossy().as_ref() {
+            "--root" => command.root = next_path(&mut args, "--root")?,
+            "--deployment" => command.deployment = Some(next_path(&mut args, "--deployment")?),
+            "--public" => command.public_dir = PublicDir::Path(next_path(&mut args, "--public")?),
+            "--no-public" => command.public_dir = PublicDir::Disabled,
+            "--out" => command.out_dir = Some(next_path(&mut args, "--out")?),
+            other => bail!("unknown package option `{other}`"),
         }
     }
     Ok(command)
@@ -434,7 +682,7 @@ fn status_reason(status: StatusCode) -> &'static str {
 
 fn print_usage() {
     println!(
-        "ZapJS\n\nUSAGE:\n    zap build [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--no-minify]\n    zap check [--root <path>] [--app <path>] [--public <path>|--no-public]\n    zap serve [--root <path>] [--manifest <path>] [--public <path>|--no-public] [--addr <host:port>]\n\nCOMMANDS:\n    build    Build a ZapJS application with the Rust-owned compiler\n    check    Validate the ZapJS application graph without writing build artifacts\n    serve    Serve built ZapJS artifacts with the Rust executor\n    help     Print this help\n"
+        "ZapJS\n\nUSAGE:\n    zap build [--root <path>] [--app <path>] [--public <path>|--no-public] [--out <path>] [--no-minify]\n    zap check [--root <path>] [--app <path>] [--public <path>|--no-public]\n    zap package [--root <path>] [--deployment <path>] [--public <path>|--no-public] [--out <path>]\n    zap serve [--root <path>] [--manifest <path>] [--public <path>|--no-public] [--addr <host:port>]\n\nCOMMANDS:\n    build      Build a ZapJS application with the Rust-owned compiler\n    check      Validate the ZapJS application graph without writing build artifacts\n    package    Materialize a deployable artifact tree from the Rust deployment manifest\n    serve      Serve built ZapJS artifacts with the Rust executor\n    help       Print this help\n"
     );
 }
 
@@ -557,6 +805,31 @@ mod tests {
     }
 
     #[test]
+    fn parses_explicit_package_paths() {
+        assert_eq!(
+            parse_command(os_args(&[
+                "zap",
+                "package",
+                "--root",
+                "/tmp/app",
+                "--deployment",
+                "dist/deployment.json",
+                "--public",
+                "static",
+                "--out",
+                "dist/package",
+            ]))
+            .unwrap(),
+            Command::Package(PackageCommand {
+                root: PathBuf::from("/tmp/app"),
+                deployment: Some(PathBuf::from("dist/deployment.json")),
+                public_dir: PublicDir::Path(PathBuf::from("static")),
+                out_dir: Some(PathBuf::from("dist/package")),
+            })
+        );
+    }
+
+    #[test]
     fn parses_explicit_serve_paths() {
         assert_eq!(
             parse_command(os_args(&[
@@ -601,6 +874,13 @@ mod tests {
             })
         );
         assert_eq!(
+            parse_command(os_args(&["zap", "package", "--no-public"])).unwrap(),
+            Command::Package(PackageCommand {
+                public_dir: PublicDir::Disabled,
+                ..PackageCommand::default()
+            })
+        );
+        assert_eq!(
             parse_command(os_args(&["zap", "serve", "--no-public"])).unwrap(),
             Command::Serve(ServeCommand {
                 public_dir: PublicDir::Disabled,
@@ -617,6 +897,10 @@ mod tests {
         );
         assert_eq!(
             parse_command(os_args(&["zap", "check", "--help"])).unwrap(),
+            Command::Help
+        );
+        assert_eq!(
+            parse_command(os_args(&["zap", "package", "--help"])).unwrap(),
             Command::Help
         );
         assert_eq!(
@@ -647,6 +931,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("unknown check option"), "{error}");
+        let error = parse_command(os_args(&["zap", "package", "--watch"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown package option"), "{error}");
         let error = parse_command(os_args(&["zap", "serve", "--watch"]))
             .unwrap_err()
             .to_string();
@@ -672,6 +960,97 @@ mod tests {
         assert!(temp.path().join(".zap/manifest.json").is_file());
         assert!(temp.path().join(".zap/deployment.json").is_file());
         assert!(temp.path().join(".zap/server/api/echo/route.js").is_file());
+    }
+
+    #[tokio::test]
+    async fn package_command_materializes_executable_artifact_root() {
+        let temp = minimal_app();
+        let package_dir = temp.path().join("dist/package");
+
+        run_build(BuildCommand {
+            graph: GraphCommand {
+                root: temp.path().to_owned(),
+                public_dir: PublicDir::Disabled,
+                ..GraphCommand::default()
+            },
+            minify: false,
+            ..BuildCommand::default()
+        })
+        .await
+        .unwrap();
+        run_package(PackageCommand {
+            root: temp.path().to_owned(),
+            public_dir: PublicDir::Disabled,
+            out_dir: Some(package_dir.clone()),
+            ..PackageCommand::default()
+        })
+        .unwrap();
+
+        assert!(package_dir.join(".zap/package.json").is_file());
+        assert!(package_dir.join(".zap/deployment.json").is_file());
+        assert!(package_dir.join(".zap/manifest.json").is_file());
+        assert!(package_dir.join(".zap/server/api/echo/route.js").is_file());
+
+        let package_manifest: Value = serde_json::from_str(
+            &std::fs::read_to_string(package_dir.join(".zap/package.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(package_manifest["schema"], "zap.package.v1");
+        assert_eq!(package_manifest["manifest"], ".zap/manifest.json");
+
+        let executor = ApplicationExecutor::load(&package_dir).unwrap();
+        let response = executor
+            .execute_request(&RequestExecutionInput {
+                method: &Method::POST,
+                path: "/api/echo",
+                declared_body_bytes: Some(0),
+                uses_private_request_state: false,
+                context: InvocationContext {
+                    request_id: Some("package-test"),
+                    authenticated: true,
+                    deadline_ms: Some(30_000),
+                },
+            })
+            .unwrap();
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(
+            String::from_utf8(response.body).unwrap(),
+            "echo:POST:/api/echo"
+        );
+    }
+
+    #[test]
+    fn package_command_rejects_unsafe_manifest_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let deployment = temp.path().join(".zap/deployment.json");
+        std::fs::create_dir_all(deployment.parent().unwrap()).unwrap();
+        std::fs::write(
+            &deployment,
+            r#"{
+  "schema": "zap.deployment.v1",
+  "manifest": "../manifest.json",
+  "server_bundles": [],
+  "browser_assets": [],
+  "static_assets": []
+}
+"#,
+        )
+        .unwrap();
+
+        let error = format!(
+            "{:#}",
+            run_package(PackageCommand {
+                root: temp.path().to_owned(),
+                deployment: Some(deployment),
+                public_dir: PublicDir::Disabled,
+                ..PackageCommand::default()
+            })
+            .unwrap_err()
+        );
+        assert!(
+            error.contains("manifest must not contain parent-directory components"),
+            "{error}"
+        );
     }
 
     #[test]
