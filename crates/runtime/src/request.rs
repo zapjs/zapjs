@@ -554,6 +554,16 @@ mod tests {
                     methods: vec!["POST".into()],
                     cache: CachePolicy::default(),
                 },
+                RouteEntry {
+                    id: "get-handler".into(),
+                    pattern: "/api/ping".into(),
+                    kind: RouteKind::Handler,
+                    source: PathBuf::from("api/ping/route.ts"),
+                    layouts: Vec::new(),
+                    module: "handler".into(),
+                    methods: vec!["GET".into(), "HEAD".into()],
+                    cache: CachePolicy::default(),
+                },
             ],
             layouts: vec![LayoutRef {
                 id: "layout".into(),
@@ -1082,6 +1092,10 @@ mod tests {
         }
         match plan_request(&manifest, &Method::GET, "/api/echo").unwrap() {
             RequestTarget::MethodNotAllowed { allowed } => assert_eq!(allowed, vec![Method::POST]),
+            target => panic!("unexpected target: {target:?}"),
+        }
+        match plan_request(&manifest, &Method::HEAD, "/api/ping").unwrap() {
+            RequestTarget::RouteHandler { route, .. } => assert_eq!(route.module, "handler"),
             target => panic!("unexpected target: {target:?}"),
         }
         assert!(plan_request(&manifest, &Method::GET, "/shop/%").is_err());

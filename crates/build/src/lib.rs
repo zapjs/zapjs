@@ -898,6 +898,9 @@ fn route_handler_methods(text: &str) -> Result<Vec<String>> {
             found.insert(name.to_owned());
         }
     }
+    if found.contains("GET") {
+        found.insert("HEAD".into());
+    }
     Ok(found.into_iter().collect())
 }
 
@@ -1146,6 +1149,27 @@ export default function Page(){}
             error.contains("must export at least one HTTP method"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn route_handlers_add_head_for_get_exports() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app/api/ping");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            app.join("route.ts"),
+            "export function GET(){}
+",
+        )
+        .unwrap();
+
+        let graph = build_application_graph(&GraphOptions::new(temp.path())).unwrap();
+        let route = graph
+            .routes
+            .iter()
+            .find(|route| route.pattern == "/api/ping")
+            .unwrap();
+        assert_eq!(route.methods, vec!["GET", "HEAD"]);
     }
 
     #[test]
