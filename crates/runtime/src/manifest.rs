@@ -85,6 +85,7 @@ pub struct RouteEntry {
     pub module: String,
     pub methods: Vec<String>,
     pub cache: CachePolicy,
+    pub client_references: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +131,10 @@ pub enum ManifestError {
     InvalidRouteModuleKind { route: String, module: String },
     #[error("route {route} references missing layout {layout}")]
     MissingLayout { route: String, layout: String },
+    #[error("route {route} references missing client reference {reference}")]
+    MissingRouteClientReference { route: String, reference: String },
+    #[error("route {route} has duplicate client reference {reference}")]
+    DuplicateRouteClientReference { route: String, reference: String },
     #[error("action {action} references missing module {module}")]
     MissingActionModule { action: String, module: String },
     #[error("action {action} references non-action module {module}")]
@@ -308,6 +313,12 @@ impl CompiledManifest {
             }
         }
 
+        let client_reference_lookup = manifest
+            .client_references
+            .iter()
+            .map(|reference| (reference.id.clone(), reference))
+            .collect::<BTreeMap<_, _>>();
+
         let mut asset_paths = BTreeSet::new();
         for asset in &manifest.assets {
             if !is_safe_asset_url(&asset.url_path) {
@@ -409,6 +420,21 @@ impl CompiledManifest {
                     return Err(ManifestError::MissingLayout {
                         route: route.id.clone(),
                         layout: layout.clone(),
+                    });
+                }
+            }
+            let mut route_client_references = BTreeSet::new();
+            for reference in &route.client_references {
+                if !route_client_references.insert(reference.clone()) {
+                    return Err(ManifestError::DuplicateRouteClientReference {
+                        route: route.id.clone(),
+                        reference: reference.clone(),
+                    });
+                }
+                if !client_reference_lookup.contains_key(reference) {
+                    return Err(ManifestError::MissingRouteClientReference {
+                        route: route.id.clone(),
+                        reference: reference.clone(),
                     });
                 }
             }
@@ -660,6 +686,7 @@ mod tests {
                 module: "shop/_id_/page".into(),
                 methods: vec!["GET".into(), "HEAD".into()],
                 cache: CachePolicy::default(),
+                client_references: vec!["client:shop/_id_/counter#Counter".into()],
             }],
             layouts: vec![LayoutRef {
                 id: "layout".into(),
@@ -890,6 +917,23 @@ mod tests {
             ManifestError::DuplicateClientReference(_)
         ));
 
+        let mut missing_route_client_reference = manifest();
+        missing_route_client_reference.routes[0].client_references[0] =
+            "client:missing#Counter".into();
+        assert!(matches!(
+            CompiledManifest::new(missing_route_client_reference).unwrap_err(),
+            ManifestError::MissingRouteClientReference { .. }
+        ));
+
+        let mut duplicate_route_client_reference = manifest();
+        duplicate_route_client_reference.routes[0]
+            .client_references
+            .push("client:shop/_id_/counter#Counter".into());
+        assert!(matches!(
+            CompiledManifest::new(duplicate_route_client_reference).unwrap_err(),
+            ManifestError::DuplicateRouteClientReference { .. }
+        ));
+
         let mut invalid_client_reference_module = manifest();
         invalid_client_reference_module.client_references[0].module = "shop/_id_/page".into();
         assert!(matches!(
@@ -899,6 +943,7 @@ mod tests {
 
         let mut invalid_client_reference_id = manifest();
         invalid_client_reference_id.client_references[0].id = "Counter".into();
+        invalid_client_reference_id.routes[0].client_references[0] = "Counter".into();
         assert!(matches!(
             CompiledManifest::new(invalid_client_reference_id).unwrap_err(),
             ManifestError::InvalidClientReferenceId { .. }

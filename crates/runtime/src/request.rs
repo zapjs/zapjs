@@ -527,6 +527,7 @@ mod tests {
                     module: "page".into(),
                     methods: vec!["GET".into(), "HEAD".into()],
                     cache: CachePolicy::default(),
+                    client_references: Vec::new(),
                 },
                 RouteEntry {
                     id: "static-page".into(),
@@ -540,6 +541,7 @@ mod tests {
                         dynamic: DynamicPolicy::ForceStatic,
                         revalidate_seconds: Some(60),
                     },
+                    client_references: Vec::new(),
                 },
                 RouteEntry {
                     id: "dynamic-page".into(),
@@ -553,6 +555,7 @@ mod tests {
                         dynamic: DynamicPolicy::ForceDynamic,
                         revalidate_seconds: None,
                     },
+                    client_references: Vec::new(),
                 },
                 RouteEntry {
                     id: "handler".into(),
@@ -563,6 +566,7 @@ mod tests {
                     module: "handler".into(),
                     methods: vec!["POST".into()],
                     cache: CachePolicy::default(),
+                    client_references: Vec::new(),
                 },
                 RouteEntry {
                     id: "get-handler".into(),
@@ -573,6 +577,7 @@ mod tests {
                     module: "get-handler".into(),
                     methods: vec!["GET".into()],
                     cache: CachePolicy::default(),
+                    client_references: Vec::new(),
                 },
             ],
             layouts: vec![LayoutRef {

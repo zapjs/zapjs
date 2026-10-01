@@ -1350,6 +1350,7 @@ struct SourceModule {
     relative_path: PathBuf,
     kind: ModuleKind,
     cache: CachePolicy,
+    text: String,
 }
 
 pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGraph> {
@@ -1504,6 +1505,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
                 relative_path: relative_path.clone(),
                 kind,
                 cache,
+                text,
             },
         ) {
             bail!(
@@ -1513,6 +1515,25 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             );
         }
     }
+
+    let modules_by_path = modules
+        .values()
+        .map(|module| (module.relative_path.clone(), module))
+        .collect::<BTreeMap<_, _>>();
+    let client_reference_ids_by_module = client_references.iter().fold(
+        BTreeMap::<String, BTreeMap<String, String>>::new(),
+        |mut by_module, reference| {
+            by_module
+                .entry(reference.module.clone())
+                .or_default()
+                .insert(reference.export.clone(), reference.id.clone());
+            by_module
+        },
+    );
+    let layout_by_id = layouts_by_dir
+        .values()
+        .map(|layout| (layout.id.clone(), layout))
+        .collect::<BTreeMap<_, _>>();
 
     let mut routes = Vec::new();
     for (id, route_kind, methods) in route_sources {
@@ -1533,6 +1554,14 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
                 .unwrap_or_else(|| Path::new("")),
             &layouts_by_dir,
         );
+        let client_references = route_client_references(
+            module,
+            &layouts,
+            &layout_by_id,
+            &modules_by_path,
+            &client_reference_ids_by_module,
+            &app_root,
+        )?;
         routes.push(RouteEntry {
             id: id.clone(),
             pattern,
@@ -1542,6 +1571,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             module: id,
             methods,
             cache: module.cache.clone(),
+            client_references,
         });
     }
 
@@ -1666,6 +1696,206 @@ fn layout_chain(dir: &Path, layouts: &BTreeMap<PathBuf, LayoutRef>) -> Vec<Strin
         }
     }
     result
+}
+
+fn route_client_references(
+    route_module: &SourceModule,
+    layout_ids: &[String],
+    layout_by_id: &BTreeMap<String, &LayoutRef>,
+    modules_by_path: &BTreeMap<PathBuf, &SourceModule>,
+    client_reference_ids_by_module: &BTreeMap<String, BTreeMap<String, String>>,
+    app_root: &Path,
+) -> Result<Vec<String>> {
+    let mut references = BTreeSet::new();
+    for layout_id in layout_ids {
+        let layout = layout_by_id
+            .get(layout_id)
+            .with_context(|| format!("missing layout {layout_id}"))?;
+        if let Some(module) = modules_by_path.get(&layout.path) {
+            collect_imported_client_references(
+                module,
+                modules_by_path,
+                client_reference_ids_by_module,
+                app_root,
+                &mut references,
+            )?;
+        }
+    }
+    collect_imported_client_references(
+        route_module,
+        modules_by_path,
+        client_reference_ids_by_module,
+        app_root,
+        &mut references,
+    )?;
+    Ok(references.into_iter().collect())
+}
+
+fn collect_imported_client_references(
+    module: &SourceModule,
+    modules_by_path: &BTreeMap<PathBuf, &SourceModule>,
+    client_reference_ids_by_module: &BTreeMap<String, BTreeMap<String, String>>,
+    app_root: &Path,
+    references: &mut BTreeSet<String>,
+) -> Result<()> {
+    for import in static_imports(&module.text) {
+        if !(import.specifier.starts_with('.') || import.specifier.starts_with('/')) {
+            continue;
+        }
+        let importer = app_root.join(&module.relative_path);
+        let imported_path =
+            resolve_local_specifier(&importer, &import.specifier).with_context(|| {
+                format!(
+                    "resolve client import {:?} from {}",
+                    import.specifier,
+                    module.relative_path.display()
+                )
+            })?;
+        let imported_path = imported_path
+            .canonicalize()
+            .with_context(|| format!("canonicalize {}", imported_path.display()))?;
+        let relative_imported_path = imported_path.strip_prefix(app_root).with_context(|| {
+            format!(
+                "resolved import {} outside app root {}",
+                imported_path.display(),
+                app_root.display()
+            )
+        })?;
+        let Some(imported_module) = modules_by_path.get(relative_imported_path) else {
+            continue;
+        };
+        if imported_module.kind != ModuleKind::Client {
+            continue;
+        }
+        let Some(exports) = client_reference_ids_by_module.get(&imported_module.id) else {
+            bail!(
+                "client module {} has no client references",
+                imported_module.relative_path.display()
+            );
+        };
+        match import.selection {
+            ImportSelection::All => references.extend(exports.values().cloned()),
+            ImportSelection::Exports(names) => {
+                for name in names {
+                    let Some(reference) = exports.get(&name) else {
+                        bail!(
+                            "client import {} from {} references missing export {name}",
+                            import.specifier,
+                            module.relative_path.display()
+                        );
+                    };
+                    references.insert(reference.clone());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StaticImport {
+    specifier: String,
+    selection: ImportSelection,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ImportSelection {
+    All,
+    Exports(BTreeSet<String>),
+}
+
+fn static_imports(text: &str) -> Vec<StaticImport> {
+    let tokens = js_tokens(text);
+    let mut imports = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        if !matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "import") {
+            index += 1;
+            continue;
+        }
+        match tokens.get(index + 1) {
+            Some(JsToken::String(specifier)) => {
+                imports.push(StaticImport {
+                    specifier: specifier.clone(),
+                    selection: ImportSelection::All,
+                });
+            }
+            Some(JsToken::Ident(kind)) if kind == "type" => {}
+            Some(JsToken::Punct('(')) => {}
+            _ => {
+                if let Some((specifier, specifier_index)) =
+                    following_from_specifier(&tokens, index + 1)
+                {
+                    imports.push(StaticImport {
+                        specifier,
+                        selection: import_selection(
+                            &tokens,
+                            index + 1,
+                            specifier_index.saturating_sub(1),
+                        ),
+                    });
+                    index = specifier_index;
+                }
+            }
+        }
+        index += 1;
+    }
+    imports
+}
+
+fn import_selection(tokens: &[JsToken], start: usize, from_index: usize) -> ImportSelection {
+    if tokens[start..from_index]
+        .iter()
+        .any(|token| matches!(token, JsToken::Punct('*')))
+    {
+        return ImportSelection::All;
+    }
+    let mut names = BTreeSet::new();
+    let mut cursor = start;
+    if matches!(tokens.get(cursor), Some(JsToken::Ident(value)) if value != "type") {
+        names.insert("default".into());
+        cursor += 1;
+    }
+    while cursor < from_index {
+        if matches!(tokens.get(cursor), Some(JsToken::Punct('{'))) {
+            for name in imported_named_specifiers(tokens, cursor) {
+                names.insert(name);
+            }
+            break;
+        }
+        cursor += 1;
+    }
+    if names.is_empty() {
+        ImportSelection::All
+    } else {
+        ImportSelection::Exports(names)
+    }
+}
+
+fn imported_named_specifiers(tokens: &[JsToken], open_brace: usize) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut index = open_brace + 1;
+    while index < tokens.len() {
+        match tokens.get(index) {
+            Some(JsToken::Punct('}')) => return names,
+            Some(JsToken::Ident(value)) if value == "type" => {
+                index += 1;
+                while !matches!(tokens.get(index), Some(JsToken::Punct(',' | '}')) | None) {
+                    index += 1;
+                }
+                continue;
+            }
+            Some(JsToken::Ident(local)) | Some(JsToken::String(local)) => {
+                names.push(local.clone());
+                if matches!(tokens.get(index + 1), Some(JsToken::Ident(value)) if value == "as") {
+                    index += 2;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    names
 }
 
 fn parse_cache_policy(text: &str) -> Result<CachePolicy> {
@@ -2216,6 +2446,42 @@ mod tests {
     }
 
     #[test]
+    fn static_imports_capture_client_reference_exports() {
+        let imports = static_imports(
+            "import DefaultCounter from './counter';
+import { Renamed, type Ignored } from '../../counter';
+import * as CounterModule from '../counter';
+import './side-effect';
+const lazy = import('./lazy');
+",
+        );
+        let selected = |exports: &[&str]| {
+            ImportSelection::Exports(exports.iter().map(|value| (*value).to_string()).collect())
+        };
+        assert_eq!(
+            imports,
+            vec![
+                StaticImport {
+                    specifier: "./counter".into(),
+                    selection: selected(&["default"]),
+                },
+                StaticImport {
+                    specifier: "../../counter".into(),
+                    selection: selected(&["Renamed"]),
+                },
+                StaticImport {
+                    specifier: "../counter".into(),
+                    selection: ImportSelection::All,
+                },
+                StaticImport {
+                    specifier: "./side-effect".into(),
+                    selection: ImportSelection::All,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn application_graph_discovers_routes_modules_actions_layouts_and_assets() {
         let temp = tempfile::tempdir().unwrap();
         let app = temp.path().join("app");
@@ -2224,7 +2490,12 @@ mod tests {
         fs::create_dir_all(temp.path().join("public/images")).unwrap();
         fs::write(
             app.join("layout.tsx"),
-            "export default function Layout(){}\n",
+            concat!(
+                "import DefaultCounter from './counter';
+",
+                "export default function Layout(){ return DefaultCounter; }
+",
+            ),
         )
         .unwrap();
         fs::write(
@@ -2234,7 +2505,16 @@ mod tests {
         .unwrap();
         fs::write(
             app.join("dashboard/[id]/page.tsx"),
-            "export const dynamic = 'force-static';\nexport const revalidate = 60;\nexport default function Page(){}\n",
+            concat!(
+                "import { Renamed } from '../../counter';
+",
+                "export const dynamic = 'force-static';
+",
+                "export const revalidate = 60;
+",
+                "export default function Page(){ return Renamed; }
+",
+            ),
         )
         .unwrap();
         fs::write(app.join("api/echo/route.ts"), "export function POST(){}\n").unwrap();
@@ -2286,6 +2566,10 @@ mod tests {
         assert_eq!(page.methods, vec!["GET", "HEAD"]);
         assert_eq!(page.cache.dynamic, DynamicPolicy::ForceStatic);
         assert_eq!(page.cache.revalidate_seconds, Some(60));
+        assert_eq!(
+            page.client_references,
+            vec!["client:counter#Renamed", "client:counter#default"]
+        );
 
         let handler = graph
             .routes
