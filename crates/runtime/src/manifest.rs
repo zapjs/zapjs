@@ -124,8 +124,20 @@ pub enum ManifestError {
     MissingServerBundle { module: String },
     #[error("module {module} has an empty server bundle path")]
     EmptyServerBundle { module: String },
+    #[error("module {module} has an unsafe source path: {path}")]
+    InvalidModulePath { module: String, path: PathBuf },
+    #[error("module {module} has an unsafe bundle path: {path}")]
+    InvalidBundlePath { module: String, path: PathBuf },
+    #[error("client module {module} must not declare a server bundle")]
+    UnexpectedClientServerBundle { module: String },
     #[error("client module {module} is missing a browser chunk")]
     MissingBrowserChunk { module: String },
+    #[error("layout {layout} has an unsafe source path: {path}")]
+    InvalidLayoutPath { layout: String, path: PathBuf },
+    #[error("action {action} has an unsafe source path: {path}")]
+    InvalidActionPath { action: String, path: PathBuf },
+    #[error("route {route} has an unsafe source path: {path}")]
+    InvalidRouteSource { route: String, path: PathBuf },
     #[error("duplicate module identifier: {0}")]
     DuplicateModule(String),
     #[error("duplicate layout identifier: {0}")]
@@ -178,6 +190,12 @@ impl CompiledManifest {
             if !module_ids.insert(module.id.clone()) {
                 return Err(ManifestError::DuplicateModule(module.id.clone()));
             }
+            if !is_safe_manifest_path(&module.path) {
+                return Err(ManifestError::InvalidModulePath {
+                    module: module.id.clone(),
+                    path: module.path.clone(),
+                });
+            }
         }
         let modules = manifest
             .modules
@@ -190,6 +208,12 @@ impl CompiledManifest {
             if !layout_ids.insert(layout.id.clone()) {
                 return Err(ManifestError::DuplicateLayout(layout.id.clone()));
             }
+            if !is_safe_manifest_path(&layout.path) {
+                return Err(ManifestError::InvalidLayoutPath {
+                    layout: layout.id.clone(),
+                    path: layout.path.clone(),
+                });
+            }
         }
         let layouts = manifest
             .layouts
@@ -201,6 +225,12 @@ impl CompiledManifest {
         for action in &manifest.actions {
             if !action_ids.insert(action.id.clone()) {
                 return Err(ManifestError::DuplicateAction(action.id.clone()));
+            }
+            if !is_safe_manifest_path(&action.path) {
+                return Err(ManifestError::InvalidActionPath {
+                    action: action.id.clone(),
+                    path: action.path.clone(),
+                });
             }
         }
 
@@ -219,7 +249,12 @@ impl CompiledManifest {
 
         for module in &manifest.modules {
             match (&module.kind, &module.server_bundle) {
-                (ModuleKind::Client, _) => {
+                (ModuleKind::Client, Some(_)) => {
+                    return Err(ManifestError::UnexpectedClientServerBundle {
+                        module: module.id.clone(),
+                    });
+                }
+                (ModuleKind::Client, None) => {
                     if module.browser_chunk.is_none() {
                         return Err(ManifestError::MissingBrowserChunk {
                             module: module.id.clone(),
@@ -231,16 +266,37 @@ impl CompiledManifest {
                         module: module.id.clone(),
                     });
                 }
-                (_, Some(_)) => {}
+                (_, Some(path)) => {
+                    if !is_safe_manifest_path(path) {
+                        return Err(ManifestError::InvalidBundlePath {
+                            module: module.id.clone(),
+                            path: path.clone(),
+                        });
+                    }
+                }
                 (_, None) => {
                     return Err(ManifestError::MissingServerBundle {
                         module: module.id.clone(),
                     });
                 }
             }
+            if let Some(path) = &module.browser_chunk {
+                if !is_safe_manifest_path(path) {
+                    return Err(ManifestError::InvalidBundlePath {
+                        module: module.id.clone(),
+                        path: path.clone(),
+                    });
+                }
+            }
         }
 
         for route in &manifest.routes {
+            if !is_safe_manifest_path(&route.source) {
+                return Err(ManifestError::InvalidRouteSource {
+                    route: route.id.clone(),
+                    path: route.source.clone(),
+                });
+            }
             let Some(module) = modules.get(&route.module) else {
                 return Err(ManifestError::MissingRouteModule {
                     route: route.id.clone(),
@@ -386,12 +442,16 @@ fn is_safe_asset_url(path: &str) -> bool {
             .any(|part| part == "." || part == ".." || part.contains('%'))
 }
 
-fn is_safe_asset_source(path: &Path) -> bool {
+fn is_safe_manifest_path(path: &Path) -> bool {
     !path.as_os_str().is_empty()
         && !path.is_absolute()
         && path
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn is_safe_asset_source(path: &Path) -> bool {
+    is_safe_manifest_path(path)
 }
 
 #[cfg(test)]
@@ -498,6 +558,49 @@ mod tests {
         assert!(matches!(
             CompiledManifest::new(traversal_source).unwrap_err(),
             ManifestError::InvalidAssetSource(_)
+        ));
+
+        let mut unsafe_module_path = manifest();
+        unsafe_module_path.modules[0].path = PathBuf::from("../page.tsx");
+        assert!(matches!(
+            CompiledManifest::new(unsafe_module_path).unwrap_err(),
+            ManifestError::InvalidModulePath { .. }
+        ));
+
+        let mut unsafe_server_bundle = manifest();
+        unsafe_server_bundle.modules[0].server_bundle = Some(PathBuf::from("/tmp/page.js"));
+        assert!(matches!(
+            CompiledManifest::new(unsafe_server_bundle).unwrap_err(),
+            ManifestError::InvalidBundlePath { .. }
+        ));
+
+        let mut unsafe_route_source = manifest();
+        unsafe_route_source.routes[0].source = PathBuf::from("../page.tsx");
+        assert!(matches!(
+            CompiledManifest::new(unsafe_route_source).unwrap_err(),
+            ManifestError::InvalidRouteSource { .. }
+        ));
+
+        let mut unsafe_layout_path = manifest();
+        unsafe_layout_path.layouts[0].path = PathBuf::from("../layout.tsx");
+        assert!(matches!(
+            CompiledManifest::new(unsafe_layout_path).unwrap_err(),
+            ManifestError::InvalidLayoutPath { .. }
+        ));
+
+        let mut unsafe_action_path = manifest();
+        unsafe_action_path.actions[0].path = PathBuf::from("../actions.ts");
+        assert!(matches!(
+            CompiledManifest::new(unsafe_action_path).unwrap_err(),
+            ManifestError::InvalidActionPath { .. }
+        ));
+
+        let mut client_server_bundle = manifest();
+        client_server_bundle.modules[0].kind = ModuleKind::Client;
+        client_server_bundle.modules[0].browser_chunk = Some(PathBuf::from(".zap/browser/page.js"));
+        assert!(matches!(
+            CompiledManifest::new(client_server_bundle).unwrap_err(),
+            ManifestError::UnexpectedClientServerBundle { .. }
         ));
     }
 }
