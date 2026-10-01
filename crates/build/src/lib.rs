@@ -1048,21 +1048,10 @@ fn classify_module(text: &str) -> ModuleKind {
 }
 
 fn first_directive(text: &str) -> Option<String> {
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with("//") {
-            continue;
-        }
-        let line = line.strip_suffix(';').unwrap_or(line).trim();
-        if let Some(value) = line.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
-            return Some(value.to_owned());
-        }
-        if let Some(value) = line.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
-            return Some(value.to_owned());
-        }
-        return None;
+    match js_tokens(text).first() {
+        Some(JsToken::String(value)) => Some(value.clone()),
+        _ => None,
     }
-    None
 }
 
 fn module_id(path: &Path) -> String {
@@ -1332,12 +1321,12 @@ mod tests {
         fs::write(app.join("api/echo/route.ts"), "export function POST(){}\n").unwrap();
         fs::write(
             app.join("counter.tsx"),
-            "'use client';\nexport function Counter(){}\n",
+            "/* copyright */\n'use client';\nexport function Counter(){}\n",
         )
         .unwrap();
         fs::write(
             app.join("actions.ts"),
-            "'use server';\nexport async function save(){}\nexport const remove = async () => {};\n",
+            "// generated action module\n'use server';\nexport async function save(){}\nexport const remove = async () => {};\n",
         )
         .unwrap();
         fs::write(temp.path().join("public/images/logo.svg"), "<svg/>\n").unwrap();
@@ -1553,7 +1542,8 @@ function GET(){}
         .unwrap();
         fs::write(
             app.join("actions.ts"),
-            "'use server';
+            "/* generated */
+'use server';
 const hidden = 1;
 ",
         )
@@ -1566,7 +1556,8 @@ const hidden = 1;
 
         fs::write(
             app.join("actions.ts"),
-            "'use server';
+            "/* generated */
+'use server';
 export async
 function save(){}
 export const
