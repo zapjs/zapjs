@@ -1154,6 +1154,7 @@ pub async fn build_application(
             );
             bundle_options.aliases = options.aliases.clone();
             bundle_options.conditions = options.server_conditions.clone();
+            bundle_options.conditions.push("react-server".into());
             bundle_options.minify = options.minify;
             let built = bundle(&bundle_options).await.with_context(|| {
                 format!("build Flight bundle for module {}", module.path.display())
@@ -1216,28 +1217,9 @@ fn write_page_server_entry(
     module: &ModuleRef,
     source_entry: &Path,
 ) -> Result<PathBuf> {
-    write_page_entry(root, out_dir, module, source_entry, "js")
-}
-
-fn write_page_flight_entry(
-    root: &Path,
-    out_dir: &Path,
-    module: &ModuleRef,
-    source_entry: &Path,
-) -> Result<PathBuf> {
-    write_page_entry(root, out_dir, module, source_entry, "flight.js")
-}
-
-fn write_page_entry(
-    root: &Path,
-    out_dir: &Path,
-    module: &ModuleRef,
-    source_entry: &Path,
-    extension: &str,
-) -> Result<PathBuf> {
     let entry = absolute(root, out_dir)
         .join("entries/server")
-        .join(format!("{}.{}", module.id, extension));
+        .join(format!("{}.js", module.id));
     let parent = entry
         .parent()
         .context("generated page server entry needs a parent directory")?;
@@ -1264,34 +1246,7 @@ fn write_page_entry(
     };
     let body = format!(
         r#"import renderPage from "{source}";
-{react_adapter_import}{react_adapter_renderer}
-async function normalizeZapOutput(value) {{
-  if (value == null) return "";
-  if (typeof value === "string") return value;
-  if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return value;
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
-  if (typeof value === "object") return renderZapTree(value);
-  throw new TypeError("Zap page output must be text, a Web ReadableStream, or a React render tree");
-}}
-
-function zapSearchParams(request) {{
-  const input = request && request.searchParams && typeof request.searchParams === "object" ? request.searchParams : {{}};
-  const output = {{}};
-  for (const [key, value] of Object.entries(input)) {{
-    output[key] = Array.isArray(value) && value.length === 1 ? value[0] : value;
-  }}
-  return output;
-}}
-
-function zapPageProps(request) {{
-  const params = request && request.params && typeof request.params === "object" ? request.params : {{}};
-  return {{
-    params,
-    searchParams: zapSearchParams(request),
-    request
-  }};
-}}
-
+{react_adapter_import}{react_adapter_renderer}{PAGE_PROPS_HELPERS}
 async function renderPageOutput(request) {{
   if (typeof renderPage !== "function") {{
     throw new TypeError("Zap page module must export a default function");
@@ -1299,53 +1254,89 @@ async function renderPageOutput(request) {{
   return await renderPage(zapPageProps(request));
 }}
 
-async function zapTextOutput(value) {{
-  value = await normalizeZapOutput(value);
-  if (typeof value === "string") return value;
-  if (value instanceof Uint8Array) return new TextDecoder().decode(value);
-  if (value && typeof value.getReader === "function") {{
-    const reader = value.getReader();
-    const decoder = new TextDecoder();
-    let output = "";
-    try {{
-      while (true) {{
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        if (!(chunk.value instanceof Uint8Array)) throw new TypeError("Zap Flight streams must contain Uint8Array chunks");
-        output += decoder.decode(chunk.value, {{ stream: true }});
-      }}
-      output += decoder.decode();
-      return output;
-    }} finally {{
-      reader.releaseLock();
-    }}
-  }}
-  return String(value);
-}}
-
-async function defaultZapFlight(request) {{
-  const content = await zapTextOutput(await renderPageOutput(request));
-  return "ZAP_FLIGHT 1\n" + JSON.stringify({{
-    type: "zap.flight.page",
-    path: request && request.path,
-    params: request && request.params || {{}},
-    searchParams: request && request.searchParams || {{}},
-    route: request && request.flight ? {{
-      id: request.flight.routeId,
-      pattern: request.flight.pattern
-    }} : undefined,
-    hydration: request && request.flight ? request.flight.hydration : {{ client_references: [], browser_chunks: [] }},
-    content
-  }});
-}}
-
 export async function render(request) {{
   return await normalizeZapOutput(await renderPageOutput(request));
 }}
+"#
+    );
+    fs::write(&entry, body).with_context(|| format!("write {}", entry.display()))?;
+    Ok(entry)
+}
 
+fn write_page_flight_entry(
+    root: &Path,
+    out_dir: &Path,
+    module: &ModuleRef,
+    source_entry: &Path,
+) -> Result<PathBuf> {
+    let entry = absolute(root, out_dir)
+        .join("entries/server")
+        .join(format!("{}.flight.js", module.id));
+    let parent = entry
+        .parent()
+        .context("generated page Flight entry needs a parent directory")?;
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let source = js_string(&source_entry.to_string_lossy());
+    let uses_jsx = page_source_uses_jsx(source_entry)?;
+    let flight_import = if uses_jsx {
+        "import { renderToReadableStream as renderToFlightReadableStream } from \"react-server-dom-webpack/server.edge\";\n"
+    } else {
+        ""
+    };
+    let default_flight = if uses_jsx {
+        r#"function zapClientManifest(request) {
+  const hydration = request && request.flight && request.flight.hydration ? request.flight.hydration : {};
+  const references = Array.isArray(hydration.client_references) ? hydration.client_references : [];
+  const manifest = {};
+  for (const reference of references) {
+    const key = `${reference.module}#${reference.export}`;
+    manifest[key] = {
+      id: reference.module,
+      name: reference.export,
+      chunks: reference.browser_chunk ? [reference.browser_chunk] : [],
+      async: true
+    };
+  }
+  return manifest;
+}
+
+async function defaultZapFlight(request) {
+  const model = await renderPageOutput(request);
+  return renderToFlightReadableStream(model, zapClientManifest(request));
+}
+"#
+    } else {
+        r#"async function defaultZapFlight(request) {
+  const content = await zapTextOutput(await renderPageOutput(request));
+  return "ZAP_FLIGHT 1\n" + JSON.stringify({
+    type: "zap.flight.page",
+    path: request && request.path,
+    params: request && request.params || {},
+    searchParams: request && request.searchParams || {},
+    route: request && request.flight ? {
+      id: request.flight.routeId,
+      pattern: request.flight.pattern
+    } : undefined,
+    hydration: request && request.flight ? request.flight.hydration : { client_references: [], browser_chunks: [] },
+    content
+  });
+}
+"#
+    };
+    let body = format!(
+        r#"{flight_import}import renderPage from "{source}";
+{PAGE_PROPS_HELPERS}
+async function renderPageOutput(request) {{
+  if (typeof renderPage !== "function") {{
+    throw new TypeError("Zap page module must export a default function");
+  }}
+  return await renderPage(zapPageProps(request));
+}}
+
+{default_flight}
 export async function flight(request) {{
   if (typeof renderPage.flight === "function") {{
-    return await normalizeZapOutput(await renderPage.flight(zapPageProps(request)));
+    return await normalizeZapFlightOutput(await renderPage.flight(zapPageProps(request)));
   }}
   return await defaultZapFlight(request);
 }}
@@ -1354,6 +1345,68 @@ export async function flight(request) {{
     fs::write(&entry, body).with_context(|| format!("write {}", entry.display()))?;
     Ok(entry)
 }
+
+const PAGE_PROPS_HELPERS: &str = r#"
+async function normalizeZapOutput(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
+  if (typeof value === "object") return renderZapTree(value);
+  throw new TypeError("Zap page output must be text, a Web ReadableStream, or a React render tree");
+}
+
+async function normalizeZapFlightOutput(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return value;
+  if (value instanceof Uint8Array) return value;
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
+  throw new TypeError("Zap page Flight output must be text, bytes or a Web ReadableStream");
+}
+
+function zapSearchParams(request) {
+  const input = request && request.searchParams && typeof request.searchParams === "object" ? request.searchParams : {};
+  const output = {};
+  for (const [key, value] of Object.entries(input)) {
+    output[key] = Array.isArray(value) && value.length === 1 ? value[0] : value;
+  }
+  return output;
+}
+
+function zapPageProps(request) {
+  const params = request && request.params && typeof request.params === "object" ? request.params : {};
+  return {
+    params,
+    searchParams: zapSearchParams(request),
+    request
+  };
+}
+
+async function zapTextOutput(value) {
+  value = await normalizeZapFlightOutput(value);
+  if (typeof value === "string") return value;
+  if (value instanceof Uint8Array) return new TextDecoder().decode(value);
+  if (value && typeof value.getReader === "function") {
+    const reader = value.getReader();
+    const decoder = new TextDecoder();
+    let output = "";
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (!(chunk.value instanceof Uint8Array)) throw new TypeError("Zap Flight streams must contain Uint8Array chunks");
+        output += decoder.decode(chunk.value, { stream: true });
+      }
+      output += decoder.decode();
+      return output;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  return String(value);
+}
+"#;
 
 fn page_source_uses_jsx(source_entry: &Path) -> Result<bool> {
     let source = fs::read_to_string(source_entry)
@@ -2953,8 +3006,10 @@ mod tests {
     fn write_react_runtime(root: &Path) -> Vec<(String, String)> {
         let react = root.join("third_party/react");
         let react_dom = root.join("third_party/react-dom");
+        let rsc = root.join("third_party/react-server-dom-webpack");
         fs::create_dir_all(&react).unwrap();
         fs::create_dir_all(&react_dom).unwrap();
+        fs::create_dir_all(&rsc).unwrap();
         fs::write(
             react.join("jsx-runtime.js"),
             r#"
@@ -2970,7 +3025,7 @@ mod tests {
             react_dom.join("server.browser.js"),
             r#"
             function escapeText(value) {
-                return String(value).replace(/[&<>"]/g, (match) => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;'}[match]));
+                return String(value).replace(/[&<>\"]/g, (match) => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '\"':'&quot;'}[match]));
             }
             function renderTree(tree) {
                 if (tree == null || tree === false || tree === true) return "";
@@ -2995,9 +3050,35 @@ mod tests {
             "#,
         )
         .unwrap();
+        fs::write(
+            rsc.join("server.edge.js"),
+            r#"
+            function renderTree(tree) {
+                if (tree == null || tree === false || tree === true) return "";
+                if (typeof tree === "string" || typeof tree === "number" || typeof tree === "bigint") return String(tree);
+                if (Array.isArray(tree)) return tree.map(renderTree).join("");
+                if (typeof tree.type === "function") return renderTree(tree.type(tree.props || {}));
+                const props = tree.props || {};
+                return `<${tree.type}>${renderTree(props.children)}</${tree.type}>`;
+            }
+            export function renderToReadableStream(tree, manifest) {
+                return new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode(`RSC:${Object.keys(manifest || {}).join(',')}:${renderTree(tree)}`));
+                        controller.close();
+                    }
+                });
+            }
+            "#,
+        )
+        .unwrap();
         vec![
             ("react".into(), react.to_string_lossy().into_owned()),
             ("react-dom".into(), react_dom.to_string_lossy().into_owned()),
+            (
+                "react-server-dom-webpack".into(),
+                rsc.to_string_lossy().into_owned(),
+            ),
         ]
     }
 
@@ -3005,14 +3086,17 @@ mod tests {
         let packages = root.join("node_modules");
         let react = packages.join("react");
         let react_dom = packages.join("react-dom");
+        let rsc = packages.join("react-server-dom-webpack");
         fs::create_dir_all(&react).unwrap();
         fs::create_dir_all(&react_dom).unwrap();
+        fs::create_dir_all(&rsc).unwrap();
         fs::write(
             react.join("package.json"),
             r#"{
               "name": "react",
               "exports": {
                 "./jsx-runtime": {
+                  "react-server": "./jsx-runtime.react-server.js",
                   "browser": "./jsx-runtime.browser.js",
                   "default": "./jsx-runtime.default.js"
                 }
@@ -3030,6 +3114,17 @@ mod tests {
             r#"
             export function jsx(type, props) {
                 return { type, props: props || {}, packageExport: 'browser' };
+            }
+            export const jsxs = jsx;
+            export const Fragment = Symbol.for("react.fragment");
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            react.join("jsx-runtime.react-server.js"),
+            r#"
+            export function jsx(type, props) {
+                return { type, props: props || {}, packageExport: 'react-server' };
             }
             export const jsxs = jsx;
             export const Fragment = Symbol.for("react.fragment");
@@ -3058,7 +3153,7 @@ mod tests {
             react_dom.join("server.browser.js"),
             r#"
             function escapeText(value) {
-                return String(value).replace(/[&<>"]/g, (match) => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;'}[match]));
+                return String(value).replace(/[&<>\"]/g, (match) => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '\"':'&quot;'}[match]));
             }
             function renderTree(tree) {
                 if (tree == null || tree === false || tree === true) return "";
@@ -3077,6 +3172,39 @@ mod tests {
                 return new ReadableStream({
                     start(controller) {
                         controller.enqueue(new TextEncoder().encode(renderTree(tree)));
+                        controller.close();
+                    }
+                });
+            }
+            "#,
+        )
+        .unwrap();
+        fs::write(
+            rsc.join("package.json"),
+            r#"{
+              "name": "react-server-dom-webpack",
+              "exports": {
+                "./server.edge": "./server.edge.js"
+              }
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            rsc.join("server.edge.js"),
+            r#"
+            function renderTree(tree) {
+                if (tree == null || tree === false || tree === true) return "";
+                if (typeof tree === "string" || typeof tree === "number" || typeof tree === "bigint") return String(tree);
+                if (Array.isArray(tree)) return tree.map(renderTree).join("");
+                if (typeof tree.type === "function") return renderTree(tree.type(tree.props || {}));
+                const props = tree.props || {};
+                const marker = tree.packageExport ? ` data-react-export="${tree.packageExport}"` : "";
+                return `<${tree.type}${marker}>${renderTree(props.children)}</${tree.type}>`;
+            }
+            export function renderToReadableStream(tree, manifest) {
+                return new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode(`RSC:${Object.keys(manifest || {}).join(',')}:${renderTree(tree)}`));
                         controller.close();
                     }
                 });
@@ -3909,9 +4037,10 @@ export const Label = 'count';
         assert!(page_entry_source.contains("react-dom/server.browser"));
         let page_flight_entry_source =
             fs::read_to_string(temp.path().join(".zap/entries/server/page.flight.js")).unwrap();
+        assert!(page_flight_entry_source.contains("react-server-dom-webpack/server.edge"));
         assert!(page_flight_entry_source.contains("defaultZapFlight"));
-        assert!(page_flight_entry_source.contains("ZAP_FLIGHT 1"));
         assert!(page_flight_entry_source.contains("export async function flight"));
+        assert!(!page_flight_entry_source.contains("react-dom/server.browser"));
         let route_entry_source =
             fs::read_to_string(temp.path().join(".zap/entries/server/api/echo/route.js")).unwrap();
         assert!(route_entry_source.contains("new Request(zapRequestUrl"));
@@ -3959,20 +4088,15 @@ export const Label = 'count';
         let page_renderer = Renderer::new(fs::read_to_string(page_bundle).unwrap());
         let rendered = page_renderer.render(&page_request).unwrap();
         assert_eq!(rendered, r#"<main data-path="/">home:/</main>"#);
-        let flight = page_renderer.flight(&page_request).unwrap();
-        let flight = flight.strip_prefix("ZAP_FLIGHT 1\n").unwrap();
-        let flight: serde_json::Value = serde_json::from_str(flight).unwrap();
-        assert_eq!(flight["type"], "zap.flight.page");
-        assert_eq!(flight["path"], "/");
-        assert_eq!(flight["route"]["id"], "page");
-        assert_eq!(
-            flight["hydration"]["client_references"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(flight["content"], r#"<main data-path="/">home:/</main>"#);
+        let page_flight_bundle = compiled
+            .module("page")
+            .and_then(|module| module.flight_bundle.clone())
+            .unwrap();
+        let flight =
+            Renderer::new(fs::read_to_string(temp.path().join(page_flight_bundle)).unwrap())
+                .flight(&page_request)
+                .unwrap();
+        assert_eq!(flight, "RSC:client#Counter:<main>home:/</main>");
         let product_match = compiled.resolve("/shop/caf%C3%A9").unwrap().unwrap();
         let product_bundle = compiled
             .module(&product_match.route.module)
@@ -4089,6 +4213,18 @@ export const Label = 'count';
             "package browser export was not selected: {rendered}"
         );
         assert!(rendered.contains("package:orange"), "{rendered}");
+        let flight_bundle = compiled
+            .module("page")
+            .and_then(|module| module.flight_bundle.clone())
+            .unwrap();
+        let flight = Renderer::new(fs::read_to_string(temp.path().join(flight_bundle)).unwrap())
+            .flight(&page_request)
+            .unwrap();
+        assert!(
+            flight.contains(r#"data-react-export="react-server""#),
+            "package react-server export was not selected for Flight: {flight}"
+        );
+        assert!(flight.starts_with("RSC::"), "{flight}");
     }
 
     #[tokio::test]
