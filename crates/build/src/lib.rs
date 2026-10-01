@@ -624,15 +624,29 @@ fn ambient_platform_global_string_member(tokens: &[JsToken], index: usize) -> Op
         return None;
     }
     let member_start = optional_chain_member_start(tokens, index + 1)?;
-    let Some(JsToken::String(value)) = tokens.get(member_start + 1) else {
-        return None;
-    };
-    if !is_unavailable_platform_global_name(value)
-        || !matches!(tokens.get(member_start + 2), Some(JsToken::Punct(']')))
+    let (value, close_bracket) = static_string_expression(tokens, member_start + 1)?;
+    if !is_unavailable_platform_global_name(&value)
+        || !matches!(tokens.get(close_bracket), Some(JsToken::Punct(']')))
     {
         return None;
     }
-    Some(value.clone())
+    Some(value)
+}
+
+fn static_string_expression(tokens: &[JsToken], index: usize) -> Option<(String, usize)> {
+    let Some(JsToken::String(first)) = tokens.get(index) else {
+        return None;
+    };
+    let mut value = first.clone();
+    let mut cursor = index + 1;
+    while matches!(tokens.get(cursor), Some(JsToken::Punct('+'))) {
+        let Some(JsToken::String(part)) = tokens.get(cursor + 1) else {
+            return None;
+        };
+        value.push_str(part);
+        cursor += 2;
+    }
+    Some((value, cursor))
 }
 
 fn optional_chain_member_start(tokens: &[JsToken], index: usize) -> Option<usize> {
@@ -2398,6 +2412,14 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
             (
                 "optional_chain_bracket_process.ts",
                 "export const value = globalThis?.['process'];",
+            ),
+            (
+                "computed_global_bracket_process.ts",
+                "export const value = globalThis['pro' + 'cess'];",
+            ),
+            (
+                "computed_optional_global_bracket_buffer.ts",
+                "export const value = globalThis?.['Buf' + 'fer'];",
             ),
             (
                 "global_probe_process.ts",
