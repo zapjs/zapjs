@@ -214,6 +214,32 @@ fn assert_served_framework_responses(address: &str) {
         failed_page.ends_with("Internal Server Error"),
         "500 response must not leak renderer internals:\n{failed_page}"
     );
+
+    let malformed_request = http_exchange(
+        address,
+        b"GET /broken HTTP/1.1\r\nhost zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        malformed_request.starts_with("HTTP/1.1 400 Bad Request"),
+        "malformed requests must return a bounded 400 response:\n{malformed_request}"
+    );
+    assert!(
+        malformed_request.ends_with("Bad Request"),
+        "400 response must not leak parser internals:\n{malformed_request}"
+    );
+
+    let invalid_target = http_exchange(
+        address,
+        b"GET http://zap.local/ HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        invalid_target.starts_with("HTTP/1.1 400 Bad Request"),
+        "invalid request targets must return a bounded 400 response:\n{invalid_target}"
+    );
+    assert!(
+        invalid_target.ends_with("Bad Request"),
+        "400 target response must not leak parser internals:\n{invalid_target}"
+    );
 }
 
 fn http_exchange(address: &str, request: &[u8]) -> String {

@@ -825,7 +825,14 @@ struct HttpRequest {
 }
 
 fn handle_connection(executor: &ApplicationExecutor, mut stream: TcpStream) -> Result<()> {
-    let request = read_http_request(&mut stream)?;
+    let request = match read_http_request(&mut stream) {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("bad request: {error:#}");
+            write_http_response(&mut stream, bad_request())?;
+            return Ok(());
+        }
+    };
     let response = match execute_http_request(executor, &request) {
         Ok(response) => response,
         Err(error) => {
@@ -835,6 +842,14 @@ fn handle_connection(executor: &ApplicationExecutor, mut stream: TcpStream) -> R
     };
     write_http_response(&mut stream, response)?;
     Ok(())
+}
+
+fn bad_request() -> ExecutionResponse {
+    ExecutionResponse {
+        status: StatusCode::BAD_REQUEST,
+        headers: vec![("content-type".into(), "text/plain; charset=utf-8".into())],
+        body: b"Bad Request".to_vec(),
+    }
 }
 
 fn internal_server_error() -> ExecutionResponse {
