@@ -1087,6 +1087,23 @@ pub async fn build_application(
             exports
         },
     );
+    let client_reference_by_id = graph
+        .client_references
+        .iter()
+        .map(|reference| (reference.id.clone(), reference))
+        .collect::<BTreeMap<_, _>>();
+    let client_references_by_route_module = graph
+        .routes
+        .iter()
+        .map(|route| {
+            let references = route
+                .client_references
+                .iter()
+                .filter_map(|id| client_reference_by_id.get(id).copied())
+                .collect::<Vec<_>>();
+            (route.module.clone(), references)
+        })
+        .collect::<BTreeMap<_, _>>();
 
     for module in &graph.modules {
         let source_entry = app_root.join(&module.path);
@@ -1176,8 +1193,18 @@ pub async fn build_application(
         }
 
         if let Some(hydration_bundle) = &module.hydration_bundle {
-            let hydration_entry =
-                write_page_hydration_entry(&root, &options.graph.out_dir, module, &source_entry)?;
+            let route_client_references = client_references_by_route_module
+                .get(&module.id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let hydration_entry = write_page_hydration_entry(
+                &root,
+                &options.graph.out_dir,
+                &app_root,
+                module,
+                &source_entry,
+                route_client_references,
+            )?;
             let output = absolute(&root, hydration_bundle);
             let mut bundle_options =
                 BundleOptions::new(&root, &hydration_entry, &output, Target::Browser);
@@ -1245,8 +1272,10 @@ pub async fn build_application(
 fn write_page_hydration_entry(
     root: &Path,
     out_dir: &Path,
+    app_root: &Path,
     module: &ModuleRef,
-    source_entry: &Path,
+    _source_entry: &Path,
+    client_references: &[&ClientReference],
 ) -> Result<PathBuf> {
     let entry = absolute(root, out_dir)
         .join("entries/browser")
@@ -1255,47 +1284,157 @@ fn write_page_hydration_entry(
         .parent()
         .context("generated page hydration entry needs a parent directory")?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let source = js_string(&source_entry.to_string_lossy());
-    let body = format!(
-        r#"import {{ hydrateRoot }} from "react-dom/client";
-import renderPage from "{source}";
-{PAGE_PROPS_HELPERS}
+    let mut static_imports = String::new();
+    let mut static_entries = String::new();
+    let mut imported_clients = BTreeMap::<String, String>::new();
+    for reference in client_references {
+        if imported_clients.contains_key(&reference.module) {
+            continue;
+        }
+        let binding = format!("ZapClient{}", imported_clients.len());
+        let source = app_root.join(&reference.path);
+        let specifier = source.to_string_lossy().replace('\\', "/");
+        static_imports.push_str("import * as ");
+        static_imports.push_str(&binding);
+        static_imports.push_str(" from ");
+        static_imports.push_str(&serde_json::to_string(&specifier).expect("serialize import specifier"));
+        static_imports.push_str(";\n");
+        if !static_entries.is_empty() {
+            static_entries.push_str(",\n");
+        }
+        static_entries.push_str("  [");
+        static_entries.push_str(&serde_json::to_string(&reference.module).expect("serialize client id"));
+        static_entries.push_str(", ");
+        static_entries.push_str(&binding);
+        static_entries.push(']');
+        imported_clients.insert(reference.module.clone(), binding);
+    }
+    let mut body = String::new();
+    body.push_str("import { hydrateRoot } from \"react-dom/client\";\n");
+    body.push_str("import { createFromReadableStream } from \"react-server-dom-webpack/client.edge\";\n");
+    body.push_str(&static_imports);
+    body.push_str("const zapStaticClientRefs = new Map([\n");
+    body.push_str(&static_entries);
+    body.push_str("\n]);\n\n");
+    body.push_str(r#"const zapBaseUrl = () => globalThis.location && globalThis.location.href || "http://zap.local/";
+const zapChunkUrl = (chunk) => new URL(chunk, zapBaseUrl()).href;
 
-function zapHydrationPageProps(hydration) {{
-  const request = hydration && hydration.request ? hydration.request : {{}};
-  const path = typeof request.path === "string" ? request.path : (hydration && hydration.path) || (globalThis.location && globalThis.location.pathname + globalThis.location.search) || "/";
-  return {{
-    params: request.params || {{}},
-    searchParams: zapSearchParams({{ searchParams: request.searchParams || {{}} }}),
-    request: {{
-      method: request.method || "GET",
-      path,
-      headers: request.headers || {{}},
-      body: request.body || ""
-    }}
-  }};
-}}
+function zapFlightUrl(hydration) {
+  const request = hydration && hydration.request ? hydration.request : {};
+  const path = (hydration && typeof hydration.path === "string" ? hydration.path : undefined) || (typeof request.path === "string" ? request.path : undefined) || (globalThis.location && globalThis.location.pathname + globalThis.location.search) || "/";
+  return new URL(path, zapBaseUrl()).href;
+}
 
-export async function hydrateZapPage(context = {{}}) {{
-  if (typeof hydrateRoot !== "function") {{
+function zapFlightReferences(hydration) {
+  return Array.isArray(hydration && hydration.client_references) ? hydration.client_references : [];
+}
+
+function zapClientReferenceMap(hydration) {
+  const references = zapFlightReferences(hydration);
+  const referenceMap = {};
+  for (const reference of references) {
+    const clientId = reference && reference.module;
+    const exportName = reference && reference.export;
+    const chunk = reference && reference.browser_chunk;
+    if (typeof clientId !== "string" || typeof exportName !== "string" || typeof chunk !== "string") continue;
+    const exportsForClient = referenceMap[clientId] || (referenceMap[clientId] = {});
+    exportsForClient[exportName] = {
+      id: clientId,
+      name: exportName,
+      chunks: [chunk, chunk],
+      async: true
+    };
+    exportsForClient["*"] = exportsForClient["*"] || {
+      id: clientId,
+      name: "*",
+      chunks: [chunk, chunk],
+      async: true
+    };
+  }
+  return referenceMap;
+}
+
+function zapInstallFlightRuntime(hydration, context) {
+  const references = zapFlightReferences(hydration);
+  const modulesByChunk = context && context.modulesByChunk instanceof Map ? context.modulesByChunk : new Map();
+  const modulesById = new Map();
+  const pendingByChunk = new Map();
+
+  function remember(chunk, loaded) {
+    const url = zapChunkUrl(chunk);
+    modulesByChunk.set(url, loaded);
+    for (const reference of references) {
+      if (reference && reference.browser_chunk === chunk && typeof reference.module === "string") {
+        modulesById.set(reference.module, loaded);
+      }
+    }
+    return loaded;
+  }
+
+  for (const reference of references) {
+    if (!reference || typeof reference.module !== "string" || typeof reference.browser_chunk !== "string") continue;
+    const loaded = zapStaticClientRefs.get(reference.module) || modulesByChunk.get(zapChunkUrl(reference.browser_chunk));
+    if (loaded) remember(reference.browser_chunk, loaded);
+  }
+
+  globalThis.__webpack_chunk_load__ = function zapWebpackChunkLoad(chunk) {
+    const url = zapChunkUrl(chunk);
+    const reference = references.find((candidate) => candidate && candidate.browser_chunk === chunk && typeof candidate.module === "string");
+    const staticallyLoaded = reference ? zapStaticClientRefs.get(reference.module) : undefined;
+    if (staticallyLoaded) return Promise.resolve(remember(chunk, staticallyLoaded));
+    const loaded = modulesByChunk.get(url);
+    if (loaded) return Promise.resolve(loaded);
+    const pending = pendingByChunk.get(url);
+    if (pending) return pending;
+    const next = Promise.reject(new Error(`Zap Flight client chunk was not preloaded: ${chunk}`));
+    pendingByChunk.set(url, next);
+    return next;
+  };
+
+  globalThis.__webpack_require__ = function zapWebpackRequire(id) {
+    const loaded = modulesById.get(id);
+    if (loaded) return loaded;
+    const reference = references.find((candidate) => candidate && candidate.module === id && typeof candidate.browser_chunk === "string");
+    if (reference) return globalThis.__webpack_chunk_load__(reference.browser_chunk);
+    throw new Error(`Zap Flight client reference chunk was not loaded: ${id}`);
+  };
+}
+
+async function zapFlightModel(hydration) {
+  const response = await fetch(zapFlightUrl(hydration), {
+    method: "GET",
+    credentials: "same-origin",
+    headers: { accept: "text/x-component", rsc: "1" }
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`Zap Flight hydration failed: ${response.status}`);
+  }
+  return await createFromReadableStream(response.body, {
+    serverConsumerManifest: {
+      moduleMap: zapClientReferenceMap(hydration),
+      serverModuleMap: {},
+      moduleLoading: null
+    }
+  });
+}
+
+export async function hydrateZapPage(context = {}) {
+  if (typeof hydrateRoot !== "function") {
     throw new TypeError("Zap page hydration requires react-dom/client hydrateRoot");
-  }}
-  if (typeof renderPage !== "function") {{
-    throw new TypeError("Zap page module must export a default function for hydration");
-  }}
-  const hydration = context.hydration || {{}};
-  const props = zapHydrationPageProps(hydration);
-  props.actions = context.actions;
-  props.navigate = context.navigate;
-  const model = await renderPage(props);
-  const container = context.container || document.body;
+  }
+  if (typeof createFromReadableStream !== "function") {
+    throw new TypeError("Zap page hydration requires react-server-dom-webpack/client.edge createFromReadableStream");
+  }
+  const hydration = context.hydration || {};
+  zapInstallFlightRuntime(hydration, context);
+  const model = await zapFlightModel(hydration);
+  const container = context.container || document.getElementById("__zap_root") || document.body;
   const root = hydrateRoot(container, model);
   globalThis.__zap_react_root = root;
   globalThis.__zap_react_model = model;
-  return {{ root, model }};
-}}
-"#
-    );
+  return { root, model };
+}
+"#);
     fs::write(&entry, body).with_context(|| format!("write {}", entry.display()))?;
     Ok(entry)
 }
@@ -1937,7 +2076,7 @@ async function hydrateZapDocument(targetDocument = document) {
   const actionModule = typeof hydration.action_proxy === "string" ? modulesByChunk.get(zapChunkUrl(hydration.action_proxy)) : undefined;
   const pageHydrationModule = typeof hydration.page_hydration === "string" ? modulesByChunk.get(zapChunkUrl(hydration.page_hydration)) : undefined;
   const react = pageHydrationModule && typeof pageHydrationModule.hydrateZapPage === "function"
-    ? await pageHydrationModule.hydrateZapPage({ hydration, actions: actionModule, navigate: navigateZap })
+    ? await pageHydrationModule.hydrateZapPage({ hydration, actions: actionModule, navigate: navigateZap, modulesByChunk })
     : undefined;
   const hooks = [];
   for (const reference of references) {
@@ -3331,6 +3470,27 @@ mod tests {
             "#,
         )
         .unwrap();
+        fs::write(
+            rsc.join("client.edge.js"),
+            r#"
+            export async function createFromReadableStream(stream, options) {
+                if (!options || !options.serverConsumerManifest || !options.serverConsumerManifest.moduleMap) {
+                    throw new Error('missing serverConsumerManifest.moduleMap');
+                }
+                const reader = stream.getReader();
+                const decoder = new TextDecoder();
+                let text = '';
+                for (;;) {
+                    const chunk = await reader.read();
+                    if (chunk.done) break;
+                    text += decoder.decode(chunk.value, { stream: true });
+                }
+                text += decoder.decode();
+                return { type: 'flight-model', text, manifest: options.serverConsumerManifest.moduleMap };
+            }
+            "#,
+        )
+        .unwrap();
         vec![
             ("react".into(), react.to_string_lossy().into_owned()),
             ("react-dom".into(), react_dom.to_string_lossy().into_owned()),
@@ -3462,9 +3622,31 @@ mod tests {
             r#"{
               "name": "react-server-dom-webpack",
               "exports": {
-                "./server.edge": "./server.edge.js"
+                "./server.edge": "./server.edge.js",
+                "./client.edge": "./client.edge.js"
               }
             }"#,
+        )
+        .unwrap();
+        fs::write(
+            rsc.join("client.edge.js"),
+            r#"
+            export async function createFromReadableStream(stream, options) {
+                if (!options || !options.serverConsumerManifest || !options.serverConsumerManifest.moduleMap) {
+                    throw new Error('missing serverConsumerManifest.moduleMap');
+                }
+                const reader = stream.getReader();
+                const decoder = new TextDecoder();
+                let text = '';
+                for (;;) {
+                    const chunk = await reader.read();
+                    if (chunk.done) break;
+                    text += decoder.decode(chunk.value, { stream: true });
+                }
+                text += decoder.decode();
+                return { type: 'flight-model', text, manifest: options.serverConsumerManifest.moduleMap };
+            }
+            "#,
         )
         .unwrap();
         fs::write(
@@ -4312,6 +4494,7 @@ export const Label = 'count';
         assert!(browser_bootstrap_source.contains("actions: actionModule"));
         assert!(browser_bootstrap_source.contains("page_hydration"));
         assert!(browser_bootstrap_source.contains("hydrateZapPage"));
+        assert!(browser_bootstrap_source.contains("modulesByChunk"));
         assert!(browser_bootstrap_source.contains("__zap_navigate"));
         assert!(browser_bootstrap_source.contains("replaceZapDocument"));
         assert!(browser_bootstrap_source.contains("document.head.replaceWith(nextDocument.head)"));

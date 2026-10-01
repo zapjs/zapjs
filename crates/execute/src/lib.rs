@@ -310,6 +310,15 @@ impl ApplicationExecutor {
         if self.manifest.browser_bootstrap() == Some(requested.as_path()) {
             return Some(requested);
         }
+        if self
+            .manifest
+            .manifest()
+            .modules
+            .iter()
+            .any(|module| module.hydration_bundle.as_deref() == Some(requested.as_path()))
+        {
+            return Some(requested);
+        }
         None
     }
 
@@ -518,7 +527,10 @@ fn append_hydration_bootstrap(
         output.push_str(&html[index..]);
         Ok(output)
     } else {
-        let mut output = html;
+        let mut output = String::with_capacity(html.len() + bootstrap.len() + 27);
+        output.push_str(r#"<div id="__zap_root">"#);
+        output.push_str(&html);
+        output.push_str("</div>");
         output.push_str(&bootstrap);
         Ok(output)
     }
@@ -612,7 +624,7 @@ mod tests {
             .unwrap();
         assert_eq!(page.status, StatusCode::OK);
         let page_body = String::from_utf8(page.body).unwrap();
-        assert!(page_body.starts_with("<main>GET:/</main>"));
+        assert!(page_body.starts_with(r#"<div id="__zap_root"><main>GET:/</main></div>"#));
         assert!(
             page_body.contains("<link rel=\"modulepreload\" href=\"/.zap/browser/actions.js\">")
         );
@@ -670,7 +682,7 @@ mod tests {
         assert!(
             String::from_utf8(query_page.body)
                 .unwrap()
-                .starts_with("<main>GET:/:rust search:en-US</main>"),
+                .starts_with(r#"<div id="__zap_root"><main>GET:/:rust search:en-US</main></div>"#),
         );
 
         let flight_page = executor
@@ -738,6 +750,18 @@ mod tests {
         assert_eq!(
             String::from_utf8(bootstrap_asset.body).unwrap(),
             "globalThis.__zap_bootstrap = true;"
+        );
+
+        let page_hydration_asset = executor
+            .execute_request(&RequestExecutionInput::new(
+                &Method::GET,
+                "/.zap/browser/page.hydrate.js",
+            ))
+            .unwrap();
+        assert_eq!(page_hydration_asset.status, StatusCode::OK);
+        assert_eq!(
+            String::from_utf8(page_hydration_asset.body).unwrap(),
+            "export function hydrateZapPage(){}"
         );
 
         let browser_wrong_method = executor
