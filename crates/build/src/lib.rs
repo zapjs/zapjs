@@ -4485,6 +4485,23 @@ export const Label = 'count';
         let page_hydration_source = fs::read_to_string(&page_hydration_bundle).unwrap();
         assert!(page_hydration_source.contains("hydrateRoot"));
         assert!(page_hydration_source.contains("hydrateZapPage"));
+        assert!(page_hydration_source.contains("react-server-dom-webpack/client.edge"));
+        assert!(page_hydration_source.contains("createFromReadableStream"));
+        assert!(page_hydration_source.contains("__webpack_chunk_load__"));
+        assert!(page_hydration_source.contains("__webpack_require__"));
+        assert!(page_hydration_source.contains(r#"document.getElementById("__zap_root")"#));
+        assert!(!page_hydration_source.contains("import renderPage"));
+        assert!(!page_hydration_source.contains("zapHydrationPageProps"));
+        let page_hydration_entry_source = fs::read_to_string(
+            temp.path().join(".zap/entries/browser/page.hydrate.js"),
+        )
+        .unwrap();
+        assert!(page_hydration_entry_source.contains("ZapClient0"));
+        assert!(page_hydration_entry_source.contains("zapStaticClientRefs"));
+        assert!(page_hydration_entry_source.contains("/app/client.tsx"));
+        assert!(page_hydration_entry_source.contains(r#"headers: { accept: "text/x-component", rsc: "1" }"#));
+        assert!(!page_hydration_entry_source.contains("import renderPage"));
+        assert!(!page_hydration_entry_source.contains(r#"from "/app/page.tsx""#));
         let browser_bootstrap_source = fs::read_to_string(&browser_bootstrap).unwrap();
         assert!(browser_bootstrap_source.contains("__zap_hydration"));
         assert!(browser_bootstrap_source.contains("import(chunk)"));
