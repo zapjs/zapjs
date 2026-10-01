@@ -118,6 +118,16 @@ pub struct ActionExecutionInput<'a> {
     pub context: InvocationContext<'a>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ActionEndpointInput<'a> {
+    pub method: &'a Method,
+    pub path: &'a str,
+    pub origin: Option<&'a str>,
+    pub expected_origin: Option<&'a str>,
+    pub body: &'a [u8],
+    pub context: InvocationContext<'a>,
+}
+
 pub struct ApplicationExecutor {
     root: PathBuf,
     public_dir: PathBuf,
@@ -195,6 +205,36 @@ impl ApplicationExecutor {
                 self.dispatch_request(input, plan.target)
             }
         }
+    }
+
+    pub fn execute_action_endpoint(
+        &self,
+        input: &ActionEndpointInput<'_>,
+    ) -> Result<ExecutionResponse, ExecuteError> {
+        if input.path != "/_zap/action" {
+            return Ok(ExecutionResponse::new(StatusCode::NOT_FOUND));
+        }
+        if input.method != Method::POST {
+            return Ok(ExecutionResponse::new(StatusCode::METHOD_NOT_ALLOWED)
+                .with_headers([("allow".into(), "POST".into())]));
+        }
+        let declared_body_bytes = input.body.len() as u64;
+        if declared_body_bytes > self.limits.max_body_bytes {
+            return Ok(ExecutionResponse::new(StatusCode::PAYLOAD_TOO_LARGE));
+        }
+        let Some((action_id, args)) = parse_action_endpoint_payload(input.body) else {
+            return Ok(ExecutionResponse::new(StatusCode::BAD_REQUEST));
+        };
+
+        self.execute_action(&ActionExecutionInput {
+            method: input.method,
+            action_id: &action_id,
+            origin: input.origin,
+            expected_origin: input.expected_origin,
+            declared_body_bytes: Some(declared_body_bytes),
+            args,
+            context: input.context.clone(),
+        })
     }
 
     pub fn execute_action(
@@ -320,6 +360,21 @@ fn immediate_response(response: ImmediateResponse) -> ExecutionResponse {
     ExecutionResponse::new(response.status).with_headers(response.headers)
 }
 
+fn parse_action_endpoint_payload(body: &[u8]) -> Option<(String, Vec<Value>)> {
+    let payload = serde_json::from_slice::<Value>(body).ok()?;
+    let object = payload.as_object()?;
+    let action_id = object.get("action_id")?.as_str()?.to_owned();
+    if action_id.is_empty() {
+        return None;
+    }
+    let args = match object.get("args") {
+        Some(Value::Array(values)) => values.clone(),
+        None => Vec::new(),
+        _ => return None,
+    };
+    Some((action_id, args))
+}
+
 fn read_artifact_string(path: &Path) -> Result<String, ExecuteError> {
     fs::read_to_string(path).map_err(|source| ExecuteError::ReadArtifact {
         path: path.to_owned(),
@@ -406,6 +461,114 @@ mod tests {
             .unwrap();
         assert_eq!(action.status, StatusCode::CREATED);
         assert_eq!(String::from_utf8(action.body).unwrap(), "saved:7");
+
+        let endpoint = executor
+            .execute_action_endpoint(&ActionEndpointInput {
+                method: &Method::POST,
+                path: "/_zap/action",
+                origin: Some("https://example.com"),
+                expected_origin: Some("https://example.com"),
+                body: br#"{"action_id":"action:actions#save","args":[{"id":8}]}"#,
+                context: InvocationContext {
+                    request_id: Some("action-2"),
+                    authenticated: true,
+                    deadline_ms: Some(1000),
+                },
+            })
+            .unwrap();
+        assert_eq!(endpoint.status, StatusCode::CREATED);
+        assert_eq!(String::from_utf8(endpoint.body).unwrap(), "saved:8");
+    }
+
+    #[test]
+    fn action_endpoint_enforces_browser_proxy_contract() {
+        let temp = tempfile::tempdir().unwrap();
+        write_fixture(temp.path());
+        let executor =
+            ApplicationExecutor::load_from(temp.path(), temp.path().join(".zap/manifest.json"))
+                .unwrap();
+
+        let wrong_path = executor
+            .execute_action_endpoint(&ActionEndpointInput {
+                method: &Method::POST,
+                path: "/api/action",
+                origin: Some("https://example.com"),
+                expected_origin: Some("https://example.com"),
+                body: br#"{"action_id":"action:actions#save","args":[]}"#,
+                context: InvocationContext {
+                    request_id: Some("action-3"),
+                    authenticated: true,
+                    deadline_ms: Some(1000),
+                },
+            })
+            .unwrap();
+        assert_eq!(wrong_path.status, StatusCode::NOT_FOUND);
+
+        let wrong_method = executor
+            .execute_action_endpoint(&ActionEndpointInput {
+                method: &Method::GET,
+                path: "/_zap/action",
+                origin: Some("https://example.com"),
+                expected_origin: Some("https://example.com"),
+                body: br#"{"action_id":"action:actions#save","args":[]}"#,
+                context: InvocationContext {
+                    request_id: Some("action-4"),
+                    authenticated: true,
+                    deadline_ms: Some(1000),
+                },
+            })
+            .unwrap();
+        assert_eq!(wrong_method.status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(wrong_method.headers, vec![("allow".into(), "POST".into())]);
+
+        let malformed = executor
+            .execute_action_endpoint(&ActionEndpointInput {
+                method: &Method::POST,
+                path: "/_zap/action",
+                origin: Some("https://example.com"),
+                expected_origin: Some("https://example.com"),
+                body: br#"{"args":[]}"#,
+                context: InvocationContext {
+                    request_id: Some("action-5"),
+                    authenticated: true,
+                    deadline_ms: Some(1000),
+                },
+            })
+            .unwrap();
+        assert_eq!(malformed.status, StatusCode::BAD_REQUEST);
+
+        let denied_origin = executor
+            .execute_action_endpoint(&ActionEndpointInput {
+                method: &Method::POST,
+                path: "/_zap/action",
+                origin: Some("https://evil.example"),
+                expected_origin: Some("https://example.com"),
+                body: br#"{"action_id":"action:actions#save","args":[]}"#,
+                context: InvocationContext {
+                    request_id: Some("action-6"),
+                    authenticated: true,
+                    deadline_ms: Some(1000),
+                },
+            })
+            .unwrap();
+        assert_eq!(denied_origin.status, StatusCode::FORBIDDEN);
+
+        let too_large = executor
+            .with_limits(AdmissionLimits { max_body_bytes: 4 })
+            .execute_action_endpoint(&ActionEndpointInput {
+                method: &Method::POST,
+                path: "/_zap/action",
+                origin: Some("https://example.com"),
+                expected_origin: Some("https://example.com"),
+                body: br#"{"action_id":"action:actions#save","args":[]}"#,
+                context: InvocationContext {
+                    request_id: Some("action-7"),
+                    authenticated: true,
+                    deadline_ms: Some(1000),
+                },
+            })
+            .unwrap();
+        assert_eq!(too_large.status, StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[test]
