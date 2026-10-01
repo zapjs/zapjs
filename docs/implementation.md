@@ -30,7 +30,7 @@ Strict deterministic validation:
 
 ```sh
 /Users/deepsaint/.cargo/bin/fozzy doctor --deep --scenario artifacts/verification/rust-only-crates.fozzy.json --runs 5 --seed 42 --json
-/Users/deepsaint/.cargo/bin/fozzy test --det --strict artifacts/verification/rust-only-crates.fozzy.json --json
+/Users/deepsaint/.cargo/bin/fozzy test --det --strict-verify artifacts/verification/rust-only-crates.fozzy.json --json
 ```
 
 Both passed. The strict doctor run reported five identical determinism signatures.
