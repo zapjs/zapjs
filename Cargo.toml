@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/build",
+  "crates/cli",
   "crates/render",
   "crates/runtime",
   "crates/splice",

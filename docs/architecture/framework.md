@@ -96,6 +96,7 @@ The current Rust layer includes:
 - `zap-splice`: bounded Rust worker transport with cancellation, deadlines, crash cleanup and subprocess coverage.
 - `zap-render`: Rust-owned QuickJS execution with Web Stream, route/action `Response` support, response status/header validation, typed execution failures, explicit host calls, output limits and CPU interruption.
 - `zap-build`: Rust-only TSX bundling through Rolldown/Oxc for server IIFE and browser module outputs, typed callable export discovery for actions and route handlers plus typed local named export-list cache metadata discovery, re-export list exclusion until explicit graph resolution exists, GET-to-HEAD route-handler method derivation, generated GET fallback for HEAD route-handler bundles, duplicate graph module ID rejection, unsupported platform-module rejection, ambient platform-global rejection across direct, optional, literal and statically computed bracketed, probe and destructured references, static template module-specifier scanning, local type-only import/export elision, dependency-only helper/type module exclusion, non-static dynamic-import rejection, regex-literal and non-reference identifier false-positive protection and strict cache export and policy validation.
+- `zap-cli`: native `zap build` command over the Rust build path with explicit app/public/output options and build summaries.
 
 This is foundation work, not a full production framework claim.
 
@@ -109,7 +110,7 @@ ZapJS can make a production claim only after these gates are executable and reco
 4. application route handlers and server actions execute through the Rust-owned runtime with explicit body/input/context limits and application-specific authorization hooks;
 5. Splice adds tested streaming only if the framework needs a streaming worker boundary;
 6. native managed deployment artifacts are produced and verified on the target platform;
-7. development, build, test and deploy commands run through the Rust toolchain;
+7. the remaining development, test and deploy commands run through the Rust toolchain;
 8. the landing site and docs are ported after the implementation supports the claims they make.
 
 Verification evidence belongs in executable tests, Fozzy traces and deployment artifacts. Documentation must describe the implemented boundary and the remaining gates separately.
