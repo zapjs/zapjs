@@ -24,7 +24,7 @@ Results:
 - `zap-runtime`: 15 tests passed.
 - `zap-splice`: 9 tests passed, 1 ignored subprocess helper invoked by the parent test.
 - `zap-render`: 19 tests passed.
-- `zap-build`: 17 tests passed.
+- `zap-build`: 18 tests passed.
 - `zap-cli`: 21 tests passed plus 2 process-backed deployment tests.
 
 ## Fozzy validation
@@ -51,7 +51,7 @@ The host run, trace verification, replay and CI all passed. The recorded trace r
 
 ## Browser validation
 
-Aegis validation on October 1, 2026 exercised temporary real React package apps through `zap build` and `zap serve`: initial page load produced a Flight-backed `hydrateRoot` page, same-origin navigation moved from `/` to `/shop/cafe?color=blue`, the dynamic target route rendered decoded params and query data, target hydration reached idle without script or unhandled-rejection errors, and the target client component processed a real click from `product:5` to `product:6`. A second layout matrix verified generated root and nested layouts are applied to both SSR and Flight output, layout-owned client references hydrate on initial load and after same-origin navigation, and nested layout/page client components process clicks from `shop:20` to `shop:21` and `product:5` to `product:6`.
+Aegis validation on October 1, 2026 exercised temporary real React package apps through `zap build` and `zap serve`: initial page load produced a Flight-backed `hydrateRoot` page, same-origin navigation moved from `/` to `/shop/cafe?color=blue`, the dynamic target route rendered decoded params and query data, target hydration reached idle without script or unhandled-rejection errors, and the target client component processed a real click from `product:5` to `product:6`. A second layout matrix verified generated root and nested layouts are applied to both SSR and Flight output, layout-owned client references hydrate on initial load and after same-origin navigation, and nested layout/page client components process clicks from `shop:20` to `shop:21` and `product:5` to `product:6`. A broader Aegis matrix then built and served an app with a root layout, nested shop layout, nested dynamic route, catch-all docs route, failing route and browser action proxy. Aegis observed the browser posting to `/_zap/action` with a `201 Created` response, same-origin navigation to `/shop/cafe?color=blue` with target hydration bundle loading, and navigation to `/docs/a/b/c?view=full` rendering the catch-all route text. That matrix used local React package fixtures and is recorded as routing/action/navigation evidence rather than a visual React parity claim.
 
 ## Remaining production gates
 
