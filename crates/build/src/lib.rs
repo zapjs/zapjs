@@ -574,23 +574,90 @@ fn is_ident_continue(ch: char) -> bool {
 }
 
 fn unavailable_platform_global(text: &str) -> Option<String> {
-    js_tokens(text).into_iter().find_map(|token| match token {
-        JsToken::Ident(value)
-            if matches!(
-                value.as_str(),
-                "process"
-                    | "Buffer"
-                    | "require"
-                    | "module"
-                    | "exports"
-                    | "__dirname"
-                    | "__filename"
-            ) =>
-        {
-            Some(value)
-        }
-        _ => None,
+    let tokens = js_tokens(text);
+    tokens.iter().enumerate().find_map(|(index, token)| {
+        let JsToken::Ident(value) = token else {
+            return None;
+        };
+        is_ambient_platform_global_reference(&tokens, index).then(|| value.clone())
     })
+}
+
+fn is_ambient_platform_global_reference(tokens: &[JsToken], index: usize) -> bool {
+    let Some(JsToken::Ident(value)) = tokens.get(index) else {
+        return false;
+    };
+    if !matches!(
+        value.as_str(),
+        "process" | "Buffer" | "require" | "module" | "exports" | "__dirname" | "__filename"
+    ) {
+        return false;
+    }
+    if is_non_reference_identifier(tokens, index) {
+        return false;
+    }
+    if matches!(tokens.get(index.wrapping_sub(1)), Some(JsToken::Punct('.'))) {
+        return matches!(
+            tokens.get(index.wrapping_sub(2)),
+            Some(JsToken::Ident(root)) if matches!(root.as_str(), "globalThis" | "global" | "window" | "self")
+        );
+    }
+    true
+}
+
+fn is_non_reference_identifier(tokens: &[JsToken], index: usize) -> bool {
+    if matches!(tokens.get(index + 1), Some(JsToken::Punct(':'))) {
+        return true;
+    }
+    if matches!(tokens.get(index + 1), Some(JsToken::Punct('?')))
+        && matches!(tokens.get(index + 2), Some(JsToken::Punct(':')))
+    {
+        return true;
+    }
+    if matches!(
+        tokens.get(index.wrapping_sub(1)),
+        Some(JsToken::Ident(previous))
+            if matches!(previous.as_str(), "function" | "class" | "type" | "interface" | "as")
+    ) {
+        return true;
+    }
+    if matches!(
+        tokens.get(index.wrapping_sub(1)),
+        Some(JsToken::Ident(previous)) if matches!(previous.as_str(), "const" | "let" | "var")
+    ) {
+        return true;
+    }
+    if is_object_member_prefix(tokens, index)
+        && matches!(tokens.get(index + 1), Some(JsToken::Punct('(')))
+        && method_body_starts_after_parameters(tokens, index + 1)
+    {
+        return true;
+    }
+    false
+}
+
+fn is_object_member_prefix(tokens: &[JsToken], index: usize) -> bool {
+    matches!(
+        tokens.get(index.wrapping_sub(1)),
+        Some(JsToken::Punct('{') | JsToken::Punct(','))
+    )
+}
+
+fn method_body_starts_after_parameters(tokens: &[JsToken], open: usize) -> bool {
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().skip(open) {
+        match token {
+            JsToken::Punct('(') => depth += 1,
+            JsToken::Punct(')') => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return matches!(tokens.get(index + 1), Some(JsToken::Punct('{')));
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn is_unavailable_platform_specifier(specifier: &str) -> bool {
@@ -2146,6 +2213,47 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
         .unwrap();
         assert_eq!(result.files, vec![output.clone()]);
         assert!(output.is_file());
+
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("entry.ts"),
+            "type Job = { process?: string, Buffer: number }; const data = { process: 'queued', Buffer: 1, require() { return 'local'; } }; export const value = data.process + data.Buffer + data.require();",
+        )
+        .unwrap();
+        let output = temp.path().join("dist/client.js");
+        let result = bundle(&BundleOptions::new(
+            temp.path(),
+            Path::new("entry.ts"),
+            &output,
+            Target::Browser,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(result.files, vec![output.clone()]);
+        assert!(output.is_file());
+
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("entry.ts"),
+            "export const value = globalThis.process;",
+        )
+        .unwrap();
+        let output = temp.path().join("dist/client.js");
+        let error = bundle(&BundleOptions::new(
+            temp.path(),
+            Path::new("entry.ts"),
+            &output,
+            Target::Browser,
+        ))
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("bundle cannot depend on unavailable platform global"),
+            "{error:?}"
+        );
+        assert!(!output.exists());
 
         let temp = tempfile::tempdir().unwrap();
         let outside = temp.path().join("outside.ts");
