@@ -146,6 +146,7 @@ pub struct CompiledManifest {
     router: Router,
     route_indexes: BTreeMap<String, usize>,
     asset_indexes: BTreeMap<String, usize>,
+    action_indexes: BTreeMap<String, usize>,
 }
 
 #[derive(Debug)]
@@ -288,12 +289,19 @@ impl CompiledManifest {
             .enumerate()
             .map(|(index, asset)| (asset.url_path.clone(), index))
             .collect();
+        let action_indexes = manifest
+            .actions
+            .iter()
+            .enumerate()
+            .map(|(index, action)| (action.id.clone(), index))
+            .collect();
 
         Ok(Self {
             manifest,
             router,
             route_indexes,
             asset_indexes,
+            action_indexes,
         })
     }
 
@@ -305,6 +313,16 @@ impl CompiledManifest {
         self.asset_indexes
             .get(path)
             .map(|index| &self.manifest.assets[*index])
+    }
+
+    pub fn action(&self, id: &str) -> Option<&ActionRef> {
+        self.action_indexes
+            .get(id)
+            .map(|index| &self.manifest.actions[*index])
+    }
+
+    pub fn module(&self, id: &str) -> Option<&ModuleRef> {
+        self.manifest.modules.iter().find(|module| module.id == id)
     }
 
     pub fn resolve(&self, path: &str) -> Result<Option<ManifestMatch<'_>>, ManifestError> {
@@ -380,7 +398,12 @@ mod tests {
                 browser_chunk: None,
                 server_bundle: Some(PathBuf::from(".zap/server/shop/_id_/page.js")),
             }],
-            actions: Vec::new(),
+            actions: vec![ActionRef {
+                id: "action:shop/_id_/actions#save".into(),
+                module: "shop/_id_/page".into(),
+                export: "save".into(),
+                path: PathBuf::from("shop/[id]/actions.ts"),
+            }],
             assets: Vec::new(),
         }
     }
@@ -391,6 +414,13 @@ mod tests {
         let matched = compiled.resolve("/shop/caf%C3%A9").unwrap().unwrap();
         assert_eq!(matched.route.module, "shop/_id_/page");
         assert_eq!(matched.params["id"], Param::One("café".into()));
+        assert_eq!(
+            compiled
+                .action("action:shop/_id_/actions#save")
+                .unwrap()
+                .export,
+            "save"
+        );
     }
 
     #[test]

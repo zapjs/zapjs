@@ -1,8 +1,8 @@
 use crate::{
-    manifest::{AssetRef, CompiledManifest, ManifestError, RouteEntry, RouteKind},
+    manifest::{ActionRef, AssetRef, CompiledManifest, ManifestError, RouteEntry, RouteKind},
     routing::Param,
 };
-use http::Method;
+use http::{Method, Uri};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
@@ -29,6 +29,14 @@ pub enum RequestPlanError {
     Path,
     #[error("invalid application manifest: {0}")]
     Manifest(#[from] ManifestError),
+    #[error("unknown server action")]
+    UnknownAction,
+    #[error("server action requires POST")]
+    ActionMethod,
+    #[error("server action origin is not allowed")]
+    ActionOrigin,
+    #[error("server action module is not executable")]
+    ActionModule,
 }
 
 const PAGE_METHODS: &[Method] = &[Method::GET, Method::HEAD];
@@ -77,6 +85,64 @@ pub fn plan_request<'a>(
             })
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionTarget<'a> {
+    pub action: &'a ActionRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionAdmission<'a> {
+    pub target: ActionTarget<'a>,
+}
+
+pub fn plan_action<'a>(
+    manifest: &'a CompiledManifest,
+    method: &Method,
+    action_id: &str,
+    origin: Option<&str>,
+    expected_origin: Option<&str>,
+) -> Result<ActionAdmission<'a>, RequestPlanError> {
+    if method != Method::POST {
+        return Err(RequestPlanError::ActionMethod);
+    }
+    if !origin_allowed(origin, expected_origin) {
+        return Err(RequestPlanError::ActionOrigin);
+    }
+    let action = manifest
+        .action(action_id)
+        .ok_or(RequestPlanError::UnknownAction)?;
+    let module = manifest
+        .module(&action.module)
+        .ok_or(RequestPlanError::ActionModule)?;
+    if module.server_bundle.is_none() {
+        return Err(RequestPlanError::ActionModule);
+    }
+    Ok(ActionAdmission {
+        target: ActionTarget { action },
+    })
+}
+
+fn origin_allowed(origin: Option<&str>, expected_origin: Option<&str>) -> bool {
+    let Some(expected_origin) = expected_origin else {
+        return true;
+    };
+    let Some(origin) = origin else {
+        return false;
+    };
+    normalize_origin(origin).as_deref() == normalize_origin(expected_origin).as_deref()
+}
+
+fn normalize_origin(value: &str) -> Option<String> {
+    let uri = value.parse::<Uri>().ok()?;
+    let scheme = uri.scheme_str()?;
+    let authority = uri.authority()?.as_str();
+    Some(format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        authority.to_ascii_lowercase()
+    ))
 }
 
 fn allowed_methods(route: &RouteEntry) -> Vec<Method> {
@@ -185,6 +251,39 @@ mod tests {
         assert!(matches!(
             plan_request(&manifest, &Method::GET, "/missing").unwrap(),
             RequestTarget::NotFound
+        ));
+    }
+
+    #[test]
+    fn admits_known_actions_with_post_and_same_origin() {
+        let manifest = compiled();
+        let admitted = plan_action(
+            &manifest,
+            &Method::POST,
+            "action:page#save",
+            Some("https://example.com/form"),
+            Some("https://example.com"),
+        )
+        .unwrap();
+        assert_eq!(admitted.target.action.export, "save");
+
+        assert!(matches!(
+            plan_action(&manifest, &Method::GET, "action:page#save", None, None),
+            Err(RequestPlanError::ActionMethod)
+        ));
+        assert!(matches!(
+            plan_action(&manifest, &Method::POST, "missing", None, None),
+            Err(RequestPlanError::UnknownAction)
+        ));
+        assert!(matches!(
+            plan_action(
+                &manifest,
+                &Method::POST,
+                "action:page#save",
+                Some("https://evil.example"),
+                Some("https://example.com"),
+            ),
+            Err(RequestPlanError::ActionOrigin)
         ));
     }
 
