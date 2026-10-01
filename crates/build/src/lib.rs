@@ -3384,7 +3384,7 @@ export const Label = 'count';
         .unwrap();
         fs::write(
             app.join("api/ping/route.ts"),
-            "export function GET(request){ return new Response(`ping:${request.method}:${request.path}:${request.url}`, {status: 200, headers: {'x-zap-route': 'ping'}}); }
+            "export function GET(request){ const url = new URL(request.url); return new Response(`ping:${request.method}:${request.path}:${url.pathname}`, {status: 200, headers: {'x-zap-route': 'ping'}}); }
 ",
         )
         .unwrap();
@@ -3646,7 +3646,7 @@ export const Label = 'count';
             .unwrap();
         assert_eq!(head.status, 200);
         assert_eq!(head.headers, vec![("x-zap-route".into(), "ping".into())]);
-        assert_eq!(head.body, "ping:HEAD:/api/ping:https://zap.local/api/ping");
+        assert_eq!(head.body, "ping:HEAD:/api/ping:/api/ping");
         let action_request = plan_action(
             &compiled,
             &Method::POST,

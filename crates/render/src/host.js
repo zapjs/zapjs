@@ -88,6 +88,132 @@ function normalizeHeaderName(name) {
 }
 globalThis.Headers = Headers;
 
+class URLSearchParams {
+  #values = [];
+  constructor(init = '') {
+    if (init instanceof URLSearchParams) {
+      for (const [name, value] of init) this.append(name, value);
+    } else if (typeof init === 'string') {
+      const input = init.startsWith('?') ? init.slice(1) : init;
+      if (input.length > 0) {
+        for (const part of input.split('&')) {
+          if (part.length === 0) continue;
+          const index = part.indexOf('=');
+          const name = index < 0 ? part : part.slice(0, index);
+          const value = index < 0 ? '' : part.slice(index + 1);
+          this.append(decodeFormComponent(name), decodeFormComponent(value));
+        }
+      }
+    } else if (Array.isArray(init)) {
+      for (const pair of init) {
+        if (!Array.isArray(pair) || pair.length !== 2) throw new TypeError('URLSearchParams pair must be [name, value]');
+        this.append(pair[0], pair[1]);
+      }
+    } else if (init && typeof init === 'object') {
+      for (const name of Object.keys(init)) {
+        const value = init[name];
+        if (Array.isArray(value)) for (const item of value) this.append(name, item);
+        else this.append(name, value);
+      }
+    }
+  }
+  append(name, value) { this.#values.push([String(name), String(value)]); }
+  set(name, value) {
+    name = String(name);
+    this.delete(name);
+    this.append(name, value);
+  }
+  get(name) {
+    name = String(name);
+    const pair = this.#values.find(([key]) => key === name);
+    return pair ? pair[1] : null;
+  }
+  getAll(name) {
+    name = String(name);
+    return this.#values.filter(([key]) => key === name).map(([, value]) => value);
+  }
+  has(name) {
+    name = String(name);
+    return this.#values.some(([key]) => key === name);
+  }
+  delete(name) {
+    name = String(name);
+    this.#values = this.#values.filter(([key]) => key !== name);
+  }
+  *entries() { for (const pair of this.#values) yield pair; }
+  [Symbol.iterator]() { return this.entries(); }
+  toString() {
+    return this.#values
+      .map(([name, value]) => `${encodeFormComponent(name)}=${encodeFormComponent(value)}`)
+      .join('&');
+  }
+}
+
+function decodeFormComponent(value) {
+  return decodeURIComponent(String(value).replace(/\+/g, ' '));
+}
+
+function encodeFormComponent(value) {
+  return encodeURIComponent(String(value)).replace(/%20/g, '+');
+}
+
+class URL {
+  constructor(input, base = undefined) {
+    const parsed = parseUrl(String(input), base === undefined ? undefined : String(base));
+    this.protocol = parsed.protocol;
+    this.hostname = parsed.hostname;
+    this.port = parsed.port;
+    this.pathname = parsed.pathname;
+    this.hash = parsed.hash;
+    this.searchParams = new URLSearchParams(parsed.search);
+    this.#sync();
+  }
+  #sync() {
+    const authority = this.port ? `${this.hostname}:${this.port}` : this.hostname;
+    this.origin = `${this.protocol}//${authority}`;
+    const query = this.searchParams.toString();
+    this.search = query ? `?${query}` : '';
+    this.href = `${this.origin}${this.pathname}${this.search}${this.hash}`;
+  }
+  toString() { this.#sync(); return this.href; }
+  toJSON() { return this.toString(); }
+}
+
+function parseUrl(input, base) {
+  let value = input;
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value)) {
+    if (base === undefined) throw new TypeError('Invalid URL');
+    const parsedBase = parseUrl(base);
+    if (value.startsWith('/')) {
+      value = `${parsedBase.protocol}//${parsedBase.hostname}${parsedBase.port ? `:${parsedBase.port}` : ''}${value}`;
+    } else {
+      const directory = parsedBase.pathname.endsWith('/')
+        ? parsedBase.pathname
+        : parsedBase.pathname.slice(0, parsedBase.pathname.lastIndexOf('/') + 1);
+      value = `${parsedBase.protocol}//${parsedBase.hostname}${parsedBase.port ? `:${parsedBase.port}` : ''}${directory}${value}`;
+    }
+  }
+  const match = value.match(/^([a-zA-Z][a-zA-Z0-9+.-]*:)\/\/([^/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/);
+  if (!match) throw new TypeError('Invalid URL');
+  const protocol = match[1];
+  const authority = match[2];
+  const slash = authority.lastIndexOf(':');
+  const hostname = slash >= 0 ? authority.slice(0, slash) : authority;
+  const port = slash >= 0 ? authority.slice(slash + 1) : '';
+  if (!hostname) throw new TypeError('Invalid URL');
+  return {
+    protocol,
+    hostname,
+    port,
+    pathname: match[3] || '/',
+    search: match[4] || '',
+    hash: match[5] || ''
+  };
+}
+
+globalThis.URLSearchParams = URLSearchParams;
+globalThis.URL = URL;
+
 class Request {
   constructor(input, init = {}) {
     if (input instanceof Request) {

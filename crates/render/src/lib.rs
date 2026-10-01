@@ -608,6 +608,19 @@ mod tests {
     }
 
     #[test]
+    fn exposes_web_url_primitives() {
+        let response = route_handler(
+            r#"const url = new URL(request.url); const params = new URLSearchParams('tag=one&tag=two&space=zap+js'); params.append('id', url.searchParams.get('id')); return new Response(`${url.pathname}:${url.searchParams.get('id')}:${params.getAll('tag').join('|')}:${params.get('space')}:${params.toString()}`);"#,
+        )
+        .handle_route_response(r#"{"url":"https://zap.local/shop/7?id=42"}"#)
+        .unwrap();
+        assert_eq!(
+            response.body,
+            "/shop/7:42:one|two:zap js:tag=one&tag=two&space=zap+js&id=42"
+        );
+    }
+
+    #[test]
     fn exposes_web_request_primitive() {
         let response = route_handler(
             r#"const webRequest = new Request('https://zap.local/api/echo?tag=one', {method: 'POST', headers: {'x-zap': '1'}, body: request.body}); return new Response(`${webRequest.method}:${webRequest.url}:${webRequest.headers.get('x-zap')}:${webRequest.body}`);"#,
