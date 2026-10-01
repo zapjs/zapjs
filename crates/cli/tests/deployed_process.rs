@@ -228,6 +228,45 @@ fn assert_served_framework_responses(address: &str) {
         "catch-all Flight response did not carry decoded params and query data:\n{catch_all_flight}"
     );
 
+    let optional_root = http_exchange(
+        address,
+        b"GET /files?mode=root HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        optional_root.starts_with("HTTP/1.1 200 OK"),
+        "unexpected optional catch-all root response:\n{optional_root}"
+    );
+    assert!(
+        optional_root.ends_with("files:<root>:root"),
+        "optional catch-all root did not receive empty params and query data:\n{optional_root}"
+    );
+
+    let optional_nested = http_exchange(
+        address,
+        b"GET /files/a/b?mode=nested HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        optional_nested.starts_with("HTTP/1.1 200 OK"),
+        "unexpected optional catch-all nested response:\n{optional_nested}"
+    );
+    assert!(
+        optional_nested.ends_with("files:a/b:nested"),
+        "optional catch-all nested route did not receive params and query data:\n{optional_nested}"
+    );
+
+    let optional_nested_flight = http_exchange(
+        address,
+        b"GET /files/a/b?mode=nested HTTP/1.1\r\nhost: zap.local\r\nrsc: 1\r\naccept: text/x-component\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        optional_nested_flight.starts_with("HTTP/1.1 200 OK"),
+        "unexpected optional catch-all Flight response:\n{optional_nested_flight}"
+    );
+    assert!(
+        optional_nested_flight.contains(r#""content":"files:a/b:nested""#),
+        "optional catch-all Flight response did not carry params and query data:\n{optional_nested_flight}"
+    );
+
     let failed_page = http_exchange(
         address,
         b"GET /broken HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
@@ -325,6 +364,8 @@ fn write_minimal_app(root: &Path) {
     fs::create_dir_all(&app).expect("create app route");
     fs::create_dir_all(root.join("app/broken")).expect("create broken route");
     fs::create_dir_all(root.join("app/docs/[...slug]")).expect("create docs catch-all route");
+    fs::create_dir_all(root.join("app/files/[[...path]]"))
+        .expect("create files optional catch-all route");
     fs::write(
         root.join("app/page.tsx"),
         "export default function Page(){ return 'home'; }\n",
@@ -335,6 +376,11 @@ fn write_minimal_app(root: &Path) {
         "export default function Docs({ params, searchParams }){ return `docs:${params.slug.join('/')}:${searchParams.view[0]}:${searchParams.tag.join('|')}`; }\n",
     )
     .expect("write docs page");
+    fs::write(
+        root.join("app/files/[[...path]]/page.tsx"),
+        "export default function Files({ params, searchParams }){ const path = params.path.length ? params.path.join('/') : '<root>'; return `files:${path}:${searchParams.mode[0]}`; }\n",
+    )
+    .expect("write files page");
     fs::write(
         root.join("app/broken/page.tsx"),
         "export default function Broken(){ throw new Error('broken page'); }\n",
