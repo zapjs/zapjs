@@ -485,11 +485,15 @@ fn enforce_body_limit(
 }
 
 fn allowed_methods(route: &RouteEntry) -> Vec<Method> {
-    route
+    let mut methods = route
         .methods
         .iter()
         .filter_map(|method| Method::from_bytes(method.as_bytes()).ok())
-        .collect()
+        .collect::<Vec<_>>();
+    if methods.contains(&Method::GET) && !methods.contains(&Method::HEAD) {
+        methods.push(Method::HEAD);
+    }
+    methods
 }
 
 fn request_path(path: &str) -> Option<&str> {
@@ -564,7 +568,7 @@ mod tests {
                     source: PathBuf::from("api/ping/route.ts"),
                     layouts: Vec::new(),
                     module: "handler".into(),
-                    methods: vec!["GET".into(), "HEAD".into()],
+                    methods: vec!["GET".into()],
                     cache: CachePolicy::default(),
                 },
             ],
@@ -1103,6 +1107,22 @@ mod tests {
             .unwrap(),
             AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::BAD_REQUEST))
         );
+    }
+
+    #[test]
+    fn admits_head_for_get_route_handlers_at_runtime() {
+        let manifest = compiled();
+        match plan_request(&manifest, &Method::HEAD, "/api/ping").unwrap() {
+            RequestTarget::RouteHandler { route, .. } => assert_eq!(route.id, "get-handler"),
+            target => panic!("unexpected target: {target:?}"),
+        }
+
+        match plan_request(&manifest, &Method::PUT, "/api/ping").unwrap() {
+            RequestTarget::MethodNotAllowed { allowed } => {
+                assert_eq!(allowed, vec![Method::GET, Method::HEAD]);
+            }
+            target => panic!("unexpected target: {target:?}"),
+        }
     }
 
     #[test]
