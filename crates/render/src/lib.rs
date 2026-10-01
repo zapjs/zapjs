@@ -83,8 +83,10 @@ pub struct Renderer {
 
 impl Renderer {
     /// Page IIFEs must define `ZapRender.render(request)`. Route-handler IIFEs
-    /// must define `ZapRoute.handle(request)`. Both contracts return a string,
-    /// Promise<string>, or a byte ReadableStream (possibly inside a Promise).
+    /// must define `ZapRoute.handle(request)`. Page entries return text or a Web
+    /// `ReadableStream` after the build-generated React SSR adapter has converted
+    /// React render trees with `renderToReadableStream`. Route-handler entries
+    /// return text, `Response`, or a Web `ReadableStream`.
     pub fn new(bundle: impl Into<String>) -> Self {
         Self {
             bundle: Arc::from(bundle.into()),

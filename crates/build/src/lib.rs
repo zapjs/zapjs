@@ -1180,20 +1180,27 @@ fn write_page_server_entry(
     let source = js_string(&source_entry.to_string_lossy());
     let body = format!(
         r#"import renderPage from "{source}";
+import {{ renderToReadableStream }} from "react-dom/server.browser";
 
-function normalizeZapOutput(value) {{
+async function normalizeZapOutput(value) {{
   if (value == null) return "";
   if (typeof value === "string") return value;
   if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return value;
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return String(value);
-  throw new TypeError("Zap page output must be text or a ReadableStream until the React SSR adapter is installed");
+  if (typeof value === "object") {{
+    if (typeof renderToReadableStream !== "function") {{
+      throw new TypeError("Zap page React SSR adapter must export renderToReadableStream");
+    }}
+    return renderToReadableStream(value);
+  }}
+  throw new TypeError("Zap page output must be text, a Web ReadableStream, or a React render tree");
 }}
 
 export async function render(request) {{
   if (typeof renderPage !== "function") {{
     throw new TypeError("Zap page module must export a default function");
   }}
-  return normalizeZapOutput(await renderPage(request));
+  return await normalizeZapOutput(await renderPage(request));
 }}
 "#
     );
@@ -2014,20 +2021,59 @@ mod tests {
     use std::fs;
     use zap_render::Renderer;
 
-    fn write_fixture(root: &Path) -> Vec<(String, String)> {
-        let runtime = root.join("third_party/react");
-        fs::create_dir_all(&runtime).unwrap();
+    fn write_react_runtime(root: &Path) -> Vec<(String, String)> {
+        let react = root.join("third_party/react");
+        let react_dom = root.join("third_party/react-dom");
+        fs::create_dir_all(&react).unwrap();
+        fs::create_dir_all(&react_dom).unwrap();
         fs::write(
-            runtime.join("jsx-runtime.js"),
+            react.join("jsx-runtime.js"),
             r#"
             export function jsx(type, props) {
-                return { type, props };
+                return { type, props: props || {} };
             }
             export const jsxs = jsx;
             export const Fragment = Symbol.for("react.fragment");
             "#,
         )
         .unwrap();
+        fs::write(
+            react_dom.join("server.browser.js"),
+            r#"
+            function escapeText(value) {
+                return String(value).replace(/[&<>"]/g, (match) => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;'}[match]));
+            }
+            function renderTree(tree) {
+                if (tree == null || tree === false || tree === true) return "";
+                if (typeof tree === "string" || typeof tree === "number" || typeof tree === "bigint") return escapeText(tree);
+                if (Array.isArray(tree)) return tree.map(renderTree).join("");
+                if (typeof tree.type === "function") return renderTree(tree.type(tree.props || {}));
+                const props = tree.props || {};
+                const attrs = Object.keys(props)
+                    .filter((key) => key !== "children" && props[key] != null && props[key] !== false)
+                    .map((key) => props[key] === true ? ` ${key}` : ` ${key}="${escapeText(props[key])}"`)
+                    .join("");
+                return `<${tree.type}${attrs}>${renderTree(props.children)}</${tree.type}>`;
+            }
+            export function renderToReadableStream(tree) {
+                return new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode(renderTree(tree)));
+                        controller.close();
+                    }
+                });
+            }
+            "#,
+        )
+        .unwrap();
+        vec![
+            ("react".into(), react.to_string_lossy().into_owned()),
+            ("react-dom".into(), react_dom.to_string_lossy().into_owned()),
+        ]
+    }
+
+    fn write_fixture(root: &Path) -> Vec<(String, String)> {
+        let aliases = write_react_runtime(root);
         fs::write(
             root.join("entry.tsx"),
             r#"
@@ -2036,7 +2082,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        vec![("react".into(), runtime.to_string_lossy().into_owned())]
+        aliases
     }
 
     #[test]
@@ -2484,7 +2530,7 @@ export type { IgnoredAction };
         fs::write(
             app.join("page.tsx"),
             "export const dynamic = 'force-dynamic';
-export default function Page(request){ return `home:${request.path}`; }
+export default function Page(request){ return <main data-path={request.path}>home:{request.path}</main>; }
 ",
         )
         .unwrap();
@@ -2526,6 +2572,7 @@ export function Counter(){ return '1'; }
         .unwrap();
 
         let mut options = ApplicationBuildOptions::new(temp.path());
+        options.aliases = write_react_runtime(temp.path());
         options.minify = false;
         let output = build_application(&options).await.unwrap();
 
@@ -2578,7 +2625,7 @@ export function Counter(){ return '1'; }
         let rendered = Renderer::new(fs::read_to_string(page_bundle).unwrap())
             .render(r#"{"path":"/"}"#)
             .unwrap();
-        assert_eq!(rendered, "home:/");
+        assert_eq!(rendered, r#"<main data-path="/">home:/</main>"#);
         let handled = Renderer::new(fs::read_to_string(route_bundle).unwrap())
             .handle_route_response(r#"{"method":"POST","path":"/api/echo"}"#)
             .unwrap();
