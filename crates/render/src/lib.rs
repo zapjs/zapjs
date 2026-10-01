@@ -36,6 +36,22 @@ pub struct RouteResponse {
 
 pub type ActionResponse = RouteResponse;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionOutcome<T> {
+    Complete(T),
+    Failed(ExecutionFailure),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionFailure {
+    pub status: u16,
+    pub public_message: String,
+    pub diagnostic: String,
+}
+
+pub type RouteExecution = ExecutionOutcome<RouteResponse>;
+pub type ActionExecution = ExecutionOutcome<ActionResponse>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RouteResponseMetadata {
     pub status: u16,
@@ -128,6 +144,13 @@ impl Renderer {
         })
     }
 
+    pub fn execute_route(&self, request_json: &str) -> RouteExecution {
+        match self.handle_route_response(request_json) {
+            Ok(response) => ExecutionOutcome::Complete(response),
+            Err(error) => ExecutionOutcome::Failed(execution_failure("Route", error)),
+        }
+    }
+
     pub fn invoke_action_response(
         &self,
         invocation_json: &str,
@@ -150,6 +173,13 @@ impl Renderer {
             headers: metadata.headers,
             body,
         })
+    }
+
+    pub fn execute_action(&self, invocation_json: &str) -> ActionExecution {
+        match self.invoke_action_response(invocation_json) {
+            Ok(response) => ExecutionOutcome::Complete(response),
+            Err(error) => ExecutionOutcome::Failed(execution_failure("Action", error)),
+        }
     }
 
     /// Streams actual React chunks as they are produced. The sink owns transport
@@ -366,6 +396,14 @@ impl Renderer {
     }
 }
 
+fn execution_failure(label: &str, error: RenderError) -> ExecutionFailure {
+    ExecutionFailure {
+        status: 500,
+        public_message: format!("{label} execution failed"),
+        diagnostic: error.to_string(),
+    }
+}
+
 fn engine_error(error: rquickjs::Error) -> RenderError {
     RenderError(error.to_string())
 }
@@ -507,6 +545,40 @@ mod tests {
             vec![("x-zap-action".into(), "save".into())]
         );
         assert_eq!(response.body, "saved:7");
+    }
+
+    #[test]
+    fn maps_route_and_action_errors_to_execution_failures() {
+        let route = route_handler(r#"throw new Error('secret route token');"#)
+            .execute_route(r#"{"method":"POST","path":"/api/echo"}"#);
+        assert_eq!(
+            route,
+            ExecutionOutcome::Failed(ExecutionFailure {
+                status: 500,
+                public_message: "Route execution failed".into(),
+                diagnostic: match route {
+                    ExecutionOutcome::Failed(ref failure) => failure.diagnostic.clone(),
+                    ExecutionOutcome::Complete(_) => unreachable!(),
+                },
+            })
+        );
+        match route {
+            ExecutionOutcome::Failed(failure) => {
+                assert!(failure.diagnostic.contains("secret route token"));
+            }
+            ExecutionOutcome::Complete(_) => unreachable!(),
+        }
+
+        let action = action_handler(r#"throw new Error('secret action token');"#)
+            .execute_action(r#"{"export":"save","args":[]}"#);
+        match action {
+            ExecutionOutcome::Failed(failure) => {
+                assert_eq!(failure.status, 500);
+                assert_eq!(failure.public_message, "Action execution failed");
+                assert!(failure.diagnostic.contains("secret action token"));
+            }
+            ExecutionOutcome::Complete(_) => unreachable!(),
+        }
     }
 
     #[test]

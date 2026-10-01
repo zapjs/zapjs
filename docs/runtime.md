@@ -40,7 +40,7 @@ The current Rust crates prove foundation behavior and initial Rust request admis
 
 - route matching, manifest-backed request target planning, terminal HTTP response mapping, static asset source-path validation, route-handler method admission, server-action admission, declared body-limit admission and unsafe path rejection;
 - bounded Splice transport behavior;
-- embedded JavaScript execution with page, route-handler and server-action entrypoints, route/action `Response` status/header/body adaptation, streams, host calls, output limits and CPU interruption;
+- embedded JavaScript execution with page, route-handler and server-action entrypoints, route/action `Response` status/header/body adaptation, typed route/action error-boundary outcomes, streams, host calls, output limits and CPU interruption;
 - Rust-only TSX bundling for browser and server outputs.
 
-The full runtime still needs executable SSR/RSC/hydration/navigation integration, React action wiring, route-handler/action context/auth/error boundaries, managed native deployment verification and the developer workflow.
+The full runtime still needs executable SSR/RSC/hydration/navigation integration, React action wiring and route-handler/action context/auth policy, managed native deployment verification and the developer workflow.

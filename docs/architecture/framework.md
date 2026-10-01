@@ -94,7 +94,7 @@ The current Rust layer includes:
 
 - `zap-runtime`: compiled route parsing and lookup with unsafe URL path rejection.
 - `zap-splice`: bounded Rust worker transport with cancellation, deadlines, crash cleanup and subprocess coverage.
-- `zap-render`: Rust-owned QuickJS execution with Web Stream, route `Response` and action `Response` support, explicit host calls, output limits and CPU interruption.
+- `zap-render`: Rust-owned QuickJS execution with Web Stream, route/action `Response` support and typed execution failures, explicit host calls, output limits and CPU interruption.
 - `zap-build`: Rust-only TSX bundling through Rolldown/Oxc for server IIFE and browser module outputs.
 
 This is foundation work, not a full production framework claim.
