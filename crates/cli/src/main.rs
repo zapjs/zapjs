@@ -639,6 +639,7 @@ fn execute_http_request(
                     .iter()
                     .map(|(name, value)| (name.clone(), value.clone()))
                     .collect(),
+                body: request.body.clone(),
                 declared_body_bytes: Some(request.body.len() as u64),
                 uses_private_request_state: false,
                 context,
@@ -1009,6 +1010,7 @@ mod tests {
                 method: &Method::POST,
                 path: "/api/echo",
                 headers: Vec::new(),
+                body: Vec::new(),
                 declared_body_bytes: Some(0),
                 uses_private_request_state: false,
                 context: InvocationContext {

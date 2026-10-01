@@ -127,6 +127,8 @@ pub enum RequestPlanError {
     InvocationPayload(#[from] serde_json::Error),
     #[error("request header is invalid")]
     Header,
+    #[error("request body is not valid UTF-8")]
+    BodyEncoding,
     #[error("request deadline exceeds configured limit")]
     DeadlineTooLong,
 }
@@ -217,9 +219,9 @@ pub fn admit_request_input<'a>(
         Err(RequestPlanError::Path) => Ok(AdmissionOutcome::Respond(ImmediateResponse::new(
             StatusCode::BAD_REQUEST,
         ))),
-        Err(RequestPlanError::Header) => Ok(AdmissionOutcome::Respond(ImmediateResponse::new(
-            StatusCode::BAD_REQUEST,
-        ))),
+        Err(RequestPlanError::Header | RequestPlanError::BodyEncoding) => Ok(
+            AdmissionOutcome::Respond(ImmediateResponse::new(StatusCode::BAD_REQUEST)),
+        ),
         Err(RequestPlanError::BodyTooLarge) => Ok(AdmissionOutcome::Respond(
             ImmediateResponse::new(StatusCode::PAYLOAD_TOO_LARGE),
         )),
@@ -429,6 +431,7 @@ pub struct RendererRequestPayload {
     pub method: String,
     pub path: String,
     pub headers: BTreeMap<String, String>,
+    pub body: String,
     pub params: BTreeMap<String, Param>,
     #[serde(rename = "searchParams")]
     pub search_params: BTreeMap<String, Vec<String>>,
@@ -441,11 +444,13 @@ impl RendererRequestPayload {
         params: &BTreeMap<String, Param>,
         search_params: BTreeMap<String, Vec<String>>,
         headers: BTreeMap<String, String>,
+        body: String,
     ) -> Self {
         Self {
             method: method.as_str().to_owned(),
             path: path.to_owned(),
             headers,
+            body,
             params: params.clone(),
             search_params,
         }
@@ -474,10 +479,12 @@ impl<'a> RequestTarget<'a> {
         &self,
         path: &str,
         headers: &[(String, String)],
+        body: &[u8],
     ) -> Result<Option<RendererRequestPayload>, RequestPlanError> {
         let target = request_target(path).ok_or(RequestPlanError::Path)?;
         let search_params = parse_search_params(target.query).ok_or(RequestPlanError::Path)?;
         let headers = normalize_headers(headers)?;
+        let body = request_body_text(body)?;
         Ok(match self {
             RequestTarget::Page {
                 params, invocation, ..
@@ -487,6 +494,7 @@ impl<'a> RequestTarget<'a> {
                 params,
                 search_params,
                 headers,
+                body,
             )),
             RequestTarget::RouteHandler {
                 params, invocation, ..
@@ -496,6 +504,7 @@ impl<'a> RequestTarget<'a> {
                 params,
                 search_params,
                 headers,
+                body,
             )),
             RequestTarget::StaticAsset(_)
             | RequestTarget::NotFound
@@ -507,8 +516,9 @@ impl<'a> RequestTarget<'a> {
         &self,
         path: &str,
         headers: &[(String, String)],
+        body: &[u8],
     ) -> Result<Option<String>, RequestPlanError> {
-        self.renderer_request_payload(path, headers)?
+        self.renderer_request_payload(path, headers, body)?
             .map(|payload| payload.to_json())
             .transpose()
     }
@@ -734,6 +744,10 @@ fn decode_query_component(value: &str) -> Option<String> {
         .map(|value| value.into_owned())
 }
 
+fn request_body_text(body: &[u8]) -> Result<String, RequestPlanError> {
+    String::from_utf8(body.to_vec()).map_err(|_| RequestPlanError::BodyEncoding)
+}
+
 fn normalize_headers(
     headers: &[(String, String)],
 ) -> Result<BTreeMap<String, String>, RequestPlanError> {
@@ -930,9 +944,9 @@ mod tests {
         }
         assert_eq!(
             page_target
-                .renderer_request_json("/shop/caf%C3%A9", &[])
+                .renderer_request_json("/shop/caf%C3%A9", &[], b"")
                 .unwrap(),
-            Some(r#"{"method":"HEAD","path":"/shop/caf%C3%A9","headers":{},"params":{"id":"café"},"searchParams":{}}"#.into())
+            Some(r#"{"method":"HEAD","path":"/shop/caf%C3%A9","headers":{},"body":"","params":{"id":"café"},"searchParams":{}}"#.into())
         );
 
         let route_target = plan_request(&manifest, &Method::POST, "/api/echo").unwrap();
@@ -951,10 +965,10 @@ mod tests {
         }
         assert_eq!(
             route_target
-                .renderer_request_json("/api/echo?tag=one&tag=two&space=a+b&empty", &[("x-zap".into(), "one".into()), ("x-zap".into(), "two".into())])
+                .renderer_request_json("/api/echo?tag=one&tag=two&space=a+b&empty", &[("x-zap".into(), "one".into()), ("x-zap".into(), "two".into())], br#"{"ok":true}"#)
                 .unwrap(),
             Some(
-                r#"{"method":"POST","path":"/api/echo","headers":{"x-zap":"one, two"},"params":{},"searchParams":{"empty":[""],"space":["a b"],"tag":["one","two"]}}"#
+                r#"{"method":"POST","path":"/api/echo","headers":{"x-zap":"one, two"},"body":"{\"ok\":true}","params":{},"searchParams":{"empty":[""],"space":["a b"],"tag":["one","two"]}}"#
                     .into()
             )
         );

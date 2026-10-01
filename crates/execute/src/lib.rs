@@ -89,6 +89,7 @@ pub struct RequestExecutionInput<'a> {
     pub method: &'a Method,
     pub path: &'a str,
     pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
     pub declared_body_bytes: Option<u64>,
     pub uses_private_request_state: bool,
     pub context: InvocationContext<'a>,
@@ -100,6 +101,7 @@ impl<'a> RequestExecutionInput<'a> {
             method,
             path,
             headers: Vec::new(),
+            body: Vec::new(),
             declared_body_bytes: None,
             uses_private_request_state: false,
             context: InvocationContext {
@@ -358,7 +360,7 @@ impl ApplicationExecutor {
                 let bundle_path = self.root.join(&invocation.server_bundle);
                 let bundle = read_artifact_string(&bundle_path)?;
                 let request_json = target
-                    .renderer_request_json(input.path, &input.headers)?
+                    .renderer_request_json(input.path, &input.headers, &input.body)?
                     .expect("page targets produce renderer payloads");
                 let body = if input.method == Method::HEAD {
                     String::new()
@@ -389,7 +391,7 @@ impl ApplicationExecutor {
                 let bundle_path = self.root.join(&invocation.server_bundle);
                 let bundle = read_artifact_string(&bundle_path)?;
                 let request_json = target
-                    .renderer_request_json(input.path, &input.headers)?
+                    .renderer_request_json(input.path, &input.headers, &input.body)?
                     .expect("route handler targets produce renderer payloads");
                 let rendered = Renderer::new(bundle)
                     .handle_route_response(&request_json)
@@ -690,7 +692,11 @@ mod tests {
         assert!(head.body.is_empty());
 
         let route = executor
-            .execute_request(&RequestExecutionInput::new(&Method::POST, "/api/echo"))
+            .execute_request(&RequestExecutionInput {
+                body: br#"{"name":"zap"}"#.to_vec(),
+                declared_body_bytes: Some(14),
+                ..RequestExecutionInput::new(&Method::POST, "/api/echo")
+            })
             .unwrap();
         assert_eq!(route.status, StatusCode::ACCEPTED);
         assert_eq!(
@@ -702,7 +708,7 @@ mod tests {
         );
         assert_eq!(
             String::from_utf8(route.body).unwrap(),
-            "echo:POST:/api/echo"
+            r#"echo:POST:/api/echo:{"name":"zap"}"#
         );
 
         let asset = executor
@@ -960,7 +966,7 @@ mod tests {
         .unwrap();
         fs::write(
             root.join(".zap/server/api/echo/route.js"),
-            r#"globalThis.ZapRoute = { handle(request) { return new Response(`echo:${request.method}:${request.path}`, { status: 202, headers: { "x-zap-route": "echo" } }); } };"#,
+            r#"globalThis.ZapRoute = { handle(request) { return new Response(`echo:${request.method}:${request.path}:${request.body}`, { status: 202, headers: { "x-zap-route": "echo" } }); } };"#,
         )
         .unwrap();
         fs::write(
