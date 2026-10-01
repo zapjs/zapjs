@@ -266,6 +266,40 @@ fn assert_served_framework_responses(address: &str) {
         "static asset HEAD response must not include a body:\n{static_asset_head}"
     );
 
+    let cached_page = http_exchange(
+        address,
+        b"GET /cached HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        cached_page.starts_with("HTTP/1.1 200 OK"),
+        "unexpected cached page response:\n{cached_page}"
+    );
+    assert!(
+        cached_page.contains("cache-control: public, max-age=0, s-maxage=60, stale-while-revalidate"),
+        "cached page response missed public revalidation policy:\n{cached_page}"
+    );
+    assert!(
+        cached_page.contains(r#"<div id="__zap_root">cached-page</div>"#),
+        "cached page response missed body:\n{cached_page}"
+    );
+
+    let cached_route = http_exchange(
+        address,
+        b"GET /api/cached HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
+    );
+    assert!(
+        cached_route.starts_with("HTTP/1.1 200 OK"),
+        "unexpected cached route response:\n{cached_route}"
+    );
+    assert!(
+        cached_route.contains("cache-control: public, immutable"),
+        "cached route response missed force-static immutable policy:\n{cached_route}"
+    );
+    assert!(
+        cached_route.ends_with("cached-route"),
+        "cached route response missed body:\n{cached_route}"
+    );
+
     let missing = http_exchange(
         address,
         b"GET /missing HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
@@ -659,6 +693,8 @@ fn write_minimal_app(root: &Path) {
     fs::create_dir_all(&app).expect("create app route");
     fs::create_dir_all(root.join("public")).expect("create public directory");
     fs::create_dir_all(root.join("app/api/ping")).expect("create ping route");
+    fs::create_dir_all(root.join("app/api/cached")).expect("create cached route");
+    fs::create_dir_all(root.join("app/cached")).expect("create cached page");
     fs::create_dir_all(root.join("app/broken")).expect("create broken route");
     fs::create_dir_all(root.join("app/docs/[...slug]")).expect("create docs catch-all route");
     fs::create_dir_all(root.join("app/files/[[...path]]"))
@@ -674,6 +710,11 @@ fn write_minimal_app(root: &Path) {
         "'use server';\nexport async function save(input){ return new Response(`saved:${input.id}`, { status: 203, headers: { 'x-zap-action': 'save' } }); }\n",
     )
     .expect("write server action");
+    fs::write(
+        root.join("app/cached/page.tsx"),
+        "export const dynamic = 'force-static';\nexport const revalidate = 60;\nexport default function Cached(){ return 'cached-page'; }\n",
+    )
+    .expect("write cached page");
     fs::write(
         root.join("app/docs/[...slug]/page.tsx"),
         "export default function Docs({ params, searchParams }){ return `docs:${params.slug.join('/')}:${searchParams.view[0]}:${searchParams.tag.join('|')}`; }\n",
@@ -699,6 +740,11 @@ fn write_minimal_app(root: &Path) {
         "export function GET(request){ return new Response(`ping:${request.method}:${request.path}`, { headers: { 'x-zap-route': 'ping' } }); }\n",
     )
     .expect("write ping route");
+    fs::write(
+        root.join("app/api/cached/route.ts"),
+        "export const dynamic = 'force-static';\nexport function GET(){ return 'cached-route'; }\n",
+    )
+    .expect("write cached route");
 }
 
 struct TempDir {
