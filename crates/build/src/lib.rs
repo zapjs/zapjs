@@ -301,6 +301,7 @@ fn module_specifiers(text: &str) -> Vec<String> {
 
 fn js_tokens(text: &str) -> Vec<JsToken> {
     let mut tokens = Vec::new();
+    let mut previous = None::<JsToken>;
     let mut chars = text.char_indices().peekable();
     while let Some((_, ch)) = chars.next() {
         if ch.is_whitespace() {
@@ -319,20 +320,26 @@ fn js_tokens(text: &str) -> Vec<JsToken> {
                 }
                 Some((_, '*')) => {
                     chars.next();
-                    let mut previous = '\0';
+                    let mut previous_comment = '\0';
                     for (_, ch) in chars.by_ref() {
-                        if previous == '*' && ch == '/' {
+                        if previous_comment == '*' && ch == '/' {
                             break;
                         }
-                        previous = ch;
+                        previous_comment = ch;
                     }
+                    continue;
+                }
+                _ if slash_can_start_regex(previous.as_ref()) => {
+                    skip_regex_literal(&mut chars);
                     continue;
                 }
                 _ => {}
             }
         }
         if ch == '\'' || ch == '"' {
-            tokens.push(JsToken::String(read_js_string(ch, &mut chars)));
+            let token = JsToken::String(read_js_string(ch, &mut chars));
+            previous = Some(token.clone());
+            tokens.push(token);
             continue;
         }
         if ch.is_ascii_digit() {
@@ -344,12 +351,16 @@ fn js_tokens(text: &str) -> Vec<JsToken> {
                 number.push(next);
                 chars.next();
             }
-            tokens.push(JsToken::Number(number));
+            let token = JsToken::Number(number);
+            previous = Some(token.clone());
+            tokens.push(token);
             continue;
         }
         if ch == '`' {
             if let Some(value) = read_static_template_literal(&mut chars) {
-                tokens.push(JsToken::String(value));
+                let token = JsToken::String(value);
+                previous = Some(token.clone());
+                tokens.push(token);
             }
             continue;
         }
@@ -362,12 +373,57 @@ fn js_tokens(text: &str) -> Vec<JsToken> {
                 ident.push(next);
                 chars.next();
             }
-            tokens.push(JsToken::Ident(ident));
+            let token = JsToken::Ident(ident);
+            previous = Some(token.clone());
+            tokens.push(token);
             continue;
         }
-        tokens.push(JsToken::Punct(ch));
+        let token = JsToken::Punct(ch);
+        previous = Some(token.clone());
+        tokens.push(token);
     }
     tokens
+}
+
+fn slash_can_start_regex(previous: Option<&JsToken>) -> bool {
+    match previous {
+        None => true,
+        Some(JsToken::Ident(value)) => matches!(
+            value.as_str(),
+            "return"
+                | "throw"
+                | "case"
+                | "delete"
+                | "typeof"
+                | "void"
+                | "yield"
+                | "await"
+                | "in"
+                | "instanceof"
+        ),
+        Some(JsToken::Punct(value)) => matches!(
+            value,
+            '(' | '['
+                | '{'
+                | ','
+                | ';'
+                | ':'
+                | '='
+                | '!'
+                | '?'
+                | '&'
+                | '|'
+                | '+'
+                | '-'
+                | '*'
+                | '%'
+                | '^'
+                | '~'
+                | '<'
+                | '>'
+        ),
+        Some(JsToken::Number(_) | JsToken::String(_)) => false,
+    }
 }
 
 fn read_js_string(
@@ -392,6 +448,41 @@ fn read_js_string(
         value.push(ch);
     }
     value
+}
+
+fn skip_regex_literal(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) {
+    let mut escaped = false;
+    let mut in_class = false;
+    while let Some((_, ch)) = chars.next() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '[' {
+            in_class = true;
+            continue;
+        }
+        if ch == ']' {
+            in_class = false;
+            continue;
+        }
+        if ch == '/' && !in_class {
+            while let Some((_, flag)) = chars.peek().copied() {
+                if !is_ident_continue(flag) {
+                    break;
+                }
+                chars.next();
+            }
+            break;
+        }
+        if ch == '\n' || ch == '\r' {
+            break;
+        }
+    }
 }
 
 fn read_static_template_literal(
@@ -1934,6 +2025,10 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
                 "export const value = process.env.NODE_ENV;",
             ),
             (
+                "division_process.ts",
+                "export const value = 1 / process.pid;",
+            ),
+            (
                 "buffer_global.ts",
                 "export const value = Buffer.from('zap');",
             ),
@@ -2020,6 +2115,24 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
         fs::write(
             temp.path().join("entry.ts"),
             "const text = `ignored ${\"import('fs')\"} and ${\"process.env.NODE_ENV\"}`; export const value = text;",
+        )
+        .unwrap();
+        let output = temp.path().join("dist/client.js");
+        let result = bundle(&BundleOptions::new(
+            temp.path(),
+            Path::new("entry.ts"),
+            &output,
+            Target::Browser,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(result.files, vec![output.clone()]);
+        assert!(output.is_file());
+
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("entry.ts"),
+            "const pattern = /process\\.env|Buffer\\.from/; export const value = pattern.test('text');",
         )
         .unwrap();
         let output = temp.path().join("dist/client.js");
