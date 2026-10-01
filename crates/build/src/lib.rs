@@ -1391,6 +1391,17 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
         let text = fs::read_to_string(&absolute_path)
             .with_context(|| format!("read {}", absolute_path.display()))?;
         let kind = classify_module(&text);
+        let route_kind = match file_name {
+            "page.tsx" => Some(RouteKind::Page),
+            "route.ts" | "route.tsx" => Some(RouteKind::Handler),
+            _ => None,
+        };
+        let graph_entry = file_name == "layout.tsx"
+            || route_kind.is_some()
+            || matches!(kind, ModuleKind::Client | ModuleKind::ServerActions);
+        if !graph_entry {
+            continue;
+        }
         let id = module_id(&relative_path);
         let cache = parse_cache_policy(&text)?;
 
@@ -1432,11 +1443,6 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
                 });
             }
         }
-        let route_kind = match file_name {
-            "page.tsx" => Some(RouteKind::Page),
-            "route.ts" | "route.tsx" => Some(RouteKind::Handler),
-            _ => None,
-        };
         if let Some(route_kind) = route_kind {
             let methods = match route_kind {
                 RouteKind::Page => vec!["GET".into(), "HEAD".into()],
@@ -2065,6 +2071,16 @@ mod tests {
         )
         .unwrap();
         fs::write(app.join("types.d.ts"), "export interface Ignored {}\n").unwrap();
+        fs::write(
+            app.join("types.ts"),
+            "export type PageProps = { id: string };\n",
+        )
+        .unwrap();
+        fs::write(
+            app.join("helper.ts"),
+            "export function helper() { return 'helper'; }\n",
+        )
+        .unwrap();
         fs::write(temp.path().join("public/images/logo.svg"), "<svg/>\n").unwrap();
 
         let graph = build_application_graph(&GraphOptions::new(temp.path())).unwrap();
@@ -2089,6 +2105,8 @@ mod tests {
         assert_eq!(handler.methods, vec!["POST"]);
 
         assert!(graph.modules.iter().all(|module| module.id != "types.d"));
+        assert!(graph.modules.iter().all(|module| module.id != "types"));
+        assert!(graph.modules.iter().all(|module| module.id != "helper"));
         let client = graph
             .modules
             .iter()
@@ -2490,8 +2508,18 @@ export function Counter(){ return '1'; }
         fs::write(
             app.join("actions.ts"),
             "'use server';
-export async function save(input){ return new Response(`saved:${input.id}`, {status: 203, headers: {'x-zap-action': 'save'}}); }
-",
+	export async function save(input){ return new Response(`saved:${input.id}`, {status: 203, headers: {'x-zap-action': 'save'}}); }
+	",
+        )
+        .unwrap();
+        fs::write(
+            app.join("types.ts"),
+            "export type PageProps = { id: string };\n",
+        )
+        .unwrap();
+        fs::write(
+            app.join("helper.ts"),
+            "export function helper() { return 'helper'; }\n",
         )
         .unwrap();
 
@@ -2541,6 +2569,10 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
                 .is_file()
         );
         assert!(temp.path().join(".zap/entries/server/actions.js").is_file());
+        assert!(!temp.path().join(".zap/server/types.js").exists());
+        assert!(!temp.path().join(".zap/server/helper.js").exists());
+        assert!(!temp.path().join(".zap/entries/server/types.js").exists());
+        assert!(!temp.path().join(".zap/entries/server/helper.js").exists());
         let rendered = Renderer::new(fs::read_to_string(page_bundle).unwrap())
             .render(r#"{"path":"/"}"#)
             .unwrap();
