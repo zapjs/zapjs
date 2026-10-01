@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 use thiserror::Error;
 
@@ -136,6 +136,8 @@ pub enum ManifestError {
     DuplicateAsset(String),
     #[error("asset URL path must be absolute and safe: {0}")]
     InvalidAssetPath(String),
+    #[error("asset source path must be relative and safe: {0}")]
+    InvalidAssetSource(PathBuf),
     #[error("route {route} has invalid method set")]
     InvalidRouteMethods { route: String },
 }
@@ -206,6 +208,9 @@ impl CompiledManifest {
         for asset in &manifest.assets {
             if !is_safe_asset_url(&asset.url_path) {
                 return Err(ManifestError::InvalidAssetPath(asset.url_path.clone()));
+            }
+            if !is_safe_asset_source(&asset.source) {
+                return Err(ManifestError::InvalidAssetSource(asset.source.clone()));
             }
             if !asset_paths.insert(asset.url_path.clone()) {
                 return Err(ManifestError::DuplicateAsset(asset.url_path.clone()));
@@ -315,6 +320,17 @@ impl CompiledManifest {
             .map(|index| &self.manifest.assets[*index])
     }
 
+    pub fn resolve_asset_source(
+        &self,
+        public_root: &Path,
+        asset: &AssetRef,
+    ) -> Result<PathBuf, ManifestError> {
+        if !is_safe_asset_source(&asset.source) {
+            return Err(ManifestError::InvalidAssetSource(asset.source.clone()));
+        }
+        Ok(public_root.join(&asset.source))
+    }
+
     pub fn action(&self, id: &str) -> Option<&ActionRef> {
         self.action_indexes
             .get(id)
@@ -370,6 +386,14 @@ fn is_safe_asset_url(path: &str) -> bool {
             .any(|part| part == "." || part == ".." || part.contains('%'))
 }
 
+fn is_safe_asset_source(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,7 +428,10 @@ mod tests {
                 export: "save".into(),
                 path: PathBuf::from("shop/[id]/actions.ts"),
             }],
-            assets: Vec::new(),
+            assets: vec![AssetRef {
+                source: PathBuf::from("images/logo.svg"),
+                url_path: "/images/logo.svg".into(),
+            }],
         }
     }
 
@@ -420,6 +447,13 @@ mod tests {
                 .unwrap()
                 .export,
             "save"
+        );
+        let asset = compiled.asset("/images/logo.svg").unwrap();
+        assert_eq!(
+            compiled
+                .resolve_asset_source(Path::new("/app/public"), asset)
+                .unwrap(),
+            PathBuf::from("/app/public/images/logo.svg")
         );
     }
 
@@ -450,6 +484,20 @@ mod tests {
         assert!(matches!(
             CompiledManifest::new(unsafe_asset).unwrap_err(),
             ManifestError::InvalidAssetPath(_)
+        ));
+
+        let mut absolute_source = manifest();
+        absolute_source.assets[0].source = PathBuf::from("/etc/passwd");
+        assert!(matches!(
+            CompiledManifest::new(absolute_source).unwrap_err(),
+            ManifestError::InvalidAssetSource(_)
+        ));
+
+        let mut traversal_source = manifest();
+        traversal_source.assets[0].source = PathBuf::from("../secret");
+        assert!(matches!(
+            CompiledManifest::new(traversal_source).unwrap_err(),
+            ManifestError::InvalidAssetSource(_)
         ));
     }
 }
