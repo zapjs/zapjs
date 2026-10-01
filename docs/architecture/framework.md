@@ -105,7 +105,7 @@ This is foundation work, not a full production framework claim.
 
 ZapJS can make a production claim only after these gates are executable and recorded:
 
-1. real React HTML SSR and Flight run through the Rust-owned engine with cancellation, streaming and memory limits;
+1. real React HTML SSR, plus Flight through the Rust-owned engine with cancellation, streaming and memory limits;
 2. the Rust graph emits matching server bundles, browser chunks, client references, action IDs and route manifests;
 3. hydration metadata/bootstrap injection, initial browser hydrate-hook execution, same-origin client navigation, pending/error navigation boundaries and browser-to-Rust server actions are verified in Aegis;
 4. broader nested/dynamic navigation cases are verified in Aegis;

@@ -10,6 +10,54 @@ const zapConsole = Object.freeze({
 });
 globalThis.console = zapConsole;
 globalThis.queueMicrotask = fn => Promise.resolve().then(fn);
+
+const postedMessages = [];
+class MessageEvent {
+  constructor(type, init = {}) {
+    this.type = String(type);
+    this.data = init.data;
+    this.target = init.target ?? null;
+    this.currentTarget = this.target;
+  }
+}
+class MessagePort {
+  #peer = null;
+  #closed = false;
+  #listeners = new Set();
+  onmessage = null;
+  onmessageerror = null;
+  postMessage(data) {
+    if (this.#closed || !this.#peer || this.#peer.#closed) return;
+    postedMessages.push({port: this.#peer, data});
+  }
+  start() {}
+  close() { this.#closed = true; }
+  addEventListener(type, listener) {
+    if (type === 'message' && typeof listener === 'function') this.#listeners.add(listener);
+  }
+  removeEventListener(type, listener) {
+    if (type === 'message') this.#listeners.delete(listener);
+  }
+  dispatchEvent(event) {
+    event.target = this;
+    event.currentTarget = this;
+    if (event.type === 'message' && typeof this.onmessage === 'function') this.onmessage(event);
+    if (event.type === 'message') for (const listener of [...this.#listeners]) listener.call(this, event);
+    return true;
+  }
+  _zapEntangle(peer) { this.#peer = peer; }
+}
+class MessageChannel {
+  constructor() {
+    this.port1 = new MessagePort();
+    this.port2 = new MessagePort();
+    this.port1._zapEntangle(this.port2);
+    this.port2._zapEntangle(this.port1);
+  }
+}
+globalThis.MessageEvent = MessageEvent;
+globalThis.MessagePort = MessagePort;
+globalThis.MessageChannel = MessageChannel;
 let nextTimer = 1;
 const timers = new Map();
 globalThis.setTimeout = (fn, delay = 0, ...args) => {
@@ -23,6 +71,10 @@ globalThis.__zap_pump = () => {
   const now = __zap_now();
   const ready = [...timers].filter(([, timer]) => timer.at <= now);
   for (const [id, timer] of ready) if (timers.delete(id)) timer.fn();
+  for (let i = 0; i < 256 && postedMessages.length > 0; i++) {
+    const message = postedMessages.shift();
+    message.port.dispatchEvent(new MessageEvent('message', {data: message.data, target: message.port}));
+  }
 };
 globalThis.performance = {now: __zap_now};
 globalThis.TextEncoder = class TextEncoder {

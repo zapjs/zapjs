@@ -803,6 +803,49 @@ mod tests {
     }
 
     #[test]
+    fn supports_message_channel_scheduler_tasks() {
+        let output = renderer(
+            r#"
+            return new Promise(resolve => {
+                const channel = new MessageChannel();
+                const seen = [];
+                channel.port1.onmessage = event => {
+                    seen.push(`handler:${event.data}`);
+                    resolve(JSON.stringify(seen));
+                };
+                channel.port2.postMessage('scheduled');
+            });
+            "#,
+        )
+        .render("{}")
+        .unwrap();
+
+        assert_eq!(output, r#"["handler:scheduled"]"#);
+    }
+
+    #[test]
+    fn supports_message_channel_event_listeners() {
+        let output = renderer(
+            r#"
+            return new Promise(resolve => {
+                const channel = new MessageChannel();
+                const seen = [];
+                channel.port1.addEventListener('message', event => {
+                    seen.push(`listener:${event.data}`);
+                    resolve(JSON.stringify(seen));
+                });
+                channel.port1.start();
+                channel.port2.postMessage('scheduled');
+            });
+            "#,
+        )
+        .render("{}")
+        .unwrap();
+
+        assert_eq!(output, r#"["listener:scheduled"]"#);
+    }
+
+    #[test]
     fn omits_ambient_platform_apis() {
         let output = renderer(
             r#"
@@ -851,6 +894,29 @@ mod tests {
         ] {
             assert_eq!(exposed.get(name).map(String::as_str), Some("undefined"));
         }
+    }
+
+    #[test]
+    fn deadlines_pending_readable_streams() {
+        let error = renderer(
+            r#"
+            return new ReadableStream({
+                start(controller) {
+                    controller.enqueue(new TextEncoder().encode('partial'));
+                }
+            });
+            "#,
+        )
+        .with_limits(Limits {
+            timeout: Duration::from_millis(20),
+            ..Limits::default()
+        })
+        .render("{}")
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("Render deadline exceeded"),
+            "{error}"
+        );
     }
 
     #[test]
