@@ -6,6 +6,8 @@ use crate::{
     routing::Param,
 };
 use http::{Method, StatusCode, Uri};
+use serde::Serialize;
+use serde_json::Value;
 use std::{collections::BTreeMap, path::PathBuf};
 use thiserror::Error;
 
@@ -33,6 +35,7 @@ pub enum RequestTarget<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageInvocation {
+    pub method: Method,
     pub server_bundle: PathBuf,
 }
 
@@ -119,6 +122,8 @@ pub enum RequestPlanError {
     Unauthorized,
     #[error("public cache policy cannot use private request state")]
     PrivateCacheState,
+    #[error("renderer invocation payload could not be serialized: {0}")]
+    InvocationPayload(#[from] serde_json::Error),
     #[error("request deadline exceeds configured limit")]
     DeadlineTooLong,
 }
@@ -356,6 +361,7 @@ pub fn plan_request<'a>(
                 cache: route_cache_decision(&matched.route.cache),
                 hydration,
                 invocation: PageInvocation {
+                    method: method.clone(),
                     server_bundle: server_bundle.clone(),
                 },
             })
@@ -410,6 +416,88 @@ pub struct ActionTarget<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionAdmission<'a> {
     pub target: ActionTarget<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RendererRequestPayload {
+    pub method: String,
+    pub path: String,
+    pub params: BTreeMap<String, Param>,
+}
+
+impl RendererRequestPayload {
+    fn new(method: &Method, path: &str, params: &BTreeMap<String, Param>) -> Self {
+        Self {
+            method: method.as_str().to_owned(),
+            path: path.to_owned(),
+            params: params.clone(),
+        }
+    }
+
+    pub fn to_json(&self) -> Result<String, RequestPlanError> {
+        Ok(serde_json::to_string(self)?)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ActionInvocationPayload {
+    pub action_id: String,
+    pub export: String,
+    pub args: Vec<Value>,
+}
+
+impl ActionInvocationPayload {
+    pub fn to_json(&self) -> Result<String, RequestPlanError> {
+        Ok(serde_json::to_string(self)?)
+    }
+}
+
+impl<'a> RequestTarget<'a> {
+    pub fn renderer_request_payload(
+        &self,
+        path: &str,
+    ) -> Result<Option<RendererRequestPayload>, RequestPlanError> {
+        let path = request_path(path).ok_or(RequestPlanError::Path)?;
+        Ok(match self {
+            RequestTarget::Page {
+                params, invocation, ..
+            } => Some(RendererRequestPayload::new(
+                &invocation.method,
+                path,
+                params,
+            )),
+            RequestTarget::RouteHandler {
+                params, invocation, ..
+            } => Some(RendererRequestPayload::new(
+                &invocation.method,
+                path,
+                params,
+            )),
+            RequestTarget::StaticAsset(_)
+            | RequestTarget::NotFound
+            | RequestTarget::MethodNotAllowed { .. } => None,
+        })
+    }
+
+    pub fn renderer_request_json(&self, path: &str) -> Result<Option<String>, RequestPlanError> {
+        self.renderer_request_payload(path)?
+            .map(|payload| payload.to_json())
+            .transpose()
+    }
+}
+
+impl ActionInvocation {
+    pub fn payload(&self, args: Vec<Value>) -> ActionInvocationPayload {
+        ActionInvocationPayload {
+            action_id: self.action_id.clone(),
+            export: self.export.clone(),
+            args,
+        }
+    }
+
+    pub fn json(&self, args: Vec<Value>) -> Result<String, RequestPlanError> {
+        self.payload(args).to_json()
+    }
 }
 
 pub fn plan_action<'a>(
@@ -723,7 +811,8 @@ mod tests {
             }
             target => panic!("unexpected target: {target:?}"),
         }
-        match plan_request(&manifest, &Method::HEAD, "/shop/caf%C3%A9").unwrap() {
+        let page_target = plan_request(&manifest, &Method::HEAD, "/shop/caf%C3%A9").unwrap();
+        match &page_target {
             RequestTarget::Page {
                 route,
                 params,
@@ -732,6 +821,7 @@ mod tests {
             } => {
                 assert_eq!(route.module, "page");
                 assert_eq!(params["id"], Param::One("café".into()));
+                assert_eq!(invocation.method, Method::HEAD);
                 assert_eq!(
                     invocation.server_bundle,
                     PathBuf::from(".zap/server/page.js")
@@ -739,10 +829,31 @@ mod tests {
             }
             target => panic!("unexpected target: {target:?}"),
         }
-        match plan_request(&manifest, &Method::POST, "/api/echo").unwrap() {
-            RequestTarget::RouteHandler { route, .. } => assert_eq!(route.module, "handler"),
+        assert_eq!(
+            page_target
+                .renderer_request_json("/shop/caf%C3%A9")
+                .unwrap(),
+            Some(r#"{"method":"HEAD","path":"/shop/caf%C3%A9","params":{"id":"café"}}"#.into())
+        );
+
+        let route_target = plan_request(&manifest, &Method::POST, "/api/echo").unwrap();
+        match &route_target {
+            RequestTarget::RouteHandler {
+                route, invocation, ..
+            } => {
+                assert_eq!(route.module, "handler");
+                assert_eq!(invocation.method, Method::POST);
+                assert_eq!(
+                    invocation.server_bundle,
+                    PathBuf::from(".zap/server/handler.js")
+                );
+            }
             target => panic!("unexpected target: {target:?}"),
         }
+        assert_eq!(
+            route_target.renderer_request_json("/api/echo").unwrap(),
+            Some(r#"{"method":"POST","path":"/api/echo","params":{}}"#.into())
+        );
         assert!(matches!(
             plan_request(&manifest, &Method::GET, "/missing").unwrap(),
             RequestTarget::NotFound
@@ -766,6 +877,14 @@ mod tests {
         assert_eq!(
             admitted.target.invocation.server_bundle,
             PathBuf::from(".zap/server/actions.js")
+        );
+        assert_eq!(
+            admitted
+                .target
+                .invocation
+                .json(vec![serde_json::json!({"id": 7})])
+                .unwrap(),
+            r#"{"action_id":"action:actions#save","export":"save","args":[{"id":7}]}"#
         );
 
         assert!(matches!(

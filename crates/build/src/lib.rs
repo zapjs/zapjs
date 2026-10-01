@@ -2378,8 +2378,10 @@ fn discover_assets(public_root: &Path) -> Result<Vec<AssetRef>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::Method;
     use std::fs;
     use zap_render::Renderer;
+    use zap_runtime::request::{plan_action, plan_request};
 
     fn write_react_runtime(root: &Path) -> Vec<(String, String)> {
         let react = root.join("third_party/react");
@@ -3103,24 +3105,51 @@ export const Label = 'count';
         assert!(!temp.path().join(".zap/server/helper.js").exists());
         assert!(!temp.path().join(".zap/entries/server/types.js").exists());
         assert!(!temp.path().join(".zap/entries/server/helper.js").exists());
+        let page_request = plan_request(&compiled, &Method::GET, "/")
+            .unwrap()
+            .renderer_request_json("/")
+            .unwrap()
+            .unwrap();
         let rendered = Renderer::new(fs::read_to_string(page_bundle).unwrap())
-            .render(r#"{"path":"/"}"#)
+            .render(&page_request)
             .unwrap();
         assert_eq!(rendered, r#"<main data-path="/">home:/</main>"#);
+        let route_request = plan_request(&compiled, &Method::POST, "/api/echo")
+            .unwrap()
+            .renderer_request_json("/api/echo")
+            .unwrap()
+            .unwrap();
         let handled = Renderer::new(fs::read_to_string(route_bundle).unwrap())
-            .handle_route_response(r#"{"method":"POST","path":"/api/echo"}"#)
+            .handle_route_response(&route_request)
             .unwrap();
         assert_eq!(handled.status, 202);
         assert_eq!(handled.headers, vec![("x-zap-route".into(), "echo".into())]);
         assert_eq!(handled.body, "echo:POST:/api/echo");
+        let head_request = plan_request(&compiled, &Method::HEAD, "/api/ping")
+            .unwrap()
+            .renderer_request_json("/api/ping")
+            .unwrap()
+            .unwrap();
         let head = Renderer::new(fs::read_to_string(get_route_bundle).unwrap())
-            .handle_route_response(r#"{"method":"HEAD","path":"/api/ping"}"#)
+            .handle_route_response(&head_request)
             .unwrap();
         assert_eq!(head.status, 200);
         assert_eq!(head.headers, vec![("x-zap-route".into(), "ping".into())]);
         assert_eq!(head.body, "ping:HEAD:/api/ping");
+        let action_request = plan_action(
+            &compiled,
+            &Method::POST,
+            "action:actions#save",
+            Some("https://example.com"),
+            Some("https://example.com"),
+        )
+        .unwrap()
+        .target
+        .invocation
+        .json(vec![serde_json::json!({"id": 7})])
+        .unwrap();
         let action = Renderer::new(fs::read_to_string(action_bundle).unwrap())
-            .invoke_action_response(r#"{"export":"save","args":[{"id":7}]}"#)
+            .invoke_action_response(&action_request)
             .unwrap();
         assert_eq!(action.status, 203);
         assert_eq!(action.headers, vec![("x-zap-action".into(), "save".into())]);

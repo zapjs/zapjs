@@ -12,6 +12,8 @@ rolldown = "=1.2.12"
 zap-runtime = { path = "../runtime" }
 
 [dev-dependencies]
+serde_json = "1"
+http = "1"
 zap-render = { path = "../render" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tempfile = "3"
