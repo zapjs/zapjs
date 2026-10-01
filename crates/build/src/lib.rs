@@ -973,8 +973,8 @@ fn absolute(root: &Path, path: &Path) -> PathBuf {
 
 use zap_runtime::{
     manifest::{
-        ActionRef, ApplicationManifest, AssetRef, CachePolicy, CompiledManifest, DynamicPolicy,
-        LayoutRef, ModuleKind, ModuleRef, RouteEntry, RouteKind,
+        ActionRef, ApplicationManifest, AssetRef, CachePolicy, ClientReference, CompiledManifest,
+        DynamicPolicy, LayoutRef, ModuleKind, ModuleRef, RouteEntry, RouteKind,
     },
     routing::Route,
 };
@@ -1379,6 +1379,8 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
     let mut layouts_by_dir = BTreeMap::<PathBuf, LayoutRef>::new();
     let mut action_ids = BTreeSet::<String>::new();
     let mut actions = Vec::<ActionRef>::new();
+    let mut client_reference_ids = BTreeSet::<String>::new();
+    let mut client_references = Vec::<ClientReference>::new();
 
     for absolute_path in files {
         let relative_path = absolute_path
@@ -1449,6 +1451,31 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
                     module: id.clone(),
                     export,
                     path: relative_path.clone(),
+                });
+            }
+        }
+        if kind == ModuleKind::Client {
+            let exports = client_reference_exports(&text).with_context(|| {
+                format!("discover client references in {}", relative_path.display())
+            })?;
+            if exports.is_empty() {
+                bail!(
+                    "client module must export at least one component or value: {}",
+                    relative_path.display()
+                );
+            }
+            let browser_chunk = out_dir.join("browser").join(format!("{}.js", id));
+            for export in exports {
+                let reference_id = stable_client_reference_id(&relative_path, &export);
+                if !client_reference_ids.insert(reference_id.clone()) {
+                    bail!("duplicate client reference id: {reference_id}");
+                }
+                client_references.push(ClientReference {
+                    id: reference_id,
+                    module: id.clone(),
+                    export,
+                    path: relative_path.clone(),
+                    browser_chunk: browser_chunk.clone(),
                 });
             }
         }
@@ -1535,6 +1562,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
     }
     module_refs.sort_by(|a, b| a.id.cmp(&b.id));
     actions.sort_by(|a, b| a.id.cmp(&b.id));
+    client_references.sort_by(|a, b| a.id.cmp(&b.id));
     let mut layouts: Vec<_> = layouts_by_dir.into_values().collect();
     layouts.sort_by(|a, b| a.depth.cmp(&b.depth).then(a.id.cmp(&b.id)));
 
@@ -1549,6 +1577,7 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
         layouts,
         modules: module_refs,
         actions,
+        client_references,
         assets,
     };
     CompiledManifest::new(graph.clone())?;
@@ -1752,12 +1781,77 @@ fn route_handler_methods(text: &str) -> Result<Vec<String>> {
 fn server_action_exports(text: &str) -> Result<Vec<String>> {
     let mut names = BTreeSet::new();
     for name in exported_callable_names(text) {
-        if name.is_empty() || name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        if !is_valid_named_export(&name) {
             bail!("invalid server action export name: {name}");
         }
         names.insert(name);
     }
     Ok(names.into_iter().collect())
+}
+
+fn client_reference_exports(text: &str) -> Result<Vec<String>> {
+    let mut names = BTreeSet::new();
+    for name in exported_value_names(text) {
+        if name != "default" && !is_valid_named_export(&name) {
+            bail!("invalid client reference export name: {name}");
+        }
+        names.insert(name);
+    }
+    Ok(names.into_iter().collect())
+}
+
+fn is_valid_named_export(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
+}
+
+fn exported_value_names(text: &str) -> Vec<String> {
+    let tokens = js_tokens(text);
+    let local_values = value_bindings(&tokens);
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        if !matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "export") {
+            index += 1;
+            continue;
+        }
+        index += 1;
+        if matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "type") {
+            index += 1;
+            continue;
+        }
+        if matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "default") {
+            names.push("default".into());
+            index += 1;
+            continue;
+        }
+        if matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "async") {
+            index += 1;
+        }
+        match tokens.get(index) {
+            Some(JsToken::Ident(value)) if matches!(value.as_str(), "function" | "class") => {
+                if let Some(JsToken::Ident(name)) = tokens.get(index + 1) {
+                    names.push(name.clone());
+                }
+            }
+            Some(JsToken::Ident(value)) if matches!(value.as_str(), "const" | "let" | "var") => {
+                if let Some(JsToken::Ident(name)) = tokens.get(index + 1) {
+                    names.push(name.clone());
+                }
+            }
+            Some(JsToken::Punct('{')) if !export_list_has_from_clause(&tokens, index) => {
+                for (local, exported) in exported_named_specifier_pairs(&tokens, index) {
+                    if local_values.contains(&local) {
+                        names.push(exported);
+                    }
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    names
 }
 
 fn exported_callable_names(text: &str) -> Vec<String> {
@@ -1831,6 +1925,38 @@ fn callable_values(tokens: &[JsToken]) -> BTreeSet<String> {
                 if is_callable_assignment(tokens, index + 2) {
                     values.insert(name.clone());
                 }
+            }
+        }
+        index += 1;
+    }
+    values
+}
+
+fn value_bindings(tokens: &[JsToken]) -> BTreeSet<String> {
+    let mut values = BTreeSet::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        if matches!(tokens.get(index), Some(JsToken::Ident(value)) if value == "async") {
+            if matches!(tokens.get(index + 1), Some(JsToken::Ident(value)) if value == "function") {
+                if let Some(JsToken::Ident(name)) = tokens.get(index + 2) {
+                    values.insert(name.clone());
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(tokens.get(index), Some(JsToken::Ident(value)) if matches!(value.as_str(), "function" | "class"))
+        {
+            if let Some(JsToken::Ident(name)) = tokens.get(index + 1) {
+                values.insert(name.clone());
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(tokens.get(index), Some(JsToken::Ident(value)) if matches!(value.as_str(), "const" | "let" | "var"))
+        {
+            if let Some(JsToken::Ident(name)) = tokens.get(index + 1) {
+                values.insert(name.clone());
             }
         }
         index += 1;
@@ -1968,6 +2094,10 @@ fn exported_named_specifier_pairs(tokens: &[JsToken], open_brace: usize) -> Vec<
 
 fn stable_action_id(path: &Path, export: &str) -> String {
     format!("action:{}#{}", module_id(path), export)
+}
+
+fn stable_client_reference_id(path: &Path, export: &str) -> String {
+    format!("client:{}#{}", module_id(path), export)
 }
 
 fn bundle_global(module_id: &str) -> String {
@@ -2110,7 +2240,20 @@ mod tests {
         fs::write(app.join("api/echo/route.ts"), "export function POST(){}\n").unwrap();
         fs::write(
             app.join("counter.tsx"),
-            "/* copyright */\n'use client';\nexport function Counter(){}\n",
+            concat!(
+                "/* copyright */
+",
+                "'use client';
+",
+                "export function Counter(){}
+",
+                "const Inner = () => null;
+",
+                "export { Inner as Renamed };
+",
+                "export default function DefaultCounter(){}
+",
+            ),
         )
         .unwrap();
         fs::write(
@@ -2166,6 +2309,30 @@ mod tests {
             Some(Path::new(".zap/browser/counter.js"))
         );
         assert_eq!(client.server_bundle, None);
+        let client_reference_ids = graph
+            .client_references
+            .iter()
+            .map(|reference| reference.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            client_reference_ids,
+            vec![
+                "client:counter#Counter",
+                "client:counter#Renamed",
+                "client:counter#default"
+            ]
+        );
+        let default_reference = graph
+            .client_references
+            .iter()
+            .find(|reference| reference.export == "default")
+            .unwrap();
+        assert_eq!(default_reference.module, "counter");
+        assert_eq!(default_reference.path, Path::new("counter.tsx"));
+        assert_eq!(
+            default_reference.browser_chunk.as_path(),
+            Path::new(".zap/browser/counter.js")
+        );
 
         assert_eq!(graph.actions.len(), 2);
         assert_eq!(graph.actions[0].id, "action:actions#remove");
@@ -2538,6 +2705,7 @@ export default function Page(request){ return <main data-path={request.path}>hom
             app.join("client.tsx"),
             "'use client';
 export function Counter(){ return '1'; }
+export const Label = 'count';
 ",
         )
         .unwrap();
@@ -2611,6 +2779,21 @@ export function Counter(){ return '1'; }
         assert!(action_bundle.is_file());
         assert!(!temp.path().join(".zap/server/client.js").exists());
         assert!(temp.path().join(".zap/browser/client.js").is_file());
+        assert_eq!(compiled.manifest().client_references.len(), 2);
+        assert_eq!(
+            compiled
+                .client_reference("client:client#Counter")
+                .unwrap()
+                .browser_chunk,
+            PathBuf::from(".zap/browser/client.js")
+        );
+        assert_eq!(
+            compiled
+                .client_reference("client:client#Label")
+                .unwrap()
+                .export,
+            "Label"
+        );
         assert!(temp.path().join(".zap/entries/server/page.js").is_file());
         assert!(
             temp.path()

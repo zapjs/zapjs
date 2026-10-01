@@ -630,6 +630,7 @@ mod tests {
                 export: "save".into(),
                 path: PathBuf::from("actions.ts"),
             }],
+            client_references: Vec::new(),
             assets: vec![AssetRef {
                 source: PathBuf::from("images/logo.svg"),
                 url_path: "/images/logo.svg".into(),

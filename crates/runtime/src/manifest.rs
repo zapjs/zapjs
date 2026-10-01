@@ -60,6 +60,15 @@ pub struct ActionRef {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientReference {
+    pub id: String,
+    pub module: String,
+    pub export: String,
+    pub path: PathBuf,
+    pub browser_chunk: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayoutRef {
     pub id: String,
     pub path: PathBuf,
@@ -90,6 +99,7 @@ pub struct ApplicationManifest {
     pub layouts: Vec<LayoutRef>,
     pub modules: Vec<ModuleRef>,
     pub actions: Vec<ActionRef>,
+    pub client_references: Vec<ClientReference>,
     pub assets: Vec<AssetRef>,
 }
 
@@ -144,6 +154,20 @@ pub enum ManifestError {
     InvalidActionExport { action: String, export: String },
     #[error("action {action} id does not match module/export identity")]
     InvalidActionId { action: String },
+    #[error("client reference {reference} references missing module {module}")]
+    MissingClientReferenceModule { reference: String, module: String },
+    #[error("client reference {reference} references non-client module {module}")]
+    InvalidClientReferenceModuleKind { reference: String, module: String },
+    #[error("client reference {reference} has an unsafe source path: {path}")]
+    InvalidClientReferencePath { reference: String, path: PathBuf },
+    #[error("client reference {reference} source path does not match module {module}")]
+    ClientReferenceSourceMismatch { reference: String, module: String },
+    #[error("client reference {reference} has an invalid export name: {export}")]
+    InvalidClientReferenceExport { reference: String, export: String },
+    #[error("client reference {reference} id does not match module/export identity")]
+    InvalidClientReferenceId { reference: String },
+    #[error("client reference {reference} chunk does not match module {module}")]
+    ClientReferenceChunkMismatch { reference: String, module: String },
     #[error("route {route} has an unsafe source path: {path}")]
     InvalidRouteSource { route: String, path: PathBuf },
     #[error("route {route} source path does not match module {module}")]
@@ -156,6 +180,8 @@ pub enum ManifestError {
     DuplicateLayout(String),
     #[error("duplicate action identifier: {0}")]
     DuplicateAction(String),
+    #[error("duplicate client reference identifier: {0}")]
+    DuplicateClientReference(String),
     #[error("duplicate asset URL path: {0}")]
     DuplicateAsset(String),
     #[error("asset URL path must be absolute and safe: {0}")]
@@ -175,6 +201,7 @@ pub struct CompiledManifest {
     route_indexes: BTreeMap<String, usize>,
     asset_indexes: BTreeMap<String, usize>,
     action_indexes: BTreeMap<String, usize>,
+    client_reference_indexes: BTreeMap<String, usize>,
 }
 
 #[derive(Debug)]
@@ -250,6 +277,33 @@ impl CompiledManifest {
                 return Err(ManifestError::InvalidActionExport {
                     action: action.id.clone(),
                     export: action.export.clone(),
+                });
+            }
+        }
+
+        let mut client_reference_ids = BTreeSet::new();
+        for reference in &manifest.client_references {
+            if !client_reference_ids.insert(reference.id.clone()) {
+                return Err(ManifestError::DuplicateClientReference(
+                    reference.id.clone(),
+                ));
+            }
+            if !is_safe_manifest_path(&reference.path) {
+                return Err(ManifestError::InvalidClientReferencePath {
+                    reference: reference.id.clone(),
+                    path: reference.path.clone(),
+                });
+            }
+            if !is_valid_client_reference_export(&reference.export) {
+                return Err(ManifestError::InvalidClientReferenceExport {
+                    reference: reference.id.clone(),
+                    export: reference.export.clone(),
+                });
+            }
+            if !is_safe_manifest_path(&reference.browser_chunk) {
+                return Err(ManifestError::InvalidBundlePath {
+                    module: reference.module.clone(),
+                    path: reference.browser_chunk.clone(),
                 });
             }
         }
@@ -391,6 +445,43 @@ impl CompiledManifest {
             }
         }
 
+        for reference in &manifest.client_references {
+            let Some(module) = modules.get(&reference.module) else {
+                return Err(ManifestError::MissingClientReferenceModule {
+                    reference: reference.id.clone(),
+                    module: reference.module.clone(),
+                });
+            };
+            if module.kind != ModuleKind::Client {
+                return Err(ManifestError::InvalidClientReferenceModuleKind {
+                    reference: reference.id.clone(),
+                    module: module.id.clone(),
+                });
+            }
+            if reference.path != module.path {
+                return Err(ManifestError::ClientReferenceSourceMismatch {
+                    reference: reference.id.clone(),
+                    module: module.id.clone(),
+                });
+            }
+            let Some(browser_chunk) = &module.browser_chunk else {
+                return Err(ManifestError::MissingBrowserChunk {
+                    module: module.id.clone(),
+                });
+            };
+            if reference.browser_chunk != *browser_chunk {
+                return Err(ManifestError::ClientReferenceChunkMismatch {
+                    reference: reference.id.clone(),
+                    module: module.id.clone(),
+                });
+            }
+            if reference.id != stable_client_reference_id(&reference.module, &reference.export) {
+                return Err(ManifestError::InvalidClientReferenceId {
+                    reference: reference.id.clone(),
+                });
+            }
+        }
+
         let runtime_routes = manifest
             .routes
             .iter()
@@ -415,6 +506,12 @@ impl CompiledManifest {
             .enumerate()
             .map(|(index, action)| (action.id.clone(), index))
             .collect();
+        let client_reference_indexes = manifest
+            .client_references
+            .iter()
+            .enumerate()
+            .map(|(index, reference)| (reference.id.clone(), index))
+            .collect();
 
         Ok(Self {
             manifest,
@@ -422,6 +519,7 @@ impl CompiledManifest {
             route_indexes,
             asset_indexes,
             action_indexes,
+            client_reference_indexes,
         })
     }
 
@@ -452,6 +550,12 @@ impl CompiledManifest {
             .map(|index| &self.manifest.actions[*index])
     }
 
+    pub fn client_reference(&self, id: &str) -> Option<&ClientReference> {
+        self.client_reference_indexes
+            .get(id)
+            .map(|index| &self.manifest.client_references[*index])
+    }
+
     pub fn module(&self, id: &str) -> Option<&ModuleRef> {
         self.manifest.modules.iter().find(|module| module.id == id)
     }
@@ -473,6 +577,14 @@ fn is_valid_cache_policy(policy: &CachePolicy) -> bool {
 }
 
 fn is_valid_action_export(export: &str) -> bool {
+    is_valid_export_name(export) && export != "default"
+}
+
+fn is_valid_client_reference_export(export: &str) -> bool {
+    export == "default" || is_valid_export_name(export)
+}
+
+fn is_valid_export_name(export: &str) -> bool {
     let mut chars = export.chars();
     matches!(chars.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
         && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
@@ -480,6 +592,10 @@ fn is_valid_action_export(export: &str) -> bool {
 
 fn stable_action_id(module: &str, export: &str) -> String {
     format!("action:{module}#{export}")
+}
+
+fn stable_client_reference_id(module: &str, export: &str) -> String {
+    format!("client:{module}#{export}")
 }
 
 fn is_valid_route_methods(route: &RouteEntry) -> bool {
@@ -565,12 +681,26 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/shop/_id_/actions.js")),
                 },
+                ModuleRef {
+                    id: "shop/_id_/counter".into(),
+                    path: PathBuf::from("shop/[id]/counter.tsx"),
+                    kind: ModuleKind::Client,
+                    browser_chunk: Some(PathBuf::from(".zap/browser/shop/_id_/counter.js")),
+                    server_bundle: None,
+                },
             ],
             actions: vec![ActionRef {
                 id: "action:shop/_id_/actions#save".into(),
                 module: "shop/_id_/actions".into(),
                 export: "save".into(),
                 path: PathBuf::from("shop/[id]/actions.ts"),
+            }],
+            client_references: vec![ClientReference {
+                id: "client:shop/_id_/counter#Counter".into(),
+                module: "shop/_id_/counter".into(),
+                export: "Counter".into(),
+                path: PathBuf::from("shop/[id]/counter.tsx"),
+                browser_chunk: PathBuf::from(".zap/browser/shop/_id_/counter.js"),
             }],
             assets: vec![AssetRef {
                 source: PathBuf::from("images/logo.svg"),
@@ -591,6 +721,13 @@ mod tests {
                 .unwrap()
                 .export,
             "save"
+        );
+        assert_eq!(
+            compiled
+                .client_reference("client:shop/_id_/counter#Counter")
+                .unwrap()
+                .browser_chunk,
+            PathBuf::from(".zap/browser/shop/_id_/counter.js")
         );
         let asset = compiled.asset("/images/logo.svg").unwrap();
         assert_eq!(
@@ -742,6 +879,37 @@ mod tests {
         assert!(matches!(
             CompiledManifest::new(invalid_action_id).unwrap_err(),
             ManifestError::InvalidActionId { .. }
+        ));
+
+        let mut duplicate_client_reference = manifest();
+        duplicate_client_reference
+            .client_references
+            .push(duplicate_client_reference.client_references[0].clone());
+        assert!(matches!(
+            CompiledManifest::new(duplicate_client_reference).unwrap_err(),
+            ManifestError::DuplicateClientReference(_)
+        ));
+
+        let mut invalid_client_reference_module = manifest();
+        invalid_client_reference_module.client_references[0].module = "shop/_id_/page".into();
+        assert!(matches!(
+            CompiledManifest::new(invalid_client_reference_module).unwrap_err(),
+            ManifestError::InvalidClientReferenceModuleKind { .. }
+        ));
+
+        let mut invalid_client_reference_id = manifest();
+        invalid_client_reference_id.client_references[0].id = "Counter".into();
+        assert!(matches!(
+            CompiledManifest::new(invalid_client_reference_id).unwrap_err(),
+            ManifestError::InvalidClientReferenceId { .. }
+        ));
+
+        let mut mismatched_client_reference_chunk = manifest();
+        mismatched_client_reference_chunk.client_references[0].browser_chunk =
+            PathBuf::from(".zap/browser/other.js");
+        assert!(matches!(
+            CompiledManifest::new(mismatched_client_reference_chunk).unwrap_err(),
+            ManifestError::ClientReferenceChunkMismatch { .. }
         ));
 
         let mut invalid_route_module = manifest();
