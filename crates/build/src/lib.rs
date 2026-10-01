@@ -1034,6 +1034,9 @@ fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
 }
 
 fn is_source_file(name: &str) -> bool {
+    if name.ends_with(".d.ts") || name.ends_with(".d.tsx") {
+        return false;
+    }
     matches!(name, "page.tsx" | "layout.tsx" | "route.ts" | "route.tsx")
         || name.ends_with(".tsx")
         || name.ends_with(".ts")
@@ -1329,6 +1332,7 @@ mod tests {
             "// generated action module\n'use server';\nexport async function save(){}\nexport const remove = async () => {};\n",
         )
         .unwrap();
+        fs::write(app.join("types.d.ts"), "export interface Ignored {}\n").unwrap();
         fs::write(temp.path().join("public/images/logo.svg"), "<svg/>\n").unwrap();
 
         let graph = build_application_graph(&GraphOptions::new(temp.path())).unwrap();
@@ -1352,6 +1356,7 @@ mod tests {
         assert_eq!(handler.kind, RouteKind::Handler);
         assert_eq!(handler.methods, vec!["POST"]);
 
+        assert!(graph.modules.iter().all(|module| module.id != "types.d"));
         let client = graph
             .modules
             .iter()
