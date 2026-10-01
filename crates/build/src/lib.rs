@@ -348,7 +348,9 @@ fn js_tokens(text: &str) -> Vec<JsToken> {
             continue;
         }
         if ch == '`' {
-            skip_template_literal(&mut chars);
+            if let Some(value) = read_static_template_literal(&mut chars) {
+                tokens.push(JsToken::String(value));
+            }
             continue;
         }
         if is_ident_start(ch) {
@@ -392,9 +394,38 @@ fn read_js_string(
     value
 }
 
-fn skip_template_literal(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) {
+fn read_static_template_literal(
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+) -> Option<String> {
+    let mut value = String::new();
     let mut escaped = false;
-    for (_, ch) in chars.by_ref() {
+    while let Some((_, ch)) = chars.next() {
+        if escaped {
+            value.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '$' && matches!(chars.peek().copied(), Some((_, '{'))) {
+            chars.next();
+            skip_template_expression(chars);
+            skip_template_tail(chars);
+            return None;
+        }
+        if ch == '`' {
+            return Some(value);
+        }
+        value.push(ch);
+    }
+    None
+}
+
+fn skip_template_tail(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) {
+    let mut escaped = false;
+    while let Some((_, ch)) = chars.next() {
         if escaped {
             escaped = false;
             continue;
@@ -403,8 +434,42 @@ fn skip_template_literal(chars: &mut std::iter::Peekable<std::str::CharIndices<'
             escaped = true;
             continue;
         }
+        if ch == '$' && matches!(chars.peek().copied(), Some((_, '{'))) {
+            chars.next();
+            skip_template_expression(chars);
+            continue;
+        }
         if ch == '`' {
             break;
+        }
+    }
+}
+
+fn skip_template_expression(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) {
+    let mut depth = 1usize;
+    let mut string_quote = None;
+    let mut escaped = false;
+    for (_, ch) in chars.by_ref() {
+        if let Some(quote) = string_quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                string_quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => string_quote = Some(ch),
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -1849,8 +1914,16 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
                 "export async function load(){ return import (\n  'worker_threads'\n); }",
             ),
             (
+                "template_dynamic_import.ts",
+                "export async function load(){ return import(`fs/promises`); }",
+            ),
+            (
                 "spaced_commonjs_require.ts",
                 "const vm = require (\n  'vm'\n); export const value = vm;",
+            ),
+            (
+                "template_require.ts",
+                "const mod = require(`node:module`); export const value = mod;",
             ),
             (
                 "require_resolve.ts",
@@ -1929,6 +2002,24 @@ export async function save(input){ return new Response(`saved:${input.id}`, {sta
         fs::write(
             temp.path().join("entry.ts"),
             "// import fs from 'fs'; process.env.SECRET;\n/* const os = require('os'); Buffer.from('x'); */\nconst text = \"import path from 'path'; process.env.NODE_ENV\"; export const value = text;",
+        )
+        .unwrap();
+        let output = temp.path().join("dist/client.js");
+        let result = bundle(&BundleOptions::new(
+            temp.path(),
+            Path::new("entry.ts"),
+            &output,
+            Target::Browser,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(result.files, vec![output.clone()]);
+        assert!(output.is_file());
+
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("entry.ts"),
+            "const text = `ignored ${\"import('fs')\"} and ${\"process.env.NODE_ENV\"}`; export const value = text;",
         )
         .unwrap();
         let output = temp.path().join("dist/client.js");
