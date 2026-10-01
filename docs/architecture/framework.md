@@ -47,7 +47,7 @@ React Server Components require separate handling from HTML SSR. Flight referenc
 
 ## Request runtime
 
-The runtime contract is platform-neutral: method, URL, headers, body stream, request context, abort signal, deadline, response headers and response byte stream. Platform adapters translate managed-host invocation into this contract.
+The runtime contract is platform-neutral: method, URL, headers, body stream, request context, abort signal, deadline, response headers and response byte stream. The managed host entrypoint is lowered directly into this contract without becoming a separate application server or public HTTP adapter layer.
 
 Rust owns:
 

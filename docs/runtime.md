@@ -6,7 +6,7 @@ Zap applications use one route graph rooted at `app/`. Pages, layouts, route han
 
 ## Request model
 
-The runtime receives a platform-neutral request: method, URL, headers, body stream, request context, abort signal and deadline. Rust owns admission, routing, body limits, response headers and response byte streams. Platform adapters translate a managed host invocation into this contract.
+The runtime receives a platform-neutral request: method, URL, headers, body stream, request context, abort signal and deadline. Rust owns admission, routing, body limits, response headers and response byte streams. The managed host entrypoint is lowered directly into this contract without becoming a separate application server or public HTTP adapter layer.
 
 Request context is explicit Rust-owned state. Client bundles cannot import server runtime APIs.
 
@@ -24,7 +24,7 @@ Application APIs are Rust functions or explicit React-host operations. Errors th
 
 ## Caching
 
-Public prerendering and shared cache metadata are build/runtime features, not process-memory assumptions. Request-local memoization is safe only within a single request. Cross-instance invalidation requires an adapter-backed store with deployment-specific namespace/versioning.
+Public prerendering and shared cache metadata are build/runtime features, not process-memory assumptions. Request-local memoization is safe only within a single request. Cross-instance invalidation requires a host-managed store or Rust-owned persistence boundary with deployment-specific namespace/versioning.
 
 Personalized responses must remain private. Public cache fills must reject request metadata and other private dependencies.
 
