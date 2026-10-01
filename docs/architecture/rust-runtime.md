@@ -32,9 +32,9 @@ The first Rust-only foundation crates are now present under `crates/`:
 - `zap-runtime` owns the shared application manifest schema, graph validation, route parsing, trie lookup, request target planning and unsafe path rejection.
 - `zap-splice` restores Splice as a bounded Rust transport with tested deadlines, cancellation, frame limits, crash cleanup and subprocess behavior.
 - `zap-render` runs JavaScript bundles inside a Rust-owned QuickJS context with stream consumption, explicit host calls, output limits and CPU interruption.
-- `zap-build` discovers the application graph, writes `.zap/manifest.json`, emits page server bundles with the `ZapRender.render` contract and compiles TSX through Rust Rolldown/Oxc APIs for server IIFE and browser module targets.
+- `zap-build` discovers the application graph, writes `.zap/manifest.json`, emits page server bundles with the `ZapRender.render` contract, emits per-export server-action IDs and compiles TSX through Rust Rolldown/Oxc APIs for server IIFE and browser module targets.
 
-These crates are foundation evidence only. The runtime crate now owns the manifest schema that the build crate emits, validates manifest references and plans requests against static assets, pages and route handlers. The build crate proves typed graph discovery, atomic manifest emission, page server-bundle execution and graph module bundling, but the workspace does not yet prove full React Server Components, hydration/navigation, server-action execution, managed deployment or the landing site. The exact test and Fozzy evidence is recorded in [`../implementation.md`](../implementation.md).
+These crates are foundation evidence only. The runtime crate now owns the manifest schema that the build crate emits, validates manifest references and plans requests against static assets, pages and route handlers. The build crate proves typed graph discovery, atomic manifest emission, page server-bundle execution, per-export action identity and graph module bundling, but the workspace does not yet prove full React Server Components, hydration/navigation, server-action execution, managed deployment or the landing site. The exact test and Fozzy evidence is recorded in [`../implementation.md`](../implementation.md).
 
 ## Splice history
 

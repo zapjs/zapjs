@@ -133,8 +133,9 @@ mod tests {
                 },
             ],
             actions: vec![ActionRef {
-                id: "action:save".into(),
+                id: "action:page#save".into(),
                 module: "page".into(),
+                export: "save".into(),
                 path: PathBuf::from("actions.ts"),
             }],
             assets: vec![AssetRef {

@@ -55,6 +55,7 @@ pub struct ModuleRef {
 pub struct ActionRef {
     pub id: String,
     pub module: String,
+    pub export: String,
     pub path: PathBuf,
 }
 

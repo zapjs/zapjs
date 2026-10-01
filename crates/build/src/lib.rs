@@ -465,15 +465,27 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
             );
         }
         if kind == ModuleKind::ServerActions {
-            let action_id = stable_action_id(&relative_path);
-            if !action_ids.insert(action_id.clone()) {
-                bail!("duplicate server action id: {action_id}");
+            let exports = server_action_exports(&text).with_context(|| {
+                format!("discover server actions in {}", relative_path.display())
+            })?;
+            if exports.is_empty() {
+                bail!(
+                    "server action module must export at least one function or const: {}",
+                    relative_path.display()
+                );
             }
-            actions.push(ActionRef {
-                id: action_id,
-                module: id.clone(),
-                path: relative_path.clone(),
-            });
+            for export in exports {
+                let action_id = stable_action_id(&relative_path, &export);
+                if !action_ids.insert(action_id.clone()) {
+                    bail!("duplicate server action id: {action_id}");
+                }
+                actions.push(ActionRef {
+                    id: action_id,
+                    module: id.clone(),
+                    export,
+                    path: relative_path.clone(),
+                });
+            }
         }
         let route_kind = match file_name {
             "page.tsx" => Some(RouteKind::Page),
@@ -681,8 +693,35 @@ fn parse_cache_policy(text: &str) -> Result<CachePolicy> {
     Ok(policy)
 }
 
-fn stable_action_id(path: &Path) -> String {
-    format!("action:{}", module_id(path))
+fn server_action_exports(text: &str) -> Result<Vec<String>> {
+    let mut names = BTreeSet::new();
+    for line in text.lines().map(str::trim) {
+        let Some(line) = line.strip_prefix("export ").map(str::trim_start) else {
+            continue;
+        };
+        let candidate = if let Some(rest) = line.strip_prefix("async function ") {
+            rest
+        } else if let Some(rest) = line.strip_prefix("function ") {
+            rest
+        } else if let Some(rest) = line.strip_prefix("const ") {
+            rest
+        } else {
+            continue;
+        };
+        let name = candidate
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .next()
+            .unwrap_or_default();
+        if name.is_empty() || name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            bail!("invalid server action export name: {name}");
+        }
+        names.insert(name.to_owned());
+    }
+    Ok(names.into_iter().collect())
+}
+
+fn stable_action_id(path: &Path, export: &str) -> String {
+    format!("action:{}#{}", module_id(path), export)
 }
 
 fn bundle_global(module_id: &str) -> String {
@@ -782,7 +821,7 @@ mod tests {
         .unwrap();
         fs::write(
             app.join("actions.ts"),
-            "'use server';\nexport async function save(){}\n",
+            "'use server';\nexport async function save(){}\nexport const remove = async () => {};\n",
         )
         .unwrap();
         fs::write(temp.path().join("public/images/logo.svg"), "<svg/>\n").unwrap();
@@ -818,8 +857,11 @@ mod tests {
         );
         assert_eq!(client.server_bundle, None);
 
-        assert_eq!(graph.actions.len(), 1);
-        assert_eq!(graph.actions[0].id, "action:actions");
+        assert_eq!(graph.actions.len(), 2);
+        assert_eq!(graph.actions[0].id, "action:actions#remove");
+        assert_eq!(graph.actions[0].export, "remove");
+        assert_eq!(graph.actions[1].id, "action:actions#save");
+        assert_eq!(graph.actions[1].export, "save");
         assert_eq!(graph.assets[0].url_path, "/images/logo.svg");
         graph.to_manifest_json().unwrap();
     }
@@ -845,6 +887,31 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("ambiguous route patterns"), "{error}");
+    }
+
+    #[test]
+    fn server_action_modules_must_export_named_actions() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = temp.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(
+            app.join("page.tsx"),
+            "export default function Page(){}
+",
+        )
+        .unwrap();
+        fs::write(
+            app.join("actions.ts"),
+            "'use server';
+const hidden = 1;
+",
+        )
+        .unwrap();
+
+        let error = build_application_graph(&GraphOptions::new(temp.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("must export at least one"), "{error}");
     }
 
     #[tokio::test]
