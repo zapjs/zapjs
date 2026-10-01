@@ -10,7 +10,7 @@ use std::{
 use thiserror::Error;
 use zap_render::{RenderError, Renderer};
 use zap_runtime::{
-    manifest::{CompiledManifest, ManifestError},
+    manifest::{CompiledManifest, ManifestError, RouteHydration},
     request::{
         ActionAdmission, ActionInput, AdmissionLimits, AdmissionOutcome, ExecutionContext,
         ExecutionPolicy, ImmediateResponse, InvocationContext, RequestInput, RequestPlanError,
@@ -30,6 +30,8 @@ pub enum ExecuteError {
     RenderArtifact { path: PathBuf, source: RenderError },
     #[error("invalid renderer status {0}")]
     InvalidStatus(u16),
+    #[error("hydrate page payload: {0}")]
+    HydrationPayload(serde_json::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +184,10 @@ impl ApplicationExecutor {
         &self,
         input: &RequestExecutionInput<'_>,
     ) -> Result<ExecutionResponse, ExecuteError> {
+        if let Some(asset) = self.browser_asset(input.path) {
+            return self.execute_browser_asset(input.method, &asset);
+        }
+
         match admit_request_execution(
             &self.manifest,
             &RequestInput {
@@ -278,6 +284,50 @@ impl ApplicationExecutor {
         }
     }
 
+    fn browser_asset(&self, path: &str) -> Option<PathBuf> {
+        let relative = path.strip_prefix('/')?;
+        if relative.is_empty() || relative.contains(['?', '#', '\\']) {
+            return None;
+        }
+        let requested = PathBuf::from(relative);
+        if self
+            .manifest
+            .manifest()
+            .client_references
+            .iter()
+            .any(|reference| reference.browser_chunk == requested)
+        {
+            return Some(requested);
+        }
+        if self.manifest.action_proxy() == Some(requested.as_path()) {
+            return Some(requested);
+        }
+        None
+    }
+
+    fn execute_browser_asset(
+        &self,
+        method: &Method,
+        asset: &Path,
+    ) -> Result<ExecutionResponse, ExecuteError> {
+        if !matches!(*method, Method::GET | Method::HEAD) {
+            return Ok(ExecutionResponse::new(StatusCode::METHOD_NOT_ALLOWED)
+                .with_headers([("allow".into(), "GET, HEAD".into())]));
+        }
+        let source = self.root.join(asset);
+        let body = if *method == Method::HEAD {
+            Vec::new()
+        } else {
+            read_artifact_bytes(&source)?
+        };
+        Ok(ExecutionResponse::new(StatusCode::OK)
+            .with_headers([(
+                "content-type".into(),
+                "text/javascript; charset=utf-8".into(),
+            )])
+            .with_body(body))
+    }
+
     fn dispatch_request(
         &self,
         input: &RequestExecutionInput<'_>,
@@ -294,7 +344,10 @@ impl ApplicationExecutor {
                 Ok(ExecutionResponse::new(StatusCode::OK).with_body(body))
             }
             RequestTarget::Page {
-                cache, invocation, ..
+                cache,
+                hydration,
+                invocation,
+                ..
             } => {
                 let bundle_path = self.root.join(&invocation.server_bundle);
                 let bundle = read_artifact_string(&bundle_path)?;
@@ -304,12 +357,14 @@ impl ApplicationExecutor {
                 let body = if input.method == Method::HEAD {
                     String::new()
                 } else {
-                    Renderer::new(bundle)
-                        .render(&request_json)
-                        .map_err(|source| ExecuteError::RenderArtifact {
-                            path: bundle_path.clone(),
-                            source,
-                        })?
+                    let rendered =
+                        Renderer::new(bundle)
+                            .render(&request_json)
+                            .map_err(|source| ExecuteError::RenderArtifact {
+                                path: bundle_path.clone(),
+                                source,
+                            })?;
+                    append_hydration_bootstrap(rendered, input.path, hydration)?
                 };
                 Ok(ExecutionResponse::new(StatusCode::OK)
                     .with_headers(cache.response_headers())
@@ -360,6 +415,85 @@ fn immediate_response(response: ImmediateResponse) -> ExecutionResponse {
     ExecutionResponse::new(response.status).with_headers(response.headers)
 }
 
+fn append_hydration_bootstrap(
+    html: String,
+    path: &str,
+    hydration: &RouteHydration,
+) -> Result<String, ExecuteError> {
+    if hydration.browser_chunks.is_empty() && hydration.client_references.is_empty() {
+        return Ok(html);
+    }
+
+    let chunks = hydration
+        .browser_chunks
+        .iter()
+        .map(|chunk| browser_asset_url(chunk))
+        .collect::<Vec<_>>();
+    let references = hydration
+        .client_references
+        .iter()
+        .map(|reference| {
+            serde_json::json!({
+                "id": reference.id,
+                "module": reference.module,
+                "export": reference.export,
+                "browser_chunk": browser_asset_url(&reference.browser_chunk),
+            })
+        })
+        .collect::<Vec<_>>();
+    let payload = serde_json::json!({
+        "path": path,
+        "browser_chunks": chunks,
+        "client_references": references,
+    });
+    let payload = escape_json_for_html_script(
+        &serde_json::to_string(&payload).map_err(ExecuteError::HydrationPayload)?,
+    );
+
+    let mut bootstrap = String::new();
+    for chunk in &hydration.browser_chunks {
+        bootstrap.push_str("<link rel=\"modulepreload\" href=\"");
+        bootstrap.push_str(&html_attr_escape(&browser_asset_url(chunk)));
+        bootstrap.push_str("\">");
+    }
+    bootstrap.push_str("<script type=\"application/json\" id=\"__zap_hydration\">");
+    bootstrap.push_str(&payload);
+    bootstrap.push_str("</script>");
+
+    if let Some(index) = html.rfind("</body>") {
+        let mut output = String::with_capacity(html.len() + bootstrap.len());
+        output.push_str(&html[..index]);
+        output.push_str(&bootstrap);
+        output.push_str(&html[index..]);
+        Ok(output)
+    } else {
+        let mut output = html;
+        output.push_str(&bootstrap);
+        Ok(output)
+    }
+}
+
+fn browser_asset_url(path: &Path) -> String {
+    format!("/{}", path.to_string_lossy().replace('\\', "/"))
+}
+
+fn html_attr_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn escape_json_for_html_script(value: &str) -> String {
+    value
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
 fn parse_action_endpoint_payload(body: &[u8]) -> Option<(String, Vec<Value>)> {
     let payload = serde_json::from_slice::<Value>(body).ok()?;
     let object = payload.as_object()?;
@@ -394,8 +528,8 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use zap_runtime::manifest::{
-        ActionRef, ApplicationManifest, AssetRef, CachePolicy, ModuleKind, ModuleRef, RouteEntry,
-        RouteKind,
+        ActionRef, ApplicationManifest, AssetRef, CachePolicy, ClientReference, ModuleKind,
+        ModuleRef, RouteEntry, RouteKind,
     };
 
     #[test]
@@ -410,10 +544,83 @@ mod tests {
             .execute_request(&RequestExecutionInput::new(&Method::GET, "/"))
             .unwrap();
         assert_eq!(page.status, StatusCode::OK);
-        assert_eq!(String::from_utf8(page.body).unwrap(), "<main>GET:/</main>");
+        let page_body = String::from_utf8(page.body).unwrap();
+        assert!(page_body.starts_with("<main>GET:/</main>"));
+        assert!(
+            page_body.contains("<link rel=\"modulepreload\" href=\"/.zap/browser/actions.js\">")
+        );
+        assert!(
+            page_body.contains("<link rel=\"modulepreload\" href=\"/.zap/browser/client.js\">")
+        );
+        assert!(page_body.contains("id=\"__zap_hydration\""));
+        let hydration_json = page_body
+            .split("<script type=\"application/json\" id=\"__zap_hydration\">")
+            .nth(1)
+            .and_then(|value| value.split("</script>").next())
+            .unwrap();
+        let hydration: serde_json::Value = serde_json::from_str(hydration_json).unwrap();
+        assert_eq!(hydration["path"], "/");
+        assert_eq!(
+            hydration["browser_chunks"],
+            serde_json::json!(["/.zap/browser/actions.js", "/.zap/browser/client.js"])
+        );
+        assert_eq!(hydration["client_references"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            hydration["client_references"][0]["id"],
+            "client:client#Counter"
+        );
+        assert_eq!(hydration["client_references"][0]["module"], "client");
+        assert_eq!(hydration["client_references"][0]["export"], "Counter");
+        assert_eq!(
+            hydration["client_references"][0]["browser_chunk"],
+            "/.zap/browser/client.js"
+        );
         assert!(
             page.headers
                 .contains(&("content-type".into(), "text/html; charset=utf-8".into()))
+        );
+
+        let client_asset = executor
+            .execute_request(&RequestExecutionInput::new(
+                &Method::GET,
+                "/.zap/browser/client.js",
+            ))
+            .unwrap();
+        assert_eq!(client_asset.status, StatusCode::OK);
+        assert_eq!(
+            client_asset.headers,
+            vec![(
+                "content-type".into(),
+                "text/javascript; charset=utf-8".into()
+            )]
+        );
+        assert_eq!(
+            String::from_utf8(client_asset.body).unwrap(),
+            "export const Counter = 1;"
+        );
+
+        let action_asset = executor
+            .execute_request(&RequestExecutionInput::new(
+                &Method::GET,
+                "/.zap/browser/actions.js",
+            ))
+            .unwrap();
+        assert_eq!(action_asset.status, StatusCode::OK);
+        assert_eq!(
+            String::from_utf8(action_asset.body).unwrap(),
+            "export const actions = {};"
+        );
+
+        let browser_wrong_method = executor
+            .execute_request(&RequestExecutionInput::new(
+                &Method::POST,
+                "/.zap/browser/client.js",
+            ))
+            .unwrap();
+        assert_eq!(browser_wrong_method.status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            browser_wrong_method.headers,
+            vec![("allow".into(), "GET, HEAD".into())]
         );
 
         let head = executor
@@ -701,6 +908,17 @@ mod tests {
             r#"globalThis.ZapAction = { invoke(invocation) { return new Response(`saved:${invocation.args[0].id}`, { status: 201 }); } };"#,
         )
         .unwrap();
+        fs::create_dir_all(root.join(".zap/browser")).unwrap();
+        fs::write(
+            root.join(".zap/browser/client.js"),
+            "export const Counter = 1;",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".zap/browser/actions.js"),
+            "export const actions = {};",
+        )
+        .unwrap();
         let manifest = ApplicationManifest {
             routes: vec![
                 RouteEntry {
@@ -712,7 +930,7 @@ mod tests {
                     module: "page".into(),
                     methods: vec!["GET".into(), "HEAD".into()],
                     cache: CachePolicy::default(),
-                    client_references: Vec::new(),
+                    client_references: vec!["client:client#Counter".into()],
                 },
                 RouteEntry {
                     id: "echo".into(),
@@ -749,6 +967,13 @@ mod tests {
                     browser_chunk: None,
                     server_bundle: Some(PathBuf::from(".zap/server/actions.js")),
                 },
+                ModuleRef {
+                    id: "client".into(),
+                    path: PathBuf::from("client.tsx"),
+                    kind: ModuleKind::Client,
+                    browser_chunk: Some(PathBuf::from(".zap/browser/client.js")),
+                    server_bundle: None,
+                },
             ],
             actions: vec![ActionRef {
                 id: "action:actions#save".into(),
@@ -756,8 +981,14 @@ mod tests {
                 export: "save".into(),
                 path: PathBuf::from("actions.ts"),
             }],
-            action_proxy: None,
-            client_references: Vec::new(),
+            action_proxy: Some(PathBuf::from(".zap/browser/actions.js")),
+            client_references: vec![ClientReference {
+                id: "client:client#Counter".into(),
+                module: "client".into(),
+                export: "Counter".into(),
+                path: PathBuf::from("client.tsx"),
+                browser_chunk: PathBuf::from(".zap/browser/client.js"),
+            }],
             assets: vec![AssetRef {
                 source: PathBuf::from("logo.txt"),
                 url_path: "/logo.txt".into(),
