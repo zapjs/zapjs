@@ -14,7 +14,7 @@ Request context is explicit Rust-owned state. Client bundles stay on the browser
 
 React runs inside an embedded JavaScript engine controlled by Rust. Server bundles receive only the Web primitives and named host operations ZapJS installs.
 
-HTML SSR, React Server Components, Flight payloads, client references, action IDs and hydration inputs must come from the same build manifest. Page HTML emitted by `zap-execute` now includes manifest-derived hydration metadata, modulepreload links for route browser chunks and the Rust-generated browser bootstrap module script. Streaming must preserve backpressure and abort propagation. Full buffering is allowed only at explicitly bounded capture points such as public prerendering.
+HTML SSR, React Server Components, Flight payloads, client references, action IDs and hydration inputs must come from the same build manifest. Page server entries receive generated page props with dynamic `params`, empty `searchParams` and the Rust request payload. Page HTML emitted by `zap-execute` now includes manifest-derived hydration metadata, modulepreload links for route browser chunks and the Rust-generated browser bootstrap module script. Streaming must preserve backpressure and abort propagation. Full buffering is allowed only at explicitly bounded capture points such as public prerendering.
 
 ## Route handlers and server actions
 

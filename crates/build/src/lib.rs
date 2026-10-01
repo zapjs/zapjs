@@ -1214,11 +1214,20 @@ async function normalizeZapOutput(value) {{
   throw new TypeError("Zap page output must be text, a Web ReadableStream, or a React render tree");
 }}
 
+function zapPageProps(request) {{
+  const params = request && request.params && typeof request.params === "object" ? request.params : {{}};
+  return {{
+    params,
+    searchParams: {{}},
+    request
+  }};
+}}
+
 export async function render(request) {{
   if (typeof renderPage !== "function") {{
     throw new TypeError("Zap page module must export a default function");
   }}
-  return await normalizeZapOutput(await renderPage(request));
+  return await normalizeZapOutput(await renderPage(zapPageProps(request)));
 }}
 "#
     );
@@ -3305,11 +3314,18 @@ export type { IgnoredAction };
         fs::write(public.join("logo.txt"), "zap").unwrap();
         fs::create_dir_all(app.join("api/echo")).unwrap();
         fs::create_dir_all(app.join("api/ping")).unwrap();
+        fs::create_dir_all(app.join("shop/[id]")).unwrap();
         fs::write(
             app.join("page.tsx"),
             "import { Counter } from './client';
 export const dynamic = 'force-dynamic';
-export default function Page(request){ return <main data-path={request.path}>home:{request.path}</main>; }
+export default function Page({ request }){ return <main data-path={request.path}>home:{request.path}</main>; }
+",
+        )
+        .unwrap();
+        fs::write(
+            app.join("shop/[id]/page.tsx"),
+            "export default function ProductPage({ params }){ return <main data-id={params.id}>product:{params.id}</main>; }
 ",
         )
         .unwrap();
@@ -3375,10 +3391,10 @@ export const Label = 'count';
         assert_eq!(deployment["action_endpoint"], "/_zap/action");
         assert_eq!(deployment["action_proxy"], ".zap/browser/actions.js");
         assert_eq!(deployment["browser_bootstrap"], ".zap/browser/bootstrap.js");
-        assert_eq!(deployment["routes"], 3);
+        assert_eq!(deployment["routes"], 4);
         assert_eq!(deployment["actions"], 1);
         assert_eq!(deployment["client_references"], 2);
-        assert_eq!(deployment["server_bundles"].as_array().unwrap().len(), 4);
+        assert_eq!(deployment["server_bundles"].as_array().unwrap().len(), 5);
         assert!(deployment["server_bundles"].as_array().unwrap().iter().any(
             |entry| entry["module"] == "actions"
                 && entry["kind"] == "server-actions"
@@ -3441,7 +3457,7 @@ export const Label = 'count';
             .iter()
             .filter(|bundle| bundle.target == BuiltBundleTarget::Browser)
             .count();
-        assert_eq!(server_outputs, 4);
+        assert_eq!(server_outputs, 5);
         assert_eq!(browser_outputs, 1);
         let page_bundle = temp.path().join(".zap/server/page.js");
         let route_bundle = temp.path().join(".zap/server/api/echo/route.js");
@@ -3533,6 +3549,24 @@ export const Label = 'count';
             .render(&page_request)
             .unwrap();
         assert_eq!(rendered, r#"<main data-path="/">home:/</main>"#);
+        let product_match = compiled.resolve("/shop/caf%C3%A9").unwrap().unwrap();
+        let product_bundle = compiled
+            .module(&product_match.route.module)
+            .and_then(|module| module.server_bundle.clone())
+            .unwrap();
+        let product_request = plan_request(&compiled, &Method::GET, "/shop/caf%C3%A9")
+            .unwrap()
+            .renderer_request_json("/shop/caf%C3%A9")
+            .unwrap()
+            .unwrap();
+        let product_rendered =
+            Renderer::new(fs::read_to_string(temp.path().join(product_bundle)).unwrap())
+                .render(&product_request)
+                .unwrap();
+        assert_eq!(
+            product_rendered,
+            r#"<main data-id="café">product:café</main>"#
+        );
         let route_request = plan_request(&compiled, &Method::POST, "/api/echo")
             .unwrap()
             .renderer_request_json("/api/echo")
