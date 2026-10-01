@@ -232,6 +232,26 @@ fn assert_served_framework_responses(address: &str) {
         "static asset HEAD response must not include a body:\n{static_asset_head}"
     );
 
+    let action_body = br#"{"action_id":"action:actions#save","args":[{"id":9}]}"#;
+    let action_request = format!(
+        "POST /_zap/action HTTP/1.1\r\nhost: zap.local\r\norigin: http://zap.local\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        action_body.len(),
+        String::from_utf8_lossy(action_body)
+    );
+    let action = http_exchange(address, action_request.as_bytes());
+    assert!(
+        action.starts_with("HTTP/1.1 203 "),
+        "unexpected server action endpoint response:\n{action}"
+    );
+    assert!(
+        action.contains("x-zap-action: save"),
+        "server action endpoint response missed action header:\n{action}"
+    );
+    assert!(
+        action.ends_with("saved:9"),
+        "server action endpoint response missed body:\n{action}"
+    );
+
     let page = http_exchange(
         address,
         b"GET / HTTP/1.1\r\nhost: zap.local\r\nconnection: close\r\n\r\n",
@@ -245,8 +265,12 @@ fn assert_served_framework_responses(address: &str) {
         "page response did not carry HTML content type:\n{page}"
     );
     assert!(
-        page.ends_with("home"),
+        page.contains(r#"<div id="__zap_root">home</div>"#),
         "unexpected page response body:\n{page}"
+    );
+    assert!(
+        page.contains(r#""action_proxy":"/.zap/browser/actions.js""#),
+        "page response did not include action proxy hydration metadata:\n{page}"
     );
 
     let flight = http_exchange(
@@ -279,7 +303,7 @@ fn assert_served_framework_responses(address: &str) {
         "unexpected catch-all page response:\n{catch_all}"
     );
     assert!(
-        catch_all.ends_with("docs:a/b/c:full:one|two"),
+        catch_all.contains(r#"<div id="__zap_root">docs:a/b/c:full:one|two</div>"#),
         "catch-all page did not receive decoded params and query data:\n{catch_all}"
     );
 
@@ -305,7 +329,7 @@ fn assert_served_framework_responses(address: &str) {
         "unexpected optional catch-all root response:\n{optional_root}"
     );
     assert!(
-        optional_root.ends_with("files:<root>:root"),
+        optional_root.contains(r#"<div id="__zap_root">files:<root>:root</div>"#),
         "optional catch-all root did not receive empty params and query data:\n{optional_root}"
     );
 
@@ -318,7 +342,7 @@ fn assert_served_framework_responses(address: &str) {
         "unexpected optional catch-all nested response:\n{optional_nested}"
     );
     assert!(
-        optional_nested.ends_with("files:a/b:nested"),
+        optional_nested.contains(r#"<div id="__zap_root">files:a/b:nested</div>"#),
         "optional catch-all nested route did not receive params and query data:\n{optional_nested}"
     );
 
@@ -442,6 +466,11 @@ fn write_minimal_app(root: &Path) {
     )
     .expect("write page");
     fs::write(root.join("public/logo.txt"), "zap-static").expect("write static asset");
+    fs::write(
+        root.join("app/actions.ts"),
+        "'use server';\nexport async function save(input){ return new Response(`saved:${input.id}`, { status: 203, headers: { 'x-zap-action': 'save' } }); }\n",
+    )
+    .expect("write server action");
     fs::write(
         root.join("app/docs/[...slug]/page.tsx"),
         "export default function Docs({ params, searchParams }){ return `docs:${params.slug.join('/')}:${searchParams.view[0]}:${searchParams.tag.join('|')}`; }\n",
