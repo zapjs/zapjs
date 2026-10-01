@@ -178,98 +178,15 @@ fn absolute(root: &Path, path: &Path) -> PathBuf {
     }
 }
 
-use serde::{Deserialize, Serialize};
-use zap_runtime::routing::{Route, Router};
+use zap_runtime::{
+    manifest::{
+        ActionRef, ApplicationManifest, AssetRef, CachePolicy, CompiledManifest, DynamicPolicy,
+        LayoutRef, ModuleKind, ModuleRef, RouteEntry, RouteKind,
+    },
+    routing::Route,
+};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModuleKind {
-    Server,
-    Client,
-    ServerActions,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RouteKind {
-    Page,
-    Handler,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DynamicPolicy {
-    Auto,
-    ForceStatic,
-    ForceDynamic,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CachePolicy {
-    pub dynamic: DynamicPolicy,
-    pub revalidate_seconds: Option<u64>,
-}
-
-impl Default for CachePolicy {
-    fn default() -> Self {
-        Self {
-            dynamic: DynamicPolicy::Auto,
-            revalidate_seconds: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModuleRef {
-    pub id: String,
-    pub path: PathBuf,
-    pub kind: ModuleKind,
-    pub browser_chunk: Option<PathBuf>,
-    pub server_bundle: PathBuf,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActionRef {
-    pub id: String,
-    pub module: String,
-    pub path: PathBuf,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LayoutRef {
-    pub id: String,
-    pub path: PathBuf,
-    pub depth: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RouteEntry {
-    pub id: String,
-    pub pattern: String,
-    pub kind: RouteKind,
-    pub source: PathBuf,
-    pub layouts: Vec<String>,
-    pub module: String,
-    pub cache: CachePolicy,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AssetRef {
-    pub source: PathBuf,
-    pub url_path: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ApplicationGraph {
-    pub routes: Vec<RouteEntry>,
-    pub layouts: Vec<LayoutRef>,
-    pub modules: Vec<ModuleRef>,
-    pub actions: Vec<ActionRef>,
-    pub assets: Vec<AssetRef>,
-}
-
-impl ApplicationGraph {
-    pub fn to_manifest_json(&self) -> Result<String> {
-        Ok(serde_json::to_string_pretty(self)?)
-    }
-}
+pub type ApplicationGraph = ApplicationManifest;
 
 #[derive(Clone, Debug)]
 pub struct GraphOptions {
@@ -552,12 +469,6 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
     }
 
     routes.sort_by(|a, b| a.pattern.cmp(&b.pattern).then(a.id.cmp(&b.id)));
-    let runtime_routes = routes
-        .iter()
-        .map(|entry| Route::parse(entry.id.clone(), &entry.pattern))
-        .collect::<Result<Vec<_>, _>>()?;
-    Router::new(runtime_routes)?;
-
     let mut module_refs = Vec::new();
     for module in modules.values() {
         let server_bundle = out_dir.join("server").join(format!("{}.js", module.id));
@@ -582,13 +493,15 @@ pub fn build_application_graph(options: &GraphOptions) -> Result<ApplicationGrap
         Vec::new()
     };
 
-    Ok(ApplicationGraph {
+    let graph = ApplicationGraph {
         routes,
         layouts,
         modules: module_refs,
         actions,
         assets,
-    })
+    };
+    CompiledManifest::new(graph.clone())?;
+    Ok(graph)
 }
 
 fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
@@ -908,6 +821,9 @@ export function Counter(){ return '1'; }
         let manifest = fs::read_to_string(&output.manifest).unwrap();
         assert!(manifest.contains("ForceDynamic"));
         assert!(manifest.contains(".zap/server/page.js"));
+        let compiled = CompiledManifest::load(&output.manifest).unwrap();
+        let matched = compiled.resolve("/").unwrap().unwrap();
+        assert_eq!(matched.route.module, "page");
 
         let server_outputs = output
             .bundles

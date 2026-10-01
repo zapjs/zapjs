@@ -9,8 +9,6 @@ description = "Rust-owned React and TypeScript compilation for ZapJS"
 [dependencies]
 anyhow = "1"
 rolldown = "=1.2.12"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 zap-runtime = { path = "../runtime" }
 
 [dev-dependencies]
