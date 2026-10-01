@@ -41,6 +41,9 @@ impl Route {
         if !pattern.starts_with('/') {
             return Err(RouteError::Absolute(pattern.into()));
         }
+        if pattern != "/" && (pattern.ends_with('/') || pattern.contains("//")) {
+            return Err(RouteError::Segment(pattern.into()));
+        }
         let mut segments = Vec::new();
         let mut names = HashSet::new();
         let parts: Vec<_> = pattern
@@ -212,7 +215,11 @@ fn find(cursor: &TrieNode, parts: &[String], offset: usize) -> Option<usize> {
 }
 
 fn decode_path(path: &str) -> Result<Vec<String>, RouteError> {
-    if !path.starts_with('/') || path.len() > 16 * 1024 || path.contains(['?', '#', '\\']) {
+    if !path.starts_with('/')
+        || path.len() > 16 * 1024
+        || path.contains(['?', '#', '\\'])
+        || (path != "/" && (path.ends_with('/') || path.contains("//")))
+    {
         return Err(RouteError::Path);
     }
     let mut result = Vec::new();
@@ -297,6 +304,8 @@ mod tests {
             "/items/%00",
             "/items/%2e%2e",
             "/items/a?b",
+            "/items//1",
+            "/items/1/",
         ] {
             assert_eq!(r.resolve(path).unwrap_err(), RouteError::Path);
         }
@@ -309,6 +318,8 @@ mod tests {
             "/café",
             "/.",
             "/..",
+            "/shop//[id]",
+            "/shop/[id]/",
         ] {
             assert!(Route::parse("x", path).is_err(), "{path}");
         }

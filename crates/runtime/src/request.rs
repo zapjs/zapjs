@@ -1174,5 +1174,7 @@ mod tests {
         }
         assert!(plan_request(&manifest, &Method::GET, "/shop/%").is_err());
         assert!(plan_request(&manifest, &Method::GET, "/shop/1?x=1").is_err());
+        assert!(plan_request(&manifest, &Method::GET, "/shop//1").is_err());
+        assert!(plan_request(&manifest, &Method::GET, "/shop/1/").is_err());
     }
 }
