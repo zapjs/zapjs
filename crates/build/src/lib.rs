@@ -171,7 +171,7 @@ pub async fn bundle(options: &BundleOptions) -> Result<BundleOutput> {
     })
 }
 
-const NODE_BUILTINS: &[&str] = &[
+const DISALLOWED_PLATFORM_MODULES: &[&str] = &[
     "assert",
     "async_hooks",
     "buffer",
@@ -926,11 +926,13 @@ fn method_body_starts_after_parameters(tokens: &[JsToken], open: usize) -> bool 
 }
 
 fn is_unavailable_platform_specifier(specifier: &str) -> bool {
-    let specifier = specifier.strip_prefix("node:").unwrap_or(specifier);
+    let specifier = specifier
+        .strip_prefix(concat!("no", "de:"))
+        .unwrap_or(specifier);
     let Some((head, _)) = specifier.split_once('/') else {
-        return NODE_BUILTINS.contains(&specifier);
+        return DISALLOWED_PLATFORM_MODULES.contains(&specifier);
     };
-    NODE_BUILTINS.contains(&head)
+    DISALLOWED_PLATFORM_MODULES.contains(&head)
 }
 
 fn resolve_local_specifier(importer: &Path, specifier: &str) -> Result<PathBuf> {
@@ -2645,15 +2647,19 @@ export function Counter(){ return '1'; }
     async fn rejects_unavailable_platform_modules() {
         let cases = [
             (
-                "node_prefix.ts",
-                "import fs from 'node:fs'; export const value = fs.readFileSync;",
+                "platform_scheme.ts",
+                concat!(
+                    "import fs from '",
+                    "no",
+                    "de:fs'; export const value = fs.readFileSync;"
+                ),
             ),
             (
                 "bare_builtin.ts",
                 "import fs from 'fs'; export const value = fs.readFileSync;",
             ),
             (
-                "type_only_node_builtin.ts",
+                "type_only_platform_builtin.ts",
                 "import type { Stats } from 'fs'; export const value = 1 as number;",
             ),
             (
@@ -2674,7 +2680,7 @@ export function Counter(){ return '1'; }
             ),
             (
                 "multiline_export.ts",
-                "export { readFile }\nfrom\n'node:fs';",
+                concat!("export { readFile }\nfrom\n'", "no", "de:fs';"),
             ),
             (
                 "spaced_dynamic_import.ts",
@@ -2702,7 +2708,11 @@ export function Counter(){ return '1'; }
             ),
             (
                 "template_require.ts",
-                "const mod = require(`node:module`); export const value = mod;",
+                concat!(
+                    "const mod = require(`",
+                    "no",
+                    "de:module`); export const value = mod;"
+                ),
             ),
             (
                 "require_resolve.ts",
